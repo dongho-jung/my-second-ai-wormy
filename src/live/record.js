@@ -50,6 +50,9 @@ it needs. Stop it with Ctrl+C.
   --exclude NAMES     comma-separated player names to ignore, e.g. the driven ones
   --idle-seconds 10   after this long with nobody playing, close the recording
                       and start learning from it
+  --min-players 1     how many living players a frame needs before it is kept
+  --idle-run 45       stop recording a player after this many samples of them
+                      pressing nothing, until they touch something again
   --no-learn          record only; do not start cloning when play stops`;
 
 const { values } = parseArgs({
@@ -66,7 +69,7 @@ const { values } = parseArgs({
     "min-samples": { type: "string", default: "600" },
     mod: { type: "string", default: DEFAULT_MOD },
     "room-url": { type: "string" },
-    "min-players": { type: "string", default: "2" },
+    "min-players": { type: "string", default: "1" },
     "idle-run": { type: "string", default: "45" },
     nickname: { type: "string", default: "OBSERVER" },
   },
@@ -256,9 +259,10 @@ async function sample() {
       // A replicated worm that has never carried an input cannot be learned from.
       Number.isFinite(player.worm.keys),
   );
-  // A room is empty most of the time, and one person alone in it is not playing
-  // the game this is trying to learn — there is nobody to fight, so what gets
-  // recorded is wandering. Wait for a match.
+  // A room is empty most of the time, and an empty room has nothing to teach:
+  // no living worm, nothing written. One person practising alone still shows
+  // how to move, rope and handle a weapon, which is most of what the policy is
+  // bad at, so one is enough. Raise it to 2 to keep only real fights.
   if (playing.length < minPlayers) return;
   for (const player of playing) {
     // Somebody standing still is still standing still whether they are away or
