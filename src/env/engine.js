@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import vm from "node:vm";
 import { CLIENT_SHA256 } from "../adapter-v20.js";
+import { decodeIndexedPng } from "./png.js";
 
 // `fetch-assets.sh` in the kit downloads exactly these, from the versioned path
 // https://www.webliero.com/v/20/ . The site root serves none of them.
@@ -407,6 +408,9 @@ const BASE_MOD = "liero133";
 /** Mods that are not in res.dat, downloaded next to the other artifacts. */
 export const MODS_DIR = new URL("../../artifacts/mods/", import.meta.url);
 
+/** Community map pools, which ship PNGs rather than .lev files. */
+export const MAPS_DIR = new URL("../../artifacts/maps/", import.meta.url);
+
 /**
  * A mod kept as files rather than inside res.dat.
  *
@@ -506,6 +510,32 @@ export class Engine {
     // both worms the same ground.
     if (mirrored) level.Mu();
     return level;
+  }
+
+  /**
+   * A level from a community map: an 8-bit palette PNG.
+   *
+   * The indices are the terrain. Liero stores one palette index per pixel and
+   * so does an indexed PNG, and these pools are drawn against the game's own
+   * palette — a spot check finds the same background and rock indices a
+   * generated level uses. So the pixels go straight in, with no colour
+   * matching to get subtly wrong.
+   */
+  readPngLevel(name, bytes) {
+    const png = decodeIndexedPng(bytes);
+    const level = new this.classes.Level();
+    level.name = name;
+    level.width = png.width;
+    level.height = png.height;
+    level.data = new Uint8Array(png.indices);
+    return level;
+  }
+
+  /** Whichever of the two a file is, decided by its name. */
+  readAnyLevel(name, bytes) {
+    return name.toLowerCase().endsWith(".png")
+      ? this.readPngLevel(name, bytes)
+      : this.readLevel(name, bytes);
   }
 
   /** A stock 504x350 Liero level, from the bytes of a .lev file. */

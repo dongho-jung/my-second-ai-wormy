@@ -84,12 +84,12 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
 <a class="skip" href="#main">본문으로 건너뛰기</a>
 <div class="page">
 <header>
-  <div class="brand"><span>WORMY II / 기술 노트</span><span>신경망 구조 · 2026.09.20</span></div>
+  <div class="brand"><span>WORMY II / 기술 노트</span><span>신경망 구조 · 2026.09.21</span></div>
   <h1>웜은 어떻게 판단할까</h1>
   <p class="lead">지형을 보고, 상대를 읽고, 다음 키를 고릅니다. 게임 속 웜이 한 번의 관측을 행동으로 바꾸는 과정과, 이 설계로 할 수 있는 일과 아직 검증해야 할 일을 정리했습니다.</p>
   <div class="tags"><span class="tag">심층 강화학습 · PPO</span><span class="tag">자가 대전 + 사람 플레이 모방</span><span class="tag">기본 3인전 기준</span></div>
 </header>
-<nav aria-label="문서 목차"><a href="#overview">학습 방식</a><a href="#inputs">관측 입력</a><a href="#architecture">신경망 구조</a><a href="#vector">벡터 상세</a><a href="#parameters">파라미터</a><a href="#review">타당성과 한계</a></nav>
+<nav aria-label="문서 목차"><a href="#overview">학습 방식</a><a href="#inputs">관측 입력</a><a href="#architecture">신경망 구조</a><a href="#movement">이동 판단</a><a href="#aiming">조준·발사 판단</a><a href="#vector">벡터 상세</a><a href="#parameters">파라미터</a><a href="#review">타당성과 한계</a></nav>
 <main id="main">
 <section id="overview">
   <span class="kicker">01 / LEARNING</span><h2>정답 대신, 행동의 결과에서 배웁니다</h2>
@@ -105,8 +105,8 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
   <span class="kicker">02 / OBSERVATION</span><h2>숫자 하나의 묶음, 두 가지 시야</h2>
   <p class="muted">수치는 기본 상대 슬롯 2개, 패치와 전체 지도 입력을 모두 켠 구성 기준입니다.</p>
   <div class="grid">
-    <article class="card"><h3>상태 벡터</h3><span class="shape">144</span><p>체력, 탄약, 조준, 16방향 거리 센서, 상대와 투사체 정보입니다. 실행 중 누적한 평균·분산으로 정규화한 뒤 완전연결층에 넣습니다.</p></article>
-    <article class="card"><h3>주변 지형 패치</h3><span class="shape">4 × 32 × 32</span><p>웜 주변 64 × 64픽셀을 셀당 2픽셀 간격으로 관측합니다. 바위·흙·빈 공간과 투사체를 네 채널로 표현합니다.</p></article>
+    <article class="card"><h3>상태 벡터</h3><span class="shape">144</span><p>체력, 탄약, 조준, 16방향 거리 센서, 상대와 투사체 정보입니다. 학습 중 누적한 평균·분산으로 정규화한 뒤 완전연결층에 넣습니다.</p></article>
+    <article class="card"><h3>주변 지형 패치</h3><span class="shape">4 × 121 × 213</span><p>웜 주변 가로 426 × 세로 242픽셀을 2 × 2픽셀 셀로 읽습니다. 게임의 426 × 240 시야에 세로 여유 2픽셀을 둡니다. 셀 안의 가장 단단한 지형을 바위·흙·빈 공간 중 하나로, 투사체 유무를 별도 채널로 표현합니다.</p></article>
     <article class="card"><h3>전체 지도</h3><span class="shape">4 × 32 × 32</span><p>맵 전체를 32 × 32 격자로 압축합니다. 빈 공간·흙·바위의 비율과 웜의 위치를 담습니다. 생성 맵의 기본 크기는 504 × 350픽셀입니다.</p></article>
   </div>
   <p class="note"><strong>지도는 일부를 재사용합니다.</strong> 전체 지도의 지형 채널은 기본 60번의 의사결정마다 갱신하고, 웜 위치는 매 관측마다 반영합니다. 따라서 최근 파괴된 지형이 전체 지도에는 잠시 늦게 나타날 수 있습니다.</p>
@@ -116,16 +116,16 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
   <p class="muted">세 갈래 입력을 각각 처리한 뒤 합치고, 공통 특징에서 행동과 가치를 읽습니다. 아래 크기는 배치 차원을 생략했습니다.</p>
   <figure class="flow">
     <div class="flow-grid">
-      <div class="lane"><div class="node input"><strong>상태 벡터</strong><code>144</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>실행 통계 정규화</strong><small>평균·분산 적용, 범위 제한</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>144 → 128</code></div><span class="arrow">출력 128</span></div>
-      <div class="lane"><div class="node input"><strong>주변 패치</strong><code>4 × 32 × 32</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 4 → 16 + ReLU</strong><small>커널 4 × 4 · 보폭 2</small><code>16 × 15 × 15</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 16 → 32 + ReLU</strong><small>커널 3 × 3 · 보폭 2</small><code>32 × 7 × 7</code></div><span class="arrow">펼치기 → 1,568</span></div>
+      <div class="lane"><div class="node input"><strong>상태 벡터</strong><code>144</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>누적 통계 정규화</strong><small>평균·분산 적용, 범위 제한</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>144 → 128</code></div><span class="arrow">출력 128</span></div>
+      <div class="lane"><div class="node input"><strong>주변 패치</strong><code>4 × 121 × 213</code><small>25,773바이트 → 지형 3채널 + 투사체 1채널</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 4 → 32 + ReLU</strong><small>커널 8 × 8 · 보폭 4</small><code>32 × 29 × 52</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 32 → 64 + ReLU</strong><small>커널 4 × 4 · 보폭 2</small><code>64 × 13 × 25</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 64 → 32 + ReLU</strong><small>커널 3 × 3 · 보폭 2</small><code>32 × 6 × 12</code></div><span class="arrow">펼치기 → 2,304</span></div>
       <div class="lane"><div class="node input"><strong>전체 지도</strong><code>4 × 32 × 32</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 4 → 16 + ReLU</strong><small>커널 4 × 4 · 보폭 2</small><code>16 × 15 × 15</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 16 → 32 + ReLU</strong><small>커널 3 × 3 · 보폭 2</small><code>32 × 7 × 7</code></div><span class="arrow">펼치기 → 1,568</span></div>
     </div>
-    <div class="join"><strong>특징 결합</strong> · 128 + 1,568 + 1,568 = <strong>3,264</strong></div>
-    <div class="trunk"><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>3,264 → 256</code><small>전체 학습 파라미터의 약 89.3%</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>256 → 256</code></div></div>
+    <div class="join"><strong>특징 결합</strong> · 128 + 2,304 + 1,568 = <strong>4,000</strong></div>
+    <div class="trunk"><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>4,000 → 256</code><small>전체 학습 파라미터의 약 86.9%</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>256 → 256</code></div></div>
     <span class="arrow" aria-hidden="true">↓</span>
     <div class="outputs"><div class="node"><strong>행동 정책 · actor</strong><code>7개 헤드 · 18개 로짓</code><small>헤드별 선택 확률에서 행동 추출</small></div><div class="node"><strong>가치 함수 · critic</strong><code>스칼라 1개</code><small>미래 할인 누적 보상의 추정값</small></div></div>
     <div class="heads" aria-label="행동 헤드별 선택지 수"><span>이동 3</span><span>조준 3</span><span>발사 2</span><span>점프 2</span><span>굴착 2</span><span>로프 3</span><span>무기 3</span></div>
-    <figcaption>두 합성곱 경로는 구조가 같지만 가중치를 별도로 학습합니다. 모바일에서는 각 입력 경로를 위에서 아래로 읽은 뒤, 특징 결합 단계로 이어집니다.</figcaption>
+    <figcaption>주변 패치는 3층, 전체 지도는 2층의 별도 합성곱으로 처리합니다. 합성곱은 공간의 모양을, 결합층은 지형과 전투 수치의 관계를 학습합니다. ReLU는 음수를 0으로 만드는 활성화 함수입니다. 모바일에서는 각 입력 경로를 위에서 아래로 읽은 뒤, 특징 결합 단계로 이어집니다.</figcaption>
   </figure>
 </section>
 <section id="vector">
@@ -145,7 +145,7 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
       <tr><td class="n">27</td><td class="n">8</td><td><code>walkLeft / walkRight</code></td><td>좌우 한 걸음의 상태: 통과 가능·턱·흙·바위</td></tr>
       <tr><td class="n">35</td><td class="n">15</td><td><code>weapons</code></td><td>무기 5슬롯 × 남은 탄약·발사 가능·선택 여부</td></tr>
       <tr><td class="n">50</td><td class="n">5</td><td><code>weaponsReload</code></td><td>슬롯별 재장전 진행도</td></tr>
-      <tr><td class="n">55</td><td class="n">10</td><td><code>weapon</code></td><td>현재 무기의 속도·낙하·사거리·퍼짐·피해 등 특성</td></tr>
+      <tr><td class="n">55</td><td class="n">10</td><td><code>weapon</code></td><td>현재 무기의 속도·낙하·사거리·발사체 수·피해 등 특성</td></tr>
       <tr><td class="n">65</td><td class="n">5</td><td><code>rope</code></td><td>로프 전개·부착 여부, 상대 위치, 길이</td></tr>
       <tr><td class="n">70</td><td class="n">38</td><td><code>foes</code></td><td>상대 2명 × 19개: 생존·위치·거리·방향·체력·속도·무기 특성</td></tr>
       <tr><td class="n">108</td><td class="n">24</td><td><code>projectiles</code></td><td>가까운 투사체 3개 × 8개: 상대 위치·속도·무기 특성</td></tr>
@@ -156,30 +156,59 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
   <p class="note">벡터 크기는 실제 참가자 수가 아니라 <strong>설정한 상대 슬롯 수</strong>에 따라 결정됩니다. 같은 정책으로 여러 인원 구성을 다루려면 입력 크기를 유지하고 빈 슬롯을 채우는 방식이 필요합니다.</p>
 </section>
 <section id="parameters">
-  <span class="kicker">05 / PARAMETERS</span><h2>약 94만 개의 파라미터, 대부분은 결합 직후에</h2>
-  <div class="two"><div><p>총 <strong>936,435개</strong>의 학습 파라미터 중 89.3%가 <code>3,264 → 256</code> 완전연결층에 있습니다. 아래 수치는 편향을 포함하고, 정규화의 누적 통계 버퍼는 제외합니다.</p><p class="note"><strong>크다고 곧 병목은 아닙니다.</strong> 파라미터 비중만으로 어디를 넓혀야 할지 결정할 수 없습니다. 합성곱 출력 채널을 늘리면 뒤의 결합층 입력도 커져 전체 비용이 함께 늘어납니다. 먼저 관측·보상·평가의 문제를 구분해야 합니다.</p></div>
+  <span class="kicker">05 / PARAMETERS</span><h2>약 118만 개의 파라미터, 대부분은 결합 직후에</h2>
+  <div class="two"><div><p>총 <strong>1,178,691개</strong>의 학습 파라미터 중 86.9%가 <code>4,000 → 256</code> 완전연결층에 있습니다. 아래 수치는 편향을 포함하고, 정규화의 누적 통계 버퍼는 제외합니다.</p><p class="note"><strong>크다고 곧 병목은 아닙니다.</strong> 파라미터 비중만으로 어디를 넓혀야 할지 결정할 수 없습니다. 합성곱 출력 채널을 늘리면 뒤의 결합층 입력도 커져 전체 비용이 함께 늘어납니다. 먼저 관측·보상·평가의 문제를 구분해야 합니다.</p></div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="파라미터 수 표"><table><caption>층별 학습 파라미터</caption><thead><tr><th scope="col">층</th><th scope="col" class="n">개수</th><th scope="col" class="n">비중</th></tr></thead><tbody>
-  <tr><td><code>3264 → 256</code><span class="bar" style="width:100%"></span></td><td class="n">835,840</td><td class="n">89.3%</td></tr>
-  <tr><td><code>256 → 256</code></td><td class="n">65,792</td><td class="n">7.0%</td></tr>
-  <tr><td><code>144 → 128</code></td><td class="n">18,560</td><td class="n">2.0%</td></tr>
-  <tr><td>합성곱 16 → 32 × 2</td><td class="n">9,280</td><td class="n">1.0%</td></tr>
-  <tr><td>행동 출력</td><td class="n">4,626</td><td class="n">0.5%</td></tr>
-  <tr><td>합성곱 4 → 16 × 2</td><td class="n">2,080</td><td class="n">0.2%</td></tr>
-  <tr><td>가치 출력</td><td class="n">257</td><td class="n">0.03%</td></tr>
-  </tbody><tfoot><tr><td>합계</td><td class="n">936,435</td><td class="n">100%</td></tr></tfoot></table></div></div>
+  <tr><td><code>4000 → 256</code><span class="bar" style="width:100%"></span></td><td class="n">1,024,256</td><td class="n">86.9%</td></tr>
+  <tr><td><code>256 → 256</code></td><td class="n">65,792</td><td class="n">5.6%</td></tr>
+  <tr><td>주변 패치 합성곱 3층</td><td class="n">59,520</td><td class="n">5.0%</td></tr>
+  <tr><td><code>144 → 128</code></td><td class="n">18,560</td><td class="n">1.6%</td></tr>
+  <tr><td>전체 지도 합성곱 2층</td><td class="n">5,680</td><td class="n">0.5%</td></tr>
+  <tr><td>행동 출력</td><td class="n">4,626</td><td class="n">0.4%</td></tr>
+  <tr><td>가치 출력</td><td class="n">257</td><td class="n">0.02%</td></tr>
+  </tbody><tfoot><tr><td>합계</td><td class="n">1,178,691</td><td class="n">100%</td></tr></tfoot></table></div></div>
 </section>
 <section id="actions">
   <span class="kicker">06 / ACTION</span><h2>648개 조합을 7개의 선택으로 나눕니다</h2>
   <p>이동·조준·발사·점프·굴착·로프·무기를 각각 고릅니다. <code>3 × 3 × 2 × 2 × 2 × 3 × 3 = 648</code>개의 행동 조합을, 각 헤드의 선택지 수를 더한 <strong>18개 로짓</strong>으로 표현합니다. 로짓은 확률로 바꾸기 전의 점수입니다.</p>
-  <p>이동은 유지·왼쪽·오른쪽, 조준은 유지·위·아래 중 하나입니다. 로프는 유지·발사·해제, 무기는 유지·다음·이전입니다. 발사·점프·굴착은 각각 끄기·켜기입니다.</p>
-  <p class="note"><strong>간결함의 대가도 있습니다.</strong> 현재 정책은 같은 관측 아래에서 헤드별 확률을 곱합니다. 공통 특징으로 행동을 조율할 수 있지만, 임의의 행동 간 확률적 의존성을 모두 표현하지는 못합니다. 또한 현재 7개 헤드에는 로프 길이 조절이 없습니다.</p>
+  <p>이동은 입력 없음·왼쪽·오른쪽, 조준은 유지·위·아래 중 하나입니다. 로프는 유지·발사·해제, 무기는 유지·다음·이전입니다. 발사·점프·굴착은 각각 끄기·켜기입니다.</p>
+  <p class="note"><strong>간결함의 대가도 있습니다.</strong> 현재 정책은 같은 관측 아래에서 헤드별 확률을 곱합니다. 공통 특징으로 행동을 조율할 수 있지만, 임의의 행동 간 확률적 의존성을 모두 표현하지는 못합니다. 또한 현재 7개 헤드에는 로프 길이 조절이 없습니다. 이동의 «입력 없음»은 정지 명령이 아니므로 관성·중력·로프에 의해 계속 움직일 수 있습니다.</p>
+</section>
+<section id="movement">
+  <span class="kicker">07 / MOVEMENT</span><h2>어디로, 어떻게 이동할지 어떻게 판별할까?</h2>
+  <p class="verdict">목적지 좌표나 경로를 먼저 만들지 않습니다.<br>현재 관측에서 보상이 좋아질 만한 다음 조작을 선택합니다.</p>
+  <ol class="checks">
+    <li><strong>어디에 무엇이 있는지 읽습니다.</strong> 전체 지도는 통로와 지형 분포, 나와 상대의 위치를 보여줍니다. 벡터에는 가까운 생존 상대의 상대 위치·거리·체력·속도·무기 특성과 가까운 보급품 위치가 들어갑니다. 상대 슬롯은 매번 거리순으로 정렬되며, 고정된 상대 ID나 «공격할 대상»을 따로 출력하지 않습니다.</li>
+    <li><strong>지금 가능한 움직임을 학습한 특징으로 판단합니다.</strong> 넓어진 주변 패치로 턱·벽·천장 모양을 보고, 16방향 거리 센서·좌우 보행 판정·접촉·속도·로프 상태를 함께 읽습니다. 코드는 경로 탐색이나 «벽이면 점프» 규칙을 실행하지 않습니다. 이 정보에서 유용한 조작의 확률을 신경망이 학습합니다.</li>
+    <li><strong>여러 조작을 동시에 고릅니다.</strong> 공유된 256차원 특징에서 이동·점프·굴착·로프 헤드가 각각 선택합니다. 조준 방향은 무기뿐 아니라 로프를 던지는 동작과도 관련되므로 다른 헤드와 같은 특징을 공유합니다. 예를 들어 오른쪽 이동과 점프를 함께 선택할 수 있지만, 그 조합이 항상 옳다는 보장은 없습니다.</li>
+    <li><strong>움직인 뒤 다시 봅니다.</strong> 기본 4틱 후 바뀐 위치와 지형을 관측해 다음 행동을 고릅니다. 점프·굴착은 키를 누르는 순간에 작동하므로 다시 쓰려면 해제 후 재입력이 필요합니다. 로프 발사·해제와 무기 변경 메시지는 한 결정당 한 번만 전달됩니다.</li>
+  </ol>
+  <div class="two" style="margin-top:24px">
+    <article class="card"><h3>무엇이 좋은 이동인가?</h3><p>기본 보상은 새 16픽셀 격자 진입에 +0.02, 최근 150결정 이내 방문한 셀 재진입에 −0.02입니다. 최근 60결정의 위치 변화가 14픽셀 미만이면 결정마다 −0.01을 받습니다. 전투 보상도 함께 적용되므로 이동 거리를 늘리는 것만이 목표는 아닙니다.</p></article>
+    <article class="card"><h3>목적지와 기억의 한계</h3><p>환경에는 별도 목표 지점의 접근·도착 보상 기능이 있지만 기본 전투에서는 꺼져 있고, 현재 벡터에는 목표 좌표가 없습니다. 방문 기록과 정체 판정도 보상 계산용 환경 상태이며 정책 입력은 아닙니다. 순환 신경망이나 방문 지도가 없으므로, 모델이 이동 이력을 기억해 장기 경로를 계획한다고 볼 수 없습니다.</p></article>
+  </div>
+</section>
+<section id="aiming">
+  <span class="kicker">08 / AIM &amp; FIRE</span><h2>어디를 조준해서, 언제 쏠지 어떻게 판별할까?</h2>
+  <p class="verdict">정확한 명중 좌표를 출력하는 자동 조준기가 아닙니다.<br>조준을 위·아래로 바꿀지, 지금 발사 키를 누를지를 함께 선택합니다.</p>
+  <ol class="checks">
+    <li><strong>상대와 현재 총구 방향을 비교할 재료를 받습니다.</strong> 내 조준 각도의 cos·sin과 좌우 방향, 상대의 상대 위치·방향·거리·속도가 벡터에 있습니다. 주변 지형과 전체 지도도 같은 신경망에 들어갑니다. 벽 뒤 상대를 지워 주는 가시성 필터나 별도 시선 차폐·명중 확률 입력은 없습니다.</li>
+    <li><strong>무기의 성격을 함께 봅니다.</strong> 현재 무기의 10개 특성은 속도, 낙하량, 사거리, 발사체 수, 근거리·원거리 피해, 근거리 자기 피해, 재장전 시간, 발사 간격, 탄창 크기입니다. 무기 프로파일이 없거나 ID가 범위 밖이면 해당 특성은 0으로 채워집니다. 프로파일을 관측값으로 주지만, 추론 중 탄도를 시뮬레이션하거나 상대의 미래 좌표를 계산하는 요격 알고리즘은 없습니다. 낙차 보정이나 앞쪽 조준이 나타난다면 경험으로 학습한 결과이며 정확성을 보장하지 않습니다.</li>
+    <li><strong>조준·발사·무기 헤드가 같은 순간에 결정합니다.</strong> 조준은 유지·위·아래, 발사는 끄기·켜기, 무기는 유지·다음·이전 중 하나입니다. 좌우 이동 입력은 웜이 바라보는 방향에도 관여합니다. 절대 각도나 목표 좌표를 직접 지정하지 않고, 현재 조준에서 키로 조금씩 바꾸는 제어입니다.</li>
+    <li><strong>실제로 발사되는지는 게임 엔진이 결정합니다.</strong> 5개 슬롯별 탄약·발사 가능 여부·재장전 및 쿨다운 대기량이 입력됩니다. 발사 가능 값은 탄약이 있고 쿨다운이 끝났는지를 나타내며, 정책 출력에 강제로 적용하는 행동 마스크는 아닙니다. 발사 키를 선택해도 엔진의 재장전·발사 간격 등의 조건을 만족해야 탄이 나갑니다. 키는 기본 4틱 동안 유지되며, 학습 CLI는 기본 0~3틱 입력 지연도 적용합니다.</li>
+  </ol>
+  <p class="note"><strong>«언제»는 별도 타이머 출력이 아닙니다.</strong> 매 결정마다 발사 여부를 다시 고르는 것이 사격 타이밍입니다. 조준과 발사는 순차 단계가 아니라 동시 출력이므로 «조준이 맞으면 쏜다»는 명시적 검사도 없습니다. <code>act()</code>는 헤드별 확률에서 표본을 뽑으며, 관전·플레이의 <code>--greedy</code>는 각 헤드의 최고 점수 행동을 선택합니다.</p>
+  <h3 style="margin-top:28px">맞히는 법은 결과로 배웁니다</h3>
+  <p>기본 보상은 상대 피해 1당 +0.01, 받은 피해 1당 −0.005, 처치 +4, 사망 −2입니다. 자기 피해는 받은 피해에만 포함되고, 자살에는 처치 보상이 없습니다. 따라서 «발사 키를 눌렀다»거나 «상대 쪽을 바라봤다» 자체로 보상을 받지 않습니다. 엔진이 기록한 실제 공격자·피해자·피해량을 사용합니다.</p>
+  <p>PPO는 이후의 보상과 가치 예측으로 행동이 기대보다 좋았는지 추정하고, 좋은 결과와 연결된 행동의 확률을 높이는 방향으로 갱신합니다. 지연된 명중 보상도 앞선 조준·이동·발사에 영향을 줄 수 있지만, 어느 한 조작이 원인이었는지 완벽하게 분리하지는 못합니다. 사람 시연이 있으면 같은 7개 헤드의 정답 행동을 따라 하는 보조 학습도 사용합니다.</p>
+  <p class="sources">구현 근거: <code>train/policy.py</code>의 <code>features / act</code>, <code>train/ppo.py</code>의 rollout·GAE·PPO 손실, <code>src/env/observation.js</code>의 <code>encodeVector</code>, <code>src/env/actions.js</code>, <code>src/env/env.js</code>의 <code>step</code>, <code>src/env/reward.js</code>, <code>src/env/progress.js</code>.</p>
 </section>
 <section id="review">
-  <span class="kicker">07 / REVIEW</span><h2>이 설계, 유효할까?</h2>
+  <span class="kicker">09 / REVIEW</span><h2>이 설계, 유효할까?</h2>
   <p class="verdict">반응형 전투를 배우는 출발점으로는 타당합니다.<br>실전에서 강하다는 결론은 별도의 평가가 필요합니다.</p>
   <div class="two">
     <article class="card"><h3>설계에서 기대할 수 있는 점</h3><p>상태 벡터는 전투 수치를, 주변 패치는 발밑 지형을, 전체 지도는 넓은 위치 관계를 제공합니다. 공유 특징을 쓰는 actor-critic과 PPO는 이산 행동 정책을 학습하는 데 합리적인 구성입니다.</p><p>사람의 시연은 탐색의 출발점을 줄 수 있습니다. 다만 모방 손실을 함께 쓰므로 결과는 PPO뿐 아니라 시연 데이터와 가중치에도 영향을 받습니다.</p></article>
-    <article class="card"><h3>현재 구조의 한계</h3><p>순환 상태나 과거 프레임 입력이 없어, 현재 관측으로 복원할 수 없는 과거 사건을 기억할 수 없습니다. 이것이 모든 장기 전략이 불가능하다는 뜻은 아닙니다. 기억이 필요한 행동은 프레임 누적이나 순환 신경망으로 비교해야 합니다.</p><p>가치 함수의 설명 분산은 보상 예측 진단 지표입니다. 원문의 65%는 실행·측정 조건이 확인되지 않아 성능 근거에서 제외했습니다. 높은 값만으로 승률이나 관측의 충분성을 보장하지 않습니다.</p></article>
+    <article class="card"><h3>현재 구조의 한계</h3><p>순환 상태나 과거 프레임 입력이 없어, 현재 관측으로 복원할 수 없는 과거 사건을 기억할 수 없습니다. 이것이 모든 장기 전략이 불가능하다는 뜻은 아닙니다. 기억이 필요한 행동은 프레임 누적이나 순환 신경망으로 비교해야 합니다.</p><p>가치 함수의 설명 분산은 보상 예측 진단 지표입니다. 높은 값만으로 승률이나 관측의 충분성을 보장하지 않습니다. 또한 전체 지도와 상대 상태는 엔진에서 직접 얻으므로, 화면만 보는 사람과 정보 조건이 같지는 않습니다.</p></article>
   </div>
   <h3 style="margin-top:28px">모델을 키우기 전에 확인할 것</h3>
   <ol class="checks">
@@ -187,10 +216,10 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
     <li><strong>시간 제한 종료 처리 확인하기.</strong> 현재 학습 코드는 시간 예산 만료도 <code>done</code>으로 처리해 다음 가치 추정을 끊습니다. 학습 편의상 자른 구간이라면 실제 게임 종료와 구분해 부트스트래핑해야 합니다. 규칙상 진짜 종료라면 남은 시간도 관측에 필요한지 검토해야 합니다.</li>
     <li><strong>입력과 시연의 기여 분리하기.</strong> 벡터만 사용한 경우, 패치·지도 추가, 시연 추가를 같은 평가 조건에서 비교합니다. 실전에서는 관측 정보의 가용성, 입력 지연과 로프 조작 차이도 확인합니다.</li>
   </ol>
-  <p class="sources">원리 참고: <a href="https://arxiv.org/abs/1707.06347">PPO 원 논문</a> · <a href="https://gymnasium.farama.org/v0.27.0/tutorials/handling_time_limits/">Gymnasium의 시간 제한 처리</a></p>
+  <p class="sources">추가 읽을거리: <a href="https://arxiv.org/abs/1707.06347">PPO 원 논문</a> · <a href="https://gymnasium.farama.org/v0.27.0/tutorials/handling_time_limits/">Gymnasium의 시간 제한 처리</a></p>
 </section>
 </main>
-<footer><p>Wormy II · 2026-09-20 로컬 구현 기준: <code>train/policy.py</code>, <code>train/ppo.py</code>, <code>src/env/observation.js</code>, <code>src/env/actions.js</code>, <code>src/env/env.js</code>. 설정과 코드가 바뀌면 입력 크기와 파라미터 수도 달라집니다.</p><p>공식 WebLiero v20 게임 번들을 렌더링 없이 실행하는 환경입니다. 번들 체크섬 접두사: <code>b3c7b33c</code>. 이 문서는 구조 설명과 코드 검토이며, 실전 성능 평가 결과는 아닙니다.</p></footer>
+<footer><p>Wormy II · 2026-09-21 로컬 구현 기준: <code>train/policy.py</code>, <code>train/ppo.py</code>, <code>src/env/observation.js</code>, <code>src/env/actions.js</code>, <code>src/env/env.js</code>. 설정과 코드가 바뀌면 입력 크기와 파라미터 수도 달라집니다.</p><p>공식 WebLiero v20 게임 번들을 렌더링 없이 실행하는 환경입니다. 번들 체크섬 접두사: <code>b3c7b33c</code>. 이 문서는 구조 설명과 코드 검토이며, 실전 성능 평가 결과는 아닙니다.</p></footer>
 </div>
 </body>
 </html>

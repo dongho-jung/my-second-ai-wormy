@@ -86,7 +86,10 @@ export class VecWormEnv {
     // episode, so the pool is built once and cycled.
     const stock = levelFiles.map((path) => {
       const bytes = readFileSync(path);
-      return engine.readLevel(path.split("/").pop().replace(/\.lev$/i, ""), bytes);
+      const file = path.split("/").pop();
+      // The name keeps its extension: it decides which reader the file gets,
+      // and the community pools ship PNGs beside the game's own .lev files.
+      return engine.readAnyLevel(file, bytes);
     });
     this.levels = [
       ...Array.from({ length: Math.max(1, levelPool) }, (_, index) =>

@@ -134,20 +134,24 @@ def parse_args(argv=None):
 SHOWN = ("episodeReward", "kills", "deaths", "damageDealt", "selfDamage", "stuckSteps")
 
 
+LEVEL_SUFFIXES = (".lev", ".png")
+
+
 def stock_levels(args):
-    """The .lev files to mix in, so training sees the maps a room actually picks."""
+    """The map files to play on, so training sees the maps a room actually picks."""
     if args.stock_levels <= 0:
         return []
     # The pool spells them both ways — BATTLEGR.LEV next to SMB.lev — and a
-    # case-sensitive glob quietly drops six of the fifty-two.
+    # case-sensitive glob quietly drops six of the fifty-two. Community pools
+    # publish PNGs instead, which are the same terrain in another wrapper.
     directory = Path(args.levels_dir)
     found = sorted(
         path
         for path in directory.glob("*")
-        if path.suffix.lower() == ".lev" and path.is_file()
+        if path.suffix.lower() in LEVEL_SUFFIXES and path.is_file()
     )[: args.stock_levels]
     if not found:
-        print(f"no .lev files in {args.levels_dir}: training on generated maps alone", flush=True)
+        print(f"no maps in {args.levels_dir}: training on generated ones alone", flush=True)
     return [str(path) for path in found]
 
 

@@ -20,7 +20,8 @@
     "weapons": "node scripts/profile-weapons.js",
     "record": "node src/live/record.js",
     "clone": "node scripts/clone.js",
-    "mods": "node scripts/fetch-mods.js"
+    "mods": "node scripts/fetch-mods.js",
+    "maps": "node scripts/fetch-maps.js"
   },
   "dependencies": {
     "playwright": "1.63.0"
