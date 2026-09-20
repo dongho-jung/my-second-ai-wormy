@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
@@ -9,10 +9,48 @@ import { chromium } from "playwright";
 // is a worse tax than the stale state a fresh profile avoids.
 export const DEFAULT_PROFILE = join(homedir(), ".cache", "wormy-ii", "chrome-profile");
 
-async function profileDir(path) {
+// Readies the profile a launch is about to use and returns its path.
+export async function prepareProfile(path) {
   const profile = path ?? DEFAULT_PROFILE;
   await mkdir(profile, { recursive: true });
+  await forgetLastSession(profile);
   return profile;
+}
+
+// A profile that has been used before comes back holding the tabs it had open:
+// three runs later the window is five tabs deep, two of them dead dashboards on
+// ports nobody is listening on any more. Measured on this profile — it happens
+// after a clean exit too, so telling it the last exit was fine is not enough.
+//
+// The restore data lives in Default/Sessions and is only that: which tabs were
+// open. Settings, cookies, local storage and the game's own saved keys are
+// elsewhere in the profile and are never touched, which is the whole point of
+// keeping one profile in the first place.
+async function forgetLastSession(profile) {
+  await rm(join(profile, "Default", "Sessions"), {
+    recursive: true,
+    force: true,
+  }).catch(() => {});
+  const path = join(profile, "Default", "Preferences");
+  try {
+    const preferences = JSON.parse(await readFile(path, "utf8"));
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...preferences,
+        profile: {
+          ...preferences.profile,
+          exit_type: "Normal",
+          exited_cleanly: true,
+        },
+        // 5 is "open the new tab page", the setting a profile that restores
+        // nothing would have.
+        session: { ...preferences.session, restore_on_startup: 5, startup_urls: [] },
+      }),
+    );
+  } catch {
+    // A profile this run is creating has no preferences to correct yet.
+  }
 }
 
 const LAUNCH_ARGS = [
@@ -35,6 +73,8 @@ const FIRST_RUN_ARGS = [
   "--disable-features=ChromeWhatsNewUI,PrivacySandboxSettings4,Translate",
   "--disable-sync",
   "--propagate-iph-for-testing",
+  "--disable-session-crashed-bubble",
+  "--hide-crash-restore-bubble",
 ];
 
 export class BrowserError extends Error {}
@@ -52,7 +92,7 @@ export async function launchDetached({
   spawnImpl = spawn,
   now = () => Date.now(),
 }) {
-  const profile = await profileDir(profilePath);
+  const profile = await prepareProfile(profilePath);
   const child = spawnImpl(
     executablePath ?? chromium.executablePath(),
     [
@@ -91,11 +131,22 @@ async function waitForEndpoint(port, { timeoutMs, now }) {
   let lastError;
   while (now() < deadline) {
     try {
-      return await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+      // Short per-attempt timeout: a Chromium on its way out still completes
+      // the handshake and then drops the socket, and waiting Playwright's full
+      // default on that one attempt is what turned a quick relaunch into a
+      // thirty second stall.
+      const browser = await chromium.connectOverCDP(
+        `http://127.0.0.1:${port}`,
+        { timeout: 2000 },
+      );
+      if (browser.isConnected() && browser.contexts().length) return browser;
+      // close() on a CDP connection disconnects; it never closes the browser.
+      await browser.close().catch(() => {});
+      lastError = new Error("that Chromium was shutting down");
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 250));
     }
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new BrowserError(
     `Could not reach Chromium on ${port}: ${lastError?.message ?? "timed out"}`,
@@ -142,9 +193,52 @@ export async function findGamePages(browser) {
   return pages.sort((a, b) => Number(b.inGame) - Number(a.inGame));
 }
 
+// A page of its own, in a window of its own. Playwright's newPage opens a tab,
+// and two tabs of one window cannot be put side by side.
+export async function openWindow(browser, url, { timeoutMs = 15_000 } = {}) {
+  const context = browser.contexts()[0];
+  if (!context)
+    throw new BrowserError("The Chromium exposes no browser context");
+  const before = new Set(context.pages());
+  const cdp = await browser.newBrowserCDPSession();
+  try {
+    await cdp.send("Target.createTarget", { url, newWindow: true });
+  } finally {
+    await cdp.detach().catch(() => {});
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const opened = context.pages().find((page) => !before.has(page));
+    if (opened) return opened;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new BrowserError(`No window opened for ${url}`);
+}
+
+// Leftovers from earlier runs: restored tabs, dead dashboards, the blank page a
+// launch starts on. Only the kinds of page this tool opens are closed, and only
+// in its own profile — anything else a window holds is left where it is.
+export async function tidy(browser, { keep = [], origin = null } = {}) {
+  const kept = new Set(keep.filter(Boolean));
+  const strays = [];
+  for (const context of browser.contexts())
+    for (const page of context.pages()) {
+      if (kept.has(page) || page.isClosed()) continue;
+      const url = page.url();
+      if (
+        /^(about:blank|chrome-error:|chrome:\/\/new-?tab)/.test(url) ||
+        /^https?:\/\/(www\.)?webliero\.com([/?#]|$)/.test(url) ||
+        (origin && url.startsWith(origin))
+      )
+        strays.push(page);
+    }
+  for (const page of strays) await page.close().catch(() => {});
+  return strays.length;
+}
+
 // The same profile, in a browser that dies with this process.
 export async function launchOwned({ headless, executablePath, profilePath }) {
-  const profile = await profileDir(profilePath);
+  const profile = await prepareProfile(profilePath);
   try {
     const context = await chromium.launchPersistentContext(profile, {
       headless,

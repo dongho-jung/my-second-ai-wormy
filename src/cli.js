@@ -14,6 +14,8 @@ import {
   launchDetached,
   launchOwned,
   openPage,
+  openWindow,
+  tidy,
 } from "./browser.js";
 
 const HELP = `Wormy II — WebLiero state and terrain, read live and drawn
@@ -238,19 +240,32 @@ async function main() {
     if (shutdownRequested) return await stop();
 
     if (config.dashboard) {
-      // Its own window, so the game stays visible while you watch the readouts.
-      // It shares the profile but not the game's storage: a different origin
+      // Its own window, not another tab: the game has to stay visible while the
+      // readouts are watched, and only two windows can be put side by side. It
+      // shares the profile but not the game's storage — a different origin
       // never sees another one's.
       let dashboard = browser
         .contexts()
         .flatMap((context) => context.pages())
         .find((candidate) => candidate.url().startsWith(`${server.origin}/`));
-      if (!dashboard) dashboard = await browser.contexts()[0].newPage();
-      await dashboard.goto(server.origin, { timeout: 15_000 }).catch(() => {});
+      if (dashboard)
+        await dashboard.goto(server.origin, { timeout: 15_000 }).catch(() => {});
+      else dashboard = await openWindow(browser, server.origin);
+      // Whatever else the profile was holding — restored tabs, dashboards from
+      // ports nobody is listening on any more — goes now, so the layout below
+      // is two windows and two tabs.
+      const closed = await tidy(browser, {
+        keep: [page, dashboard],
+        origin: server.origin,
+      });
       const tiled = await tileWindows(page, dashboard);
       // The game window is the one being played in, so leave it focused.
       await page.bringToFront().catch(() => {});
-      log.info("dashboard_window", { tiled });
+      log.info("windows", { tiled, closedStrayTabs: closed });
+      if (!tiled)
+        log.warn("not_tiled", {
+          hint: "the screen is too narrow to split, or the two pages share a window",
+        });
     }
     if (shutdownRequested) return await stop();
 
