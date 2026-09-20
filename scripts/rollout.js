@@ -11,7 +11,7 @@ import { makeRng } from "../src/env/engine.js";
 import { KEYS, ROPE } from "../src/env/actions.js";
 import { DEFAULTS, WormEnv } from "../src/env/env.js";
 import { observe } from "../src/env/observation.js";
-import { PATCH_SIZE, VECTOR_SIZE } from "../src/env/observation.js";
+import { PATCH_SIZE } from "../src/env/observation.js";
 import { createRun } from "../src/train/recorder.js";
 
 const HELP = `Wormy II — headless environment rollout
@@ -22,6 +22,9 @@ Runs episodes of the headless WebLiero environment with a random policy and
 records one line per episode under artifacts/runs/, which "npm run monitor"
 draws live.
 
+  --agents 3           Worms in the free-for-all (1 is solo, 2 a duel, 5 a brawl)
+  --observation-foes N Size the vector for this many other worms instead of
+                       agents-1, so one policy can play any count
   --episodes 20        Episodes to run
   --seed 1             First episode seed; each episode advances it
   --frameskip 4        World ticks per agent step
@@ -39,6 +42,8 @@ draws live.
 const { values } = parseArgs({
   options: {
     help: { type: "boolean", short: "h" },
+    agents: { type: "string", default: "3" },
+    "observation-foes": { type: "string" },
     episodes: { type: "string", default: "20" },
     seed: { type: "string", default: "1" },
     frameskip: { type: "string", default: String(DEFAULTS.frameskip) },
@@ -76,6 +81,7 @@ if (!observations) {
   throw new Error(`--observations must be one of ${Object.keys(KINDS).join(", ")}`);
 }
 
+const agents = number("agents", values.agents);
 const episodes = number("episodes", values.episodes);
 const frameskip = number("frameskip", values.frameskip);
 const episodeTicks = number("episode-ticks", values["episode-ticks"]);
@@ -89,6 +95,10 @@ const pool = Array.from({ length: poolSize }, (_, index) =>
   engine.randomLevel(firstSeed + index),
 );
 const env = new WormEnv(engine, {
+  agents,
+  ...(values["observation-foes"] === undefined
+    ? {}
+    : { observationFoes: number("observation-foes", values["observation-foes"], { min: 0 }) }),
   frameskip,
   episodeTicks,
   inputLatencyTicks: latency,
@@ -127,12 +137,15 @@ const run = values.record
         mod: engine.settings.name,
         agents: env.agents,
         frameskip,
+        weights: env.weights,
         episodeTicks,
         inputLatencyTicks: env.inputLatencyTicks,
         loadout: env.loadouts[0].map((id) => engine.weaponNames[id]).join(", "),
         levels: poolSize ? `${poolSize} generated, cycled` : "one generated per episode",
         observation: observations
-          .map((kind) => (kind === "vector" ? `vector ${VECTOR_SIZE}` : `patch ${PATCH_SIZE}`))
+          .map((kind) =>
+            kind === "vector" ? `vector ${env.spec.vectorSize}` : `patch ${PATCH_SIZE}`,
+          )
           .join(" + "),
         node: process.version,
       },
@@ -140,7 +153,7 @@ const run = values.record
   : null;
 if (run) {
   console.log(`run ${run.id} -> ${run.path.pathname}`);
-  await run.note(`${values.policy} 정책으로 ${episodes} 에피소드 시작`);
+  await run.note(`${episodes} episodes with the ${values.policy} policy`);
 }
 
 let steps = 0;
@@ -154,14 +167,19 @@ for (let episode = 0; episode < episodes; episode++) {
   let done = false;
   while (!done) {
     const out = env.step(env.observations.map(policy));
-    reward += out.rewards[0];
     episodeSteps++;
     done = out.done;
   }
   steps += episodeSteps * env.agents;
   ticks += episodeSteps * frameskip;
-  const totals = env.info().totals[0];
+  // Averaged across the worms: in a free-for-all they are all the same policy,
+  // and one worm's good episode is another's bad one.
+  const all = env.info().totals;
+  const mean = (field) =>
+    all.reduce((sum, one) => sum + (one[field] ?? 0), 0) / all.length;
+  reward = mean("reward");
   const wall = (performance.now() - episodeStarted) / 1000;
+  const damageTaken = mean("damageTaken");
   const line = {
     step: steps,
     episode: env.episode,
@@ -169,11 +187,21 @@ for (let episode = 0; episode < episodes; episode++) {
     map: env.world.level.name,
     episodeSteps,
     episodeReward: reward,
-    damageDealt: totals.damageDealt,
-    damageTaken: totals.damageTaken,
-    damageRatio: totals.damageTaken > 0 ? totals.damageDealt / totals.damageTaken : 0,
-    kills: totals.killed,
-    deaths: totals.died,
+    damageDealt: mean("damageDealt"),
+    damageTaken,
+    selfDamage: mean("selfDamage"),
+    damageRatio: damageTaken > 0 ? mean("damageDealt") / damageTaken : 0,
+    kills: mean("killed"),
+    deaths: mean("died"),
+    stuckSteps: mean("stuckSteps"),
+    cellsVisited: mean("cellsVisited"),
+    fromDamageDealt: mean("fromDamageDealt"),
+    fromDamageTaken: mean("fromDamageTaken"),
+    fromKill: mean("fromKill"),
+    fromDeath: mean("fromDeath"),
+    fromExplore: mean("fromExplore"),
+    fromRevisit: mean("fromRevisit"),
+    fromStuck: mean("fromStuck"),
     stepsPerSecond: (episodeSteps * env.agents) / wall,
     ticksPerSecond: (episodeSteps * frameskip) / wall,
     elapsedSeconds: (performance.now() - started) / 1000,
@@ -183,7 +211,8 @@ for (let episode = 0; episode < episodes; episode++) {
     console.log(
       `episode ${String(env.episode).padStart(3)} seed ${String(info.seed).padStart(10)} ` +
         `reward ${reward.toFixed(3).padStart(7)} dealt ${line.damageDealt.toFixed(0).padStart(4)} ` +
-        `taken ${line.damageTaken.toFixed(0).padStart(4)} k/d ${line.kills}/${line.deaths} ` +
+        `taken ${line.damageTaken.toFixed(0).padStart(4)} (self ${line.selfDamage.toFixed(0).padStart(4)}) ` +
+        `k/d ${line.kills.toFixed(1)}/${line.deaths.toFixed(1)} stuck ${line.stuckSteps.toFixed(0).padStart(3)} ` +
         `${Math.round(line.stepsPerSecond).toLocaleString().padStart(8)} steps/s`,
     );
   }
@@ -193,12 +222,15 @@ const wall = (performance.now() - started) / 1000;
 // What one observation costs, on its own: the environment is the engine plus
 // this, and it is worth knowing which half the time went to.
 const view = env.views[0];
-const into = { vector: new Float32Array(VECTOR_SIZE), patch: new Float32Array(PATCH_SIZE) };
+const into = {
+  vector: new Float32Array(env.spec.vectorSize),
+  patch: new Float32Array(PATCH_SIZE),
+};
 const samples = 20_000;
 const cost = (kinds) => {
-  for (let warm = 0; warm < 2000; warm++) observe(view, into, kinds);
+  for (let warm = 0; warm < 2000; warm++) observe(view, into, kinds, env.spec);
   const at = performance.now();
-  for (let sample = 0; sample < samples; sample++) observe(view, into, kinds);
+  for (let sample = 0; sample < samples; sample++) observe(view, into, kinds, env.spec);
   return (performance.now() - at) / samples;
 };
 const observeMs = cost(observations);
@@ -225,7 +257,8 @@ console.log(
 );
 if (run) {
   await run.note(
-    `끝: ${summary.stepsPerSecond.toLocaleString()} 스텝/초, 관측 1회 ${summary.observeMs}ms`,
+    `finished: ${summary.stepsPerSecond.toLocaleString()} steps/s, ` +
+      `${summary.observeMs} ms per observation`,
   );
   await run.close({ status: "done", ...summary });
 }
