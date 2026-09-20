@@ -226,6 +226,21 @@ export async function createMonitorServer({
           url: live ? `http://127.0.0.1:${WATCH_PORT}` : null,
         });
       }
+      // What the room watcher is seeing. It is a separate process writing a
+      // separate file, so this is a read of that file and nothing more: no
+      // watcher running simply means no file.
+      if (url.pathname === "/observer") {
+        try {
+          const raw = await readFile(new URL("../../artifacts/observer.json", import.meta.url), "utf8");
+          const state = JSON.parse(raw);
+          // Its own clock decides whether it is live; a file left behind by a
+          // watcher that died an hour ago must not read as "watching".
+          const age = Date.now() - Date.parse(state.at ?? 0);
+          return json(200, { ...state, live: Number.isFinite(age) && age < 15_000, ageMs: age });
+        } catch {
+          return json(200, { live: false, watching: null });
+        }
+      }
       if (url.pathname === "/runs") return json(200, { runs: await listRuns(dir) });
       if (url.pathname.startsWith("/runs/")) {
         const id = decodeURIComponent(url.pathname.slice("/runs/".length));

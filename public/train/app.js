@@ -96,6 +96,9 @@ let stream = null;
 const charts = new Map();
 
 function subscribe() {
+  void pollObserver();
+  clearInterval(subscribe.observerTimer);
+  subscribe.observerTimer = setInterval(pollObserver, 3000);
   stream?.close();
   const query = selected ? `?run=${encodeURIComponent(selected)}` : "";
   stream = new EventSource(`/events${query}`);
@@ -227,9 +230,60 @@ function movement(key) {
 }
 
 const percent = (value) => `${Math.round(value * 100)}%`;
+
+/** What the room watcher is seeing, refreshed on its own clock. */
+let observer = { live: false, watching: null };
+
+async function pollObserver() {
+  try {
+    const response = await fetch("/observer");
+    observer = await response.json();
+  } catch {
+    observer = { live: false, watching: null };
+  }
+  renderHeadlines();
+}
 const CHANGED = 0.08;
 
 const HEADLINES = [
+  {
+    title: "Is anyone playing?",
+    // The one thing the run's own numbers cannot say. A room sits empty for
+    // hours, and "no new frames" looks exactly like "the watcher fell over".
+    read: () => (observer.watching || observer.live ? 1 : 0),
+    show: () => {
+      if (!observer.live) return "not watching";
+      const who = observer.recording ?? [];
+      return who.length ? who.join(", ") : "empty room";
+    },
+    unit: () => {
+      if (!observer.live) {
+        return observer.watching
+          ? `${observer.watching} stopped reporting — the watcher is not running`
+          : "no watcher is connected to a room";
+      }
+      const room = observer.room ? `${observer.room}` : "a room";
+      return `${observer.watching} is watching ${room} · ${observer.mod ?? ""}`.trim();
+    },
+    state: () => {
+      if (!observer.live) return "bad";
+      return (observer.recording ?? []).length ? "good" : "flat";
+    },
+    say: () => {
+      if (!observer.live) {
+        return "Nothing is being recorded. Start the watcher with npm run record -- --room-url ...";
+      }
+      const who = observer.recording ?? [];
+      const total = observer.samples ?? 0;
+      if (!who.length) {
+        return `Connected and waiting. Nobody has a living worm, so nothing is being written. ${total.toLocaleString()} frames so far.`;
+      }
+      const each = Object.entries(observer.byPlayer ?? {})
+        .map(([name, count]) => `${name} ${count.toLocaleString()}`)
+        .join(", ");
+      return `Recording now. ${total.toLocaleString()} frames this session${each ? ` — ${each}` : ""}.`;
+    },
+  },
   {
     title: "Is it fighting?",
     good: "up",

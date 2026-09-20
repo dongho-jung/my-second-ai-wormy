@@ -134,6 +134,17 @@ const observer = new WebLieroObserver(pages[0], { log });
 
 const idleMs = Number(values["idle-seconds"]) * 1000;
 const minPlayers = Number(values["min-players"]);
+/**
+ * Where the watcher says what it is doing, for the dashboard to read.
+ *
+ * The trainer only ever sees files of frames, so it can say how many it has
+ * learned from and nothing about where they came from — which left the page
+ * unable to answer "is anybody playing right now", the one thing worth knowing
+ * while a room sits empty for hours.
+ */
+const STATUS = new URL("../../artifacts/observer.json", import.meta.url);
+let watchingSince = new Date().toISOString();
+let lastSeen = null;
 const idleRun = Number(values["idle-run"]);
 /** Consecutive samples each player has pressed nothing for. */
 const idleFor = new Map();
@@ -192,6 +203,41 @@ let terrain = null;
 let terrainAt = 0;
 let mapTerrain = null;
 let samples = 0;
+
+/**
+ * Write what the watcher is seeing, for the dashboard.
+ *
+ * Throttled and fire-and-forget: this is a status line, and a run must never
+ * wait on it or fail because of it.
+ */
+let publishedAt = 0;
+function publish(livePlayers, roomName) {
+  lastSeen = new Date().toISOString();
+  const now = Date.now();
+  if (now - publishedAt < 1500) return;
+  publishedAt = now;
+  void writeFile(
+    STATUS,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        room: roomName,
+        roomUrl: values["room-url"] ?? null,
+        watching: values.nickname,
+        mod: engine.settings.name,
+        since: watchingSince,
+        at: lastSeen,
+        recording: livePlayers.filter((name) => !excluded.has(name)),
+        minPlayers,
+        samples,
+        byPlayer: Object.fromEntries(counts),
+        file: `${id}.bin`,
+      },
+      null,
+      2,
+    )}\n`,
+  ).catch(() => {});
+}
 
 /** What the player did that is not in the key bitmask. */
 function messages(player, worm) {
@@ -263,6 +309,9 @@ async function sample() {
   // no living worm, nothing written. One person practising alone still shows
   // how to move, rope and handle a weapon, which is most of what the policy is
   // bad at, so one is enough. Raise it to 2 to keep only real fights.
+  // Said whether or not anything is recorded: "nobody is playing" is a state
+  // the page needs to show, not the absence of one.
+  publish(playing.map((player) => player.name), read.game.room?.name ?? null);
   if (playing.length < minPlayers) return;
   for (const player of playing) {
     // Somebody standing still is still standing still whether they are away or
