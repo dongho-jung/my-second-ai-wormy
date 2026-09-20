@@ -83,9 +83,13 @@ test("the bindings cover every action a policy can ask for", async () => {
   assert.equal(codes.Dig, "KeyC");
   assert.equal(codes.NinjaRope, "KeyA");
   assert.equal(codes.Left, "ArrowLeft");
+  assert.equal(codes.ShortenRope, "ShiftLeft");
   // Nothing is on ChangeWeap, so the modifier cannot be pressed by accident.
   assert.equal(codes.ChangeWeap, undefined);
   assert.ok(!Object.values(BINDINGS).includes("ChangeWeap"));
+  // Nor on rope length: the seven heads have no way to ask for it, so a key
+  // that could only ever be pressed by accident is better left unbound.
+  assert.equal(codes.LengthenRope, undefined);
   // Every key a policy could need is one of the bound ones.
   for (const action of REQUIRED_ACTIONS) assert.ok(codes[action], `${action} is unbound`);
   // A table that has lost a key says which.

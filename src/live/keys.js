@@ -45,8 +45,9 @@ export const BINDINGS = {
   KeyR: "Reload",
   KeyC: "Dig",
   KeyA: "NinjaRope",
-  ControlLeft: "ShortenRope",
-  ShiftLeft: "LengthenRope",
+  ShiftLeft: "ShortenRope",
+  // LengthenRope is deliberately on nothing, the same as ChangeWeap: the action
+  // space has no head for rope length, so nothing can ask for it.
   Tab: "Scoreboard",
   Enter: "Chat",
 };
