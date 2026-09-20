@@ -328,6 +328,11 @@ export function snapshotV20({ terrain = false, terrainPatch = false } = {}) {
     localPlayerId: net.sb,
     room: {
       name: room.yf,
+      // Which game this room is actually running. A policy trained on one mod
+      // and shown recordings from another is being taught a different set of
+      // weapons under a different set of constants, and nothing about the
+      // observation says so — it is the same 144 numbers either way.
+      mod: world.s?.name ?? null,
       modeId,
       mode:
         ["deathmatch", "last_man_standing", "hold_the_flag", "team_deathmatch"][

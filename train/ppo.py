@@ -341,6 +341,7 @@ def main(argv=None):
     # nothing reads. Re-read as the run goes, so somebody playing right now is
     # being learned from within a minute.
     expect = {
+        "mod": layout.mod,
         "vectorSize": layout.vector_size,
         "patchCells": layout.patch_cells if use_patch else 0,
         "mapCells": layout.map_cells if use_map else 0,

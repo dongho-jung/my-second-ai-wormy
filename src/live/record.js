@@ -19,7 +19,7 @@ import { parseArgs } from "node:util";
 import { chromium } from "playwright";
 import { WebLieroObserver } from "../observer.js";
 import { createLogger } from "../log.js";
-import { spawned } from "../room.js";
+import { joinRoom, spawned } from "../room.js";
 import { ACTION_HEADS } from "../env/actions.js";
 import { DEFAULT_MOD, loadEngine } from "../env/engine.js";
 import {
@@ -65,6 +65,8 @@ const { values } = parseArgs({
     learn: { type: "boolean", default: true },
     "min-samples": { type: "string", default: "600" },
     mod: { type: "string", default: DEFAULT_MOD },
+    "room-url": { type: "string" },
+    nickname: { type: "string", default: "OBSERVER" },
   },
   allowNegative: true,
 });
@@ -101,8 +103,21 @@ for (const context of browser.contexts()) {
     if (inRoom) pages.push(page);
   }
 }
+if (!pages.length && values["room-url"]) {
+  // Nobody is in a room yet, so open one tab and sit in it. Spectating on
+  // purpose: a seat taken is a seat a person cannot have, and there is nothing
+  // to be learned from watching this project's own policy play.
+  log.info("joining_to_watch", { url: values["room-url"], as: values.nickname });
+  const context = browser.contexts()[0];
+  const page = await context.newPage();
+  page.on("dialog", (dialog) => void dialog.accept().catch(() => {}));
+  await joinRoom(page, values["room-url"], { nickname: values.nickname });
+  pages.push(page);
+}
 if (!pages.length) {
-  console.error("No tab is in a room. Join one and run this again.");
+  console.error(
+    "No tab is in a room. Join one and run this again, or pass --room-url to watch one.",
+  );
   process.exit(1);
 }
 // One tab is enough: it can see everybody.
@@ -136,6 +151,7 @@ const describe = () =>
       recordBytes: RECORD_BYTES,
       order: ["vector:f32", "patch:u8", "map:u8", "heads:u8", "playerId:u8"],
       engineSha256: engine.sha256,
+      mod: engine.settings.name,
       hz: Number(values.hz),
     },
     null,
@@ -179,10 +195,38 @@ function messages(player, worm) {
   };
 }
 
+/**
+ * Whether the room is running the game these observations are encoded for.
+ *
+ * Checked once the first snapshot arrives, and then never again — the mod
+ * cannot change under a room. Worth checking at all because the failure is
+ * silent: the same 144 numbers come out either way, and only the weapon block
+ * is quietly describing somebody else's weapons.
+ */
+let roomMod = null;
+
+function roomIsOurs(game) {
+  if (roomMod !== null) return roomMod;
+  const theirs = game.room?.mod ?? null;
+  const ours = engine.settings.name;
+  roomMod = theirs === null || theirs === ours;
+  if (!roomMod) {
+    console.error(
+      `This room is running ${theirs} and these observations are encoded for ` +
+        `${ours}. The weapons are not the same weapons, so the recording would ` +
+        `teach the wrong ones. Re-run with --mod for ${theirs}, or watch another room.`,
+    );
+    process.exit(1);
+  }
+  log.info("room_mod", { mod: theirs ?? "unreported", encoding: ours });
+  return roomMod;
+}
+
 async function sample() {
   const now = Date.now();
   const read = await observer.read().catch(() => null);
   if (!read?.game) return;
+  if (!roomIsOurs(read.game)) return;
   if (!terrain || now - terrainAt > mapMs) {
     const map = await observer.read({ terrain: true }).catch(() => null);
     if (map?.game) {

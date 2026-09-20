@@ -97,6 +97,7 @@ def load(directory: Path, only: str | None = None, expect: dict | None = None) -
     if expect:
         shape = (expect["vectorSize"], expect["patchCells"], expect["mapCells"], expect["heads"])
     first = None
+    skipped_mods = set()
     vectors, patches, maps, heads, sources = [], [], [], [], []
     for meta_path in metas:
         try:
@@ -110,6 +111,15 @@ def load(directory: Path, only: str | None = None, expect: dict | None = None) -
         if shape is None:
             shape = key
         elif key != shape:
+            continue
+        # Same shape is not the same game. A recording taken in a room running
+        # another mod has the right number of weapon features and the wrong
+        # weapons in them, which nothing downstream can notice.
+        if expect and expect.get("mod") and meta.get("mod") != expect["mod"]:
+            # Unstamped counts as wrong rather than as fine. The only recordings
+            # without a mod are the ones taken before anybody was checking, and
+            # those were made against a room whose weapons did not match.
+            skipped_mods.add(meta.get("mod") or "")
             continue
         if first is None:
             first = meta
@@ -127,6 +137,12 @@ def load(directory: Path, only: str | None = None, expect: dict | None = None) -
         at += meta["mapCells"]
         heads.append(raw[:, at : at + len(meta["heads"])].copy())
         sources.append((meta_path.stem, count))
+    for mod in sorted(skipped_mods):
+        print(
+            f"ignoring recordings from a {mod} room" if mod
+            else "ignoring recordings that do not say which game they came from",
+            flush=True,
+        )
     if not vectors:
         return None
     every = Demos(
