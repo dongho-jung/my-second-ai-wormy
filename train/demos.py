@@ -8,9 +8,31 @@ reader.
 from __future__ import annotations
 
 import json
+import zlib
 from pathlib import Path
 
 import numpy as np
+
+
+def read_frames(path: Path) -> np.ndarray:
+    """The bytes of a recording, compressed or not.
+
+    A recording is read while it is still being written, so its last deflate
+    block is usually half-finished. `decompressobj` hands back everything that
+    did decode and stops, where `gzip.read` would raise on the truncated tail
+    and lose the whole session.
+    """
+    if path.suffix != ".gz":
+        return np.fromfile(path, dtype=np.uint8)
+    unpack = zlib.decompressobj(wbits=31)
+    out = bytearray()
+    with open(path, "rb") as handle:
+        while chunk := handle.read(1 << 20):
+            try:
+                out += unpack.decompress(chunk)
+            except zlib.error:
+                break  # whatever decoded up to here is still good play
+    return np.frombuffer(bytes(out), dtype=np.uint8)
 
 
 class Demos:
@@ -104,7 +126,9 @@ def load(directory: Path, only: str | None = None, expect: dict | None = None) -
             meta = json.loads(meta_path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        binary = meta_path.with_suffix(".bin")
+        binary = meta_path.with_suffix(".bin.gz")
+        if not binary.exists():
+            binary = meta_path.with_suffix(".bin")
         if not binary.exists():
             continue
         key = (meta["vectorSize"], meta["patchCells"], meta["mapCells"], len(meta["heads"]))
@@ -124,7 +148,7 @@ def load(directory: Path, only: str | None = None, expect: dict | None = None) -
         if first is None:
             first = meta
         size = meta["recordBytes"]
-        raw = np.fromfile(binary, dtype=np.uint8)
+        raw = read_frames(binary)
         count = raw.size // size
         if count == 0:
             continue

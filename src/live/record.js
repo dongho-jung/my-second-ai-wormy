@@ -14,7 +14,8 @@
 // demonstration and a rollout are the same kind of thing.
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { createGzip, constants as zlibConstants } from "node:zlib";
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { chromium } from "playwright";
 import { WebLieroObserver } from "../observer.js";
@@ -50,6 +51,8 @@ it needs. Stop it with Ctrl+C.
   --exclude NAMES     comma-separated player names to ignore, e.g. the driven ones
   --idle-seconds 10   after this long with nobody playing, close the recording
                       and start learning from it
+  --keep-gb 4         how much recorded play to keep. The oldest sessions are
+                      deleted once the pile is bigger than this; 0 keeps all
   --min-players 1     how many living players a frame needs before it is kept
   --idle-run 45       stop recording a player after this many samples of them
                       pressing nothing, until they touch something again
@@ -71,6 +74,7 @@ const { values } = parseArgs({
     "room-url": { type: "string" },
     "min-players": { type: "string", default: "1" },
     "idle-run": { type: "string", default: "45" },
+    "keep-gb": { type: "string", default: "4" },
     nickname: { type: "string", default: "OBSERVER" },
   },
   allowNegative: true,
@@ -146,6 +150,7 @@ const STATUS = new URL("../../artifacts/observer.json", import.meta.url);
 let watchingSince = new Date().toISOString();
 let lastSeen = null;
 const idleRun = Number(values["idle-run"]);
+const keepBytes = Number(values["keep-gb"]) * 1e9;
 /** Consecutive samples each player has pressed nothing for. */
 const idleFor = new Map();
 const minSamples = Number(values["min-samples"]);
@@ -158,7 +163,81 @@ const directory = new URL(
 );
 await mkdir(directory, { recursive: true });
 const RECORD_BYTES = spec.vectorSize * 4 + PATCH_CELLS + MAP_SIZE + ACTION_HEADS.length + 1;
-let sink = createWriteStream(new URL(`${id}.bin`, directory));
+/**
+ * A frame sink that compresses as it writes.
+ *
+ * A frame is thirty kilobytes, five sixths of it the terrain patch, and two
+ * players at fifteen a second filled the disk at sixty gigabytes a day. The
+ * patch is a few distinct values in long runs, so it deflates about twenty-five
+ * times over at the cheapest setting — the compression costs far less than the
+ * writing it saves.
+ *
+ * Flushed on a timer rather than left to fill its buffer: the trainer reads
+ * these files while they are still being written, and an unflushed deflate
+ * stream holds the last few seconds of play where nothing can see it.
+ */
+/**
+ * Delete the oldest sessions until the pile fits.
+ *
+ * The trainer holds every recording it can find in memory at once and samples
+ * across the lot, so this is a window on recent play rather than an archive —
+ * and the behavioural-cloning weight stops rising at twenty thousand frames,
+ * past which more of them buy variety, not authority. Oldest first, and never
+ * the file being written.
+ */
+async function prune(keepBytes, writing) {
+  if (!(keepBytes > 0)) return;
+  const names = (await readdir(directory)).filter((name) => name.endsWith(".bin.gz") || name.endsWith(".bin"));
+  const sessions = [];
+  for (const name of names) {
+    if (name.startsWith(writing)) continue;
+    const path = new URL(name, directory);
+    try {
+      const info = await stat(path);
+      sessions.push({ name, path, bytes: info.size, at: info.mtimeMs });
+    } catch {
+      /* it went away on its own */
+    }
+  }
+  let total = sessions.reduce((sum, one) => sum + one.bytes, 0);
+  sessions.sort((a, b) => a.at - b.at);
+  for (const session of sessions) {
+    if (total <= keepBytes) break;
+    try {
+      await rm(session.path, { force: true });
+      await rm(new URL(session.name.replace(/\.bin(\.gz)?$/, ".json"), directory), { force: true });
+      total -= session.bytes;
+      log.info("dropped_old_recording", {
+        file: session.name,
+        mb: Math.round(session.bytes / 1e6),
+        keeping_mb: Math.round(total / 1e6),
+      });
+    } catch (error) {
+      log.warn("prune_failed", { file: session.name, message: error.message });
+    }
+  }
+}
+
+function openSink(path) {
+  const file = createWriteStream(path);
+  // Level 1: twenty-three times smaller for a fraction of the CPU of level 6,
+  // and the disk was the problem, not the last factor of two.
+  const gzip = createGzip({ level: 1 });
+  gzip.pipe(file);
+  const flusher = setInterval(() => gzip.flush(zlibConstants.Z_SYNC_FLUSH), 2000);
+  flusher.unref?.();
+  return {
+    write: (chunk) => gzip.write(chunk),
+    end: () =>
+      new Promise((resolve) => {
+        clearInterval(flusher);
+        gzip.end(() => file.end(resolve));
+      }),
+  };
+}
+
+await prune(keepBytes, id);
+let sink = openSink(new URL(`${id}.bin.gz`, directory));
 const describe = () =>
   writeFile(
   new URL(`${id}.json`, directory),
@@ -231,7 +310,7 @@ function publish(livePlayers, roomName) {
         minPlayers,
         samples,
         byPlayer: Object.fromEntries(counts),
-        file: `${id}.bin`,
+        file: `${id}.bin.gz`,
       },
       null,
       2,
@@ -363,14 +442,17 @@ async function finishSegment() {
     return;
   }
   const finished = id;
-  await new Promise((resolve) => sink.end(resolve));
+  await sink.end();
   console.log(`\n${captured} samples in ${finished}; learning from it now`);
   // The next stretch of play goes somewhere new, so this one can be trained on
   // while it is still being recorded.
   started = new Date();
   id = started.toISOString().replace(/[:.]/g, "-").replace("Z", "");
-  sink = createWriteStream(new URL(`${id}.bin`, directory));
+  sink = openSink(new URL(`${id}.bin.gz`, directory));
   await describe();
+  // A new file is the moment the pile got bigger, so it is the moment to check
+  // whether the oldest of it still fits.
+  await prune(keepBytes, id);
   segmentStart = samples;
   if (!values.learn) return;
   if (learning && learning.exitCode === null) {
@@ -415,7 +497,7 @@ const stop = async () => {
   clearInterval(timer);
   clearInterval(status);
   clearInterval(idle);
-  await new Promise((resolve) => sink.end(resolve));
+  await sink.end();
   console.log(`\n${samples} samples from ${counts.size} player(s):`);
   for (const [name, count] of counts) console.log(`  ${name.padEnd(20)} ${count}`);
   console.log(`-> ${directory.pathname}${id}.bin`);
