@@ -50,6 +50,9 @@ def parse_args(argv=None):
                        help="how many of them to use; 0 trains on generated maps alone")
     world.add_argument("--weapons", default="all", choices=["direct", "all"],
                        help="a real room lets a player pick any of the forty, explosives included")
+    world.add_argument("--mod", default="nkpromode",
+                       help="the game the room is set to. A policy trained on Liero 1.33 and "
+                            "played in a Promode room learned a different set of weapons")
     world.add_argument("--rules", default="room", choices=["room", "clean"],
                        help="room matches the engine's own defaults, bonus drops and all")
     world.add_argument("--no-patch", action="store_true", help="drop the close terrain patch")
@@ -197,6 +200,7 @@ def main(argv=None):
         weaponPool=args.weapons,
         rules={} if args.rules == "room" else {"bonusDrops": 0},
         seed=args.seed,
+        engine={"mod": args.mod},
         observations=[
             "vector",
             *([] if args.no_patch else ["patchBytes"]),

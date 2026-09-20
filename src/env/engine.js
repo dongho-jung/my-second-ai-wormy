@@ -67,7 +67,9 @@ export const WEAPON_FEATURES = [
 ];
 
 export const WEAPON_FEATURE_COUNT = WEAPON_FEATURES.length;
-const WEAPON_PROFILES = new URL("../../artifacts/weapons.json", import.meta.url);
+/** Measured weapon behaviour, one file per mod: id 0 is a different gun in each. */
+const weaponProfilesFor = (mod) =>
+  new URL(`../../artifacts/weapons.${mod}.json`, import.meta.url);
 const HANDOUT = "__wormyEngineClasses";
 
 // The world settings a room lets its host change, under the names the game's
@@ -305,7 +307,18 @@ export function respawnWorm(world, worm, loadout) {
  * bundle installs itself on the globals, so a second directory would quietly
  * be the first one's classes.
  */
-export function loadEngine({ dir = DEFAULT_ENGINE_DIR, mod = "liero133" } = {}) {
+/**
+ * The mod to train and play under.
+ *
+ * Not the stock one. A room set to Promode ReRevisited is a different game —
+ * forty-one weapons against forty, and rebalanced — and a policy trained on
+ * Liero 1.33 arrives there having learned the wrong weapons. The whole point of
+ * running the official bundle headless is that the two sides match, and the mod
+ * is part of what has to match.
+ */
+export const DEFAULT_MOD = "nkpromode";
+
+export function loadEngine({ dir = DEFAULT_ENGINE_DIR, mod = DEFAULT_MOD } = {}) {
   if (loading) return loading;
   loading = (async () => {
     const source = readFileSync(assetPath(dir, ASSETS.bundle), "utf8");
@@ -354,7 +367,7 @@ export function loadEngine({ dir = DEFAULT_ENGINE_DIR, mod = "liero133" } = {}) 
       sha256,
       dir,
       mod,
-      profiles: loadWeaponProfiles(settings),
+      profiles: loadWeaponProfiles(settings, mod),
     });
   })();
   return loading;
@@ -370,10 +383,11 @@ export function resetEngineForTesting() {
  * Missing, every row is zeros and the policy is simply told nothing — better
  * than telling it something invented.
  */
-function loadWeaponProfiles(settings) {
+function loadWeaponProfiles(settings, mod) {
   const features = new Float32Array(settings.O.length * WEAPON_FEATURE_COUNT);
-  if (!existsSync(WEAPON_PROFILES)) return { features, measured: false };
-  const { weapons } = JSON.parse(readFileSync(WEAPON_PROFILES, "utf8"));
+  const path = weaponProfilesFor(mod);
+  if (!existsSync(path)) return { features, measured: false, weapons: [] };
+  const { weapons } = JSON.parse(readFileSync(path, "utf8"));
   for (const weapon of weapons) {
     if (weapon.id >= settings.O.length) continue;
     WEAPON_FEATURES.forEach(([field, scale], index) => {
@@ -381,18 +395,26 @@ function loadWeaponProfiles(settings) {
       features[weapon.id * WEAPON_FEATURE_COUNT + index] = Math.max(-2, Math.min(2, value));
     });
   }
-  return { features, measured: true };
+  return { features, measured: true, weapons };
 }
 
+/** The mod every other one borrows from when it ships no art of its own. */
+const BASE_MOD = "liero133";
+
 function loadMod(classes, zip, mod) {
-  const entry = (name) => {
-    const found = zip.get(`mods/${mod}/${name}`);
-    if (!found) throw new Error(`res.dat has no mods/${mod}/${name}`);
+  const entry = (name, from = mod) => {
+    const found = zip.get(`mods/${from}/${name}`);
+    if (!found) throw new Error(`res.dat has no mods/${from}/${name}`);
     return found;
   };
   const settings = classes.Mod.dj(entry("mod.json5").yl());
+  // Some mods are rules only — Promode ReRevisited carries a mod.json5 and no
+  // sprites at all — and fall back to the stock art, which is what the game
+  // itself shows for them. Nothing here draws anything; the sprites are read
+  // because the settings want the worm palette that comes with them.
+  const art = zip.get(`mods/${mod}/sprites.wlsprt`) ? mod : BASE_MOD;
   const sprites = classes.Sprites.read(
-    new classes.Reader(new DataView(entry("sprites.wlsprt").Ug()), true),
+    new classes.Reader(new DataView(entry("sprites.wlsprt", art).Ug()), true),
   );
   settings.ba = sprites.ba;
   settings.Ha = sprites.bj;

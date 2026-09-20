@@ -33,19 +33,53 @@ export const DEFAULT_LOADOUT = [0, 2, 3, 5, 10];
 /**
  * Weapons that do their damage where they hit, rather than by exploding.
  *
- * Half of the mod's forty are explosives, and a policy that has not yet learned
+ * Half of a mod's weapons are explosives, and a policy that has not yet learned
  * to aim fires them at its own feet: at the start of a run, self-inflicted
  * damage outweighs damage dealt fifteen to one. What it learns from that is not
  * "aim better", it is "never fire" — measured, twice. Guns first, and widen the
  * pool once it can hit something.
  *
- * Shotgun, chaingun, rifle, winchester, flamer, minigun, super shotgun,
- * handgun, zimm, laser, uzi, mini rockets, dart.
+ * By name, not by id. An id means a different weapon in every mod — id 0 is the
+ * shotgun in Liero 1.33 and the auto shotgun in Promode ReRevisited — so a list
+ * of numbers is a list about one mod, and using it under another either picks
+ * the wrong guns or runs off the end of a shorter list. Each entry is the
+ * names one weapon goes by; the first that the loaded mod has is the one used.
  */
-export const DIRECT_FIRE = [0, 1, 2, 7, 9, 14, 16, 17, 21, 28, 31, 36, 37];
+export const DIRECT_FIRE_NAMES = [
+  ["SHOTGUN", "AUTO SHOTGUN"],
+  ["CHAINGUN"],
+  ["RIFLE"],
+  ["WINCHESTER"],
+  ["FLAMER", "FLAMETHROWER"],
+  ["MINIGUN"],
+  ["SUPER SHOTGUN"],
+  ["HANDGUN"],
+  ["ZIMM"],
+  ["LASER"],
+  ["UZI"],
+  ["MINI ROCKETS"],
+  ["DART", "DARTGUN"],
+];
 
-/** Named pools a trainer can ask for by name. */
-export const WEAPON_POOLS = { direct: DIRECT_FIRE, all: null };
+/** The ids those names have in whichever mod is loaded. */
+export function directFire(engine) {
+  const at = new Map(
+    engine.settings.O.map((weapon, id) => [String(weapon.name).trim().toUpperCase(), id]),
+  );
+  const ids = [];
+  for (const names of DIRECT_FIRE_NAMES) {
+    for (const name of names) {
+      if (at.has(name)) {
+        ids.push(at.get(name));
+        break;
+      }
+    }
+  }
+  return ids;
+}
+
+/** Named pools a trainer can ask for. "all" is every weapon the mod has. */
+export const WEAPON_POOL_NAMES = ["direct", "all"];
 
 export const DEFAULTS = {
   // Three is a free-for-all, which is the interesting case; two is a duel and
@@ -70,7 +104,7 @@ export const DEFAULTS = {
   inputLatencyTicks: 0,
   loadout: "random",
   // Which weapons "random" draws from. Null is all of them.
-  weaponPool: DIRECT_FIRE,
+  weaponPool: "direct",
   // Both pictures by default. The terrain patch is about ten times the cost of
   // the vector, so a task that does not need it — walking somewhere, a first
   // check that the pipeline learns anything at all — should pass ["vector"].
@@ -117,16 +151,18 @@ export class WormEnv {
     this.terminateOnKill = settings.terminateOnKill;
     this.inputLatencyTicks = range(settings.inputLatencyTicks);
     this.loadout = settings.loadouts ?? settings.loadout;
-    if (typeof settings.weaponPool === "string" && !(settings.weaponPool in WEAPON_POOLS)) {
+    if (typeof settings.weaponPool === "string" && !WEAPON_POOL_NAMES.includes(settings.weaponPool)) {
       throw new Error(
-        `unknown weapon pool ${settings.weaponPool}: expected ${Object.keys(WEAPON_POOLS).join(", ")}`,
+        `unknown weapon pool ${settings.weaponPool}: expected ${WEAPON_POOL_NAMES.join(", ")}`,
       );
     }
     // "all" is null, which is every weapon — so the name has to be looked up
     // rather than defaulted through, or asking for all of them reads as a typo.
     this.weaponPool =
       typeof settings.weaponPool === "string"
-        ? WEAPON_POOLS[settings.weaponPool]
+        ? settings.weaponPool === "direct"
+          ? directFire(this.engine)
+          : null
         : settings.weaponPool;
     this.weights = settings.weights;
     this.observationKinds = settings.observations;

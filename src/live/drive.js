@@ -138,7 +138,9 @@ for (let index = 0; index < players; index++) {
   // window, and nothing here needs them side by side.
   const page = reused[index]?.page ?? (await openPage(browser));
   handleDialogs(page);
-  const nickname = `${config.nickname ?? "Wormy"} ${String.fromCharCode(65 + index)}`;
+  const nickname =
+    config.nicknames?.[index] ??
+    `${config.nickname ?? "Wormy"} ${String.fromCharCode(65 + index)}`;
   if (!reused[index]) {
     await page.goto(LOBBY, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await setNickname(page, nickname).catch(() => {});
@@ -173,7 +175,7 @@ if (seated) {
     name: config.roomName ?? "wormy",
     // Seats for the driven worms and for anyone who wants to join and play.
     maxPlayers: config.roomSize ?? 20,
-    isPublic: false,
+    isPublic: config.isPublic ?? false,
     onCaptcha: () =>
       say("\n*** WebLiero is asking for a CAPTCHA to create the room. Please solve it in the game window. ***\n"),
     log,
@@ -233,8 +235,12 @@ let mapTerrain = null;
  * at a byte a pixel, and it only changes where somebody is digging. The state
  * is read every decision, because that is where the worms are.
  */
+/** The room as the first seat last saw it: who is in it, and whether it ended. */
+let room = null;
+
 async function look(seat, now) {
   const read = await seat.observer.read().catch(() => null);
+  if (seat.index === 0 && read?.game) room = read.game;
   if (!read?.game || !spawned(read)) return null;
   if (!seat.terrain || now - seat.terrainAt > mapMs) {
     const map = await seat.observer.read({ terrain: true }).catch(() => null);
@@ -293,6 +299,85 @@ async function sample() {
   writeFrame(vectors, patches, maps);
 }
 
+// ---------------------------------------------------------------------------
+// Saying something.
+//
+// The room is public, so there are people in it who did not set it up and have
+// no idea what the three identical worms are. Two things get said: hello and
+// what this is, when somebody arrives, and "G G" when a match ends.
+//
+// Chat is the game's own text box. The worm's keys are let go first — a held
+// arrow key would otherwise stay held while the text box has focus, and the
+// worm walks into a wall through the whole sentence.
+
+const GREETING = ["H I", "we are bots learning liero from the players here"];
+const FAREWELL = ["G G"];
+/** Not more than one greeting this often, however many people come and go. */
+const GREET_EVERY_MS = 5 * 60 * 1000;
+
+async function say_in_chat(seat, lines) {
+  const box = seat.page.locator("[data-hook='input']").first();
+  if (!(await box.count().catch(() => 0))) return false;
+  await seat.controls?.release().catch(() => {});
+  for (const line of lines) {
+    try {
+      await box.click({ timeout: 3000 });
+      await box.fill(line, { timeout: 3000 });
+      await box.press("Enter", { timeout: 3000 });
+      await seat.page.waitForTimeout(250);
+    } catch (error) {
+      log.warn("chat_failed", { seat: seat.index, message: error.message });
+      return false;
+    }
+  }
+  return true;
+}
+
+let known = new Set();
+let greetedAt = 0;
+let matchWasOver = false;
+let talking = false;
+
+/**
+ * One pass over the room state: greet an arrival, and mark the end of a match.
+ *
+ * Both are edges, not states — a match that has ended stays ended for as long
+ * as the scoreboard is up, and saying "G G" once a frame for ten seconds is
+ * how a bot gets kicked from a public room.
+ */
+async function chatter() {
+  if (!room || talking) return;
+  const ours = new Set(seats.map((seat) => seat.nickname));
+  const here = new Set();
+  let arrived = false;
+  for (const player of room.players ?? []) {
+    here.add(player.id);
+    if (!known.has(player.id) && !ours.has(player.name)) arrived = true;
+  }
+  const first = known.size === 0;
+  known = here;
+
+  const ended = Boolean(room.match?.ended);
+  const justEnded = ended && !matchWasOver;
+  matchWasOver = ended;
+
+  // The first look sees everybody at once, including our own worms starting
+  // up; that is not somebody arriving.
+  const now = Date.now();
+  const greet = arrived && !first && now - greetedAt > GREET_EVERY_MS;
+  if (!greet && !justEnded) return;
+
+  talking = true;
+  try {
+    // Whichever of ours is alive, so the line does not come from a corpse.
+    const speaker = seats.find((seat) => alive[seat.index]) ?? seats[0];
+    if (justEnded) await say_in_chat(speaker, FAREWELL);
+    if (greet && (await say_in_chat(speaker, GREETING))) greetedAt = now;
+  } finally {
+    talking = false;
+  }
+}
+
 playing = true;
 await sample();
 
@@ -324,6 +409,7 @@ async function act(heads) {
     }),
   );
   await sample();
+  void chatter().catch((error) => log.warn("chatter_failed", { message: error.message }));
 }
 
 const stop = async () => {

@@ -21,7 +21,7 @@ import { WebLieroObserver } from "../observer.js";
 import { createLogger } from "../log.js";
 import { spawned } from "../room.js";
 import { ACTION_HEADS } from "../env/actions.js";
-import { loadEngine } from "../env/engine.js";
+import { DEFAULT_MOD, loadEngine } from "../env/engine.js";
 import {
   MAP_SIZE,
   PATCH_CELLS,
@@ -64,6 +64,7 @@ const { values } = parseArgs({
     "idle-seconds": { type: "string", default: "10" },
     learn: { type: "boolean", default: true },
     "min-samples": { type: "string", default: "600" },
+    mod: { type: "string", default: DEFAULT_MOD },
   },
   allowNegative: true,
 });
@@ -81,7 +82,7 @@ const excluded = new Set(
 );
 const periodMs = 1000 / Number(values.hz);
 const mapMs = Number(values["map-ms"]);
-const engine = await loadEngine();
+const engine = await loadEngine({ mod: values.mod });
 const spec = observationSpec({
   foeSlots: Number(values["observation-foes"]),
   weaponFeatures: engine.weaponFeatures,

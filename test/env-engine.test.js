@@ -24,7 +24,7 @@ import {
   packKeys,
   unpackKeys,
 } from "../src/env/actions.js";
-import { DIRECT_FIRE, WormEnv } from "../src/env/env.js";
+import { WormEnv, directFire } from "../src/env/env.js";
 import {
   PATCH,
   VECTOR_OFFSETS,
@@ -104,8 +104,10 @@ test("the headless engine is the same file the live adapter reads", { skip }, as
     CLIENT_SHA256,
     "the physics only transfer while this is the very same bundle",
   );
-  assert.equal(engine.settings.name, "Liero 1.33");
-  assert.equal(engine.weaponNames.length, 40);
+  // The mod the rooms are set to. Not the stock one, and not the same weapons:
+  // a policy is trained on whichever game it will actually be played in.
+  assert.equal(engine.settings.name, "Promode ReRevisited");
+  assert.equal(engine.weaponNames.length, 30);
   assert.equal(engine.materialFlags.length, 256);
 });
 
@@ -420,7 +422,7 @@ test("weapons are drawn fresh, from the pool the run asked for", { skip }, async
   const explodes = (id) => engine.settings.O[id].be?.Bd === 0;
   // Half of the forty do their damage by exploding, and a policy that cannot
   // aim yet fires those at its own feet. The default pool has none of them.
-  assert.ok(DIRECT_FIRE.every((id) => !explodes(id)), "the direct-fire pool must not explode");
+  assert.ok(directFire(engine).every((id) => !explodes(id)), "the direct-fire pool must not explode");
   assert.ok(
     engine.settings.O.some((_, id) => explodes(id)),
     "and the mod must have some that do, or this test proves nothing",
@@ -433,7 +435,7 @@ test("weapons are drawn fresh, from the pool the run asked for", { skip }, async
     for (const loadout of env.loadouts) {
       assert.equal(new Set(loadout).size, 5, "five different weapons");
       for (const id of loadout) {
-        assert.ok(DIRECT_FIRE.includes(id), `${engine.weaponNames[id]} is not direct fire`);
+        assert.ok(directFire(engine).includes(id), `${engine.weaponNames[id]} is not direct fire`);
         seen.add(id);
       }
     }

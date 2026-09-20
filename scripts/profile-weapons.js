@@ -16,7 +16,8 @@ import { loadEngine, makeRng } from "../src/env/engine.js";
 import { KEYS } from "../src/env/actions.js";
 
 const TICKS = 300;
-const engine = await loadEngine();
+const mod = process.argv[2] ?? undefined;
+const engine = await loadEngine(mod ? { mod } : {});
 const settings = engine.settings;
 const flags = engine.materialFlags;
 
@@ -150,7 +151,7 @@ for (let id = 0; id < settings.O.length; id++) {
 }
 process.stdout.write("\r");
 
-const out = new URL("../artifacts/weapons.json", import.meta.url);
+const out = new URL(`../artifacts/weapons.${engine.mod}.json`, import.meta.url);
 await writeFile(out, `${JSON.stringify({ mod: settings.name, weapons: profiles }, null, 2)}\n`);
 
 const show = (w) =>
