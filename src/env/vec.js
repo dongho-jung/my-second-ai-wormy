@@ -91,8 +91,14 @@ export class VecWormEnv {
       // and the community pools ship PNGs beside the game's own .lev files.
       return engine.readAnyLevel(file, bytes);
     });
+    // Generated maps can be turned off outright, but only when there is
+    // something else to play on: a run with no levels at all has nowhere to put
+    // a worm. Asking for none and silently getting one is how a run that was
+    // meant to be on the room's own maps spends a twentieth of its episodes on
+    // a dirt field instead.
+    const generated = stock.length ? Math.max(0, levelPool) : Math.max(1, levelPool);
     this.levels = [
-      ...Array.from({ length: Math.max(1, levelPool) }, (_, index) =>
+      ...Array.from({ length: generated }, (_, index) =>
         engine.randomLevel((seed + index * 0x9e3779b9) >>> 0, options.levelOptions),
       ),
       ...stock,
