@@ -1,0 +1,164 @@
+"""Put a trained policy into a real room on webliero.com.
+
+Loads a checkpoint and drives `src/live/drive.js`, which opens the game windows,
+gets them into one room and presses the keys. The physics are the same file the
+policy trained against — the checksum says so — and `src/live/keys.js` proves
+every action it can take is one a player could press. What is left is the two
+things a live game has and a headless one does not: a network, and a keyboard
+sampled sixty times a second.
+
+    npm run play                      # three worms, the newest run's best policy
+    npm run play -- --room-url URL    # join a room that already exists
+
+WebLiero asks for a CAPTCHA to create a room. It is asked for in the game window
+and waited out there; nothing here tries to get past it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import struct
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+import torch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from policy import WormPolicy
+from run import DEFAULT_RUNS
+from watch import newest_checkpoint
+from workers import REPO, _read_frame
+
+DRIVER = REPO / "src" / "live" / "drive.js"
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--players", type=int, default=3, help="worms in the room, all driven by the policy")
+    parser.add_argument("--run", default=None, help="run id to play; the newest by default")
+    parser.add_argument("--checkpoint", default=None, help="a .pt file, overriding --run")
+    parser.add_argument("--room-url", default=None, help="join this room instead of making one")
+    parser.add_argument("--room-name", default="wormy")
+    parser.add_argument("--nickname", default="Wormy")
+    parser.add_argument("--decide-hz", type=float, default=15.0,
+                        help="decisions a second; 15 is the 4-tick frameskip it trained on")
+    parser.add_argument("--map-ms", type=int, default=1000,
+                        help="how often the whole level is re-read; they dig through it as they play")
+    parser.add_argument("--cdp-port", type=int, default=9334)
+    parser.add_argument("--profile", default=None)
+    parser.add_argument("--greedy", action="store_true", help="take the likeliest action instead of sampling")
+    parser.add_argument("--device", default="cpu", choices=["cpu", "mps", "cuda"],
+                        help="three worms at 15 Hz is far too small to be worth a GPU")
+    parser.add_argument("--runs-dir", default=str(DEFAULT_RUNS))
+    parser.add_argument("--verbose", action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    runs = Path(args.runs_dir)
+    if args.checkpoint:
+        path = Path(args.checkpoint)
+    elif args.run:
+        run = runs / args.run
+        path = run / "best.pt" if (run / "best.pt").exists() else run / "policy.pt"
+    else:
+        path = newest_checkpoint(runs)
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    shape = checkpoint["layout"]
+    trained_agents = shape.get("agents", 3)
+    device = torch.device(args.device)
+
+    policy = WormPolicy(
+        shape["vectorSize"],
+        shape["headSizes"],
+        patch_side=shape.get("patchSide", 32),
+        use_patch=shape.get("usePatch", True),
+    ).to(device)
+    policy.load_state_dict(checkpoint["policy"])
+    policy.eval()
+
+    config = {
+        "players": args.players,
+        # The vector keeps the width the policy was trained on, however many
+        # worms are in the room.
+        "observationFoes": trained_agents - 1,
+        "roomUrl": args.room_url,
+        "roomName": args.room_name,
+        "nickname": args.nickname,
+        "decideHz": args.decide_hz,
+        "mapMs": args.map_ms,
+        "cdpPort": args.cdp_port,
+        "frameskip": shape.get("frameskip", 4),
+        "verbose": args.verbose,
+    }
+    if args.profile:
+        config["profile"] = args.profile
+
+    driver = subprocess.Popen(
+        ["node", str(DRIVER), json.dumps(config)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=sys.stderr,
+        cwd=str(REPO),
+        bufsize=0,
+    )
+    try:
+        layout = json.loads(_read_frame(driver.stdout))
+        if layout["vectorSize"] != shape["vectorSize"]:
+            raise RuntimeError(
+                f"the policy wants a vector of {shape['vectorSize']} and the game "
+                f"gives {layout['vectorSize']}"
+            )
+        print(
+            f"playing {path.parent.name} ({checkpoint.get('step', 0):,} steps"
+            + (f", reward {checkpoint['reward']:.2f}" if "reward" in checkpoint else "")
+            + f") in {layout['room']}",
+            flush=True,
+        )
+        vector_bytes = layout["agents"] * layout["vectorSize"] * 4
+        patch_bytes = layout["agents"] * layout["patchCells"]
+        use_patch = shape.get("usePatch", True) and patch_bytes > 0
+        heads_count = len(layout["heads"])
+        while True:
+            frame = _read_frame(driver.stdout)
+            vectors = torch.from_numpy(
+                np.frombuffer(frame, dtype=np.float32, count=vector_bytes // 4)
+                .reshape(layout["agents"], -1)
+                .copy()
+            ).to(device)
+            patches = None
+            if use_patch:
+                patches = torch.from_numpy(
+                    np.frombuffer(frame, dtype=np.uint8, count=patch_bytes, offset=vector_bytes)
+                    .reshape(layout["agents"], -1)
+                    .copy()
+                ).to(device)
+            with torch.no_grad():
+                if args.greedy:
+                    logits, _ = policy(vectors, patches)
+                    heads = torch.stack([head.argmax(dim=1) for head in logits], dim=1)
+                else:
+                    heads, _, _, _ = policy.act(vectors, patches, want_entropy=False)
+            block = heads.to(torch.uint8).cpu().numpy().tobytes()
+            driver.stdin.write(struct.pack("<I", heads_count * layout["agents"]) + block)
+            driver.stdin.flush()
+    except (KeyboardInterrupt, EOFError, BrokenPipeError):
+        pass
+    finally:
+        try:
+            driver.stdin.close()
+        except OSError:
+            pass
+        try:
+            driver.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            driver.kill()
+
+
+if __name__ == "__main__":
+    main()

@@ -71,3 +71,25 @@ test("the rope and the weapon are presses, not holds", () => {
   assert.deepEqual(pressesForAction({ weapon: -1 }), [ACTIONS.previousWeapon]);
   assert.deepEqual(pressesForAction({}), []);
 });
+
+test("the bindings cover every action a policy can ask for", async () => {
+  const { BINDINGS, REQUIRED_ACTIONS, codesByAction, missingBindings } = await import(
+    "../src/live/keys.js"
+  );
+  assert.deepEqual(missingBindings(BINDINGS), [], "every action needs a key");
+  const codes = codesByAction(BINDINGS);
+  assert.equal(codes.Fire, "KeyD");
+  assert.equal(codes.Jump, "KeyS");
+  assert.equal(codes.Dig, "KeyC");
+  assert.equal(codes.NinjaRope, "KeyA");
+  assert.equal(codes.Left, "ArrowLeft");
+  // Nothing is on ChangeWeap, so the modifier cannot be pressed by accident.
+  assert.equal(codes.ChangeWeap, undefined);
+  assert.ok(!Object.values(BINDINGS).includes("ChangeWeap"));
+  // Every key a policy could need is one of the bound ones.
+  for (const action of REQUIRED_ACTIONS) assert.ok(codes[action], `${action} is unbound`);
+  // A table that has lost a key says which.
+  const broken = { ...BINDINGS };
+  delete broken.KeyC;
+  assert.deepEqual(missingBindings(broken), ["Dig"]);
+});

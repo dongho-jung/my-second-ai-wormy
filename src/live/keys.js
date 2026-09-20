@@ -24,6 +24,64 @@
 // Rope throw and weapon change are not in the bitmask at all — they are their
 // own messages — so they are their own keys here too.
 
+/**
+ * The keys these actions are on, as `KeyboardEvent.code` — the form the game
+ * stores in `localStorage["player_keys"]` and the form a synthesised event has
+ * to carry. This is the layout the player has set up in Settings > Input.
+ *
+ * ChangeWeap is deliberately on nothing. It is the modifier that turns aim into
+ * rope length and stops the worm walking, and leaving it unbound means no
+ * sequence of presses can trigger it by accident.
+ */
+export const BINDINGS = {
+  ArrowUp: "Up",
+  ArrowDown: "Down",
+  ArrowLeft: "Left",
+  ArrowRight: "Right",
+  KeyD: "Fire",
+  KeyS: "Jump",
+  KeyQ: "NextWeap",
+  KeyW: "PrevWeap",
+  KeyR: "Reload",
+  KeyC: "Dig",
+  KeyA: "NinjaRope",
+  ControlLeft: "ShortenRope",
+  ShiftLeft: "LengthenRope",
+  Tab: "Scoreboard",
+  Enter: "Chat",
+};
+
+/** Which key each action is on, the way round a driver needs it. */
+export function codesByAction(bindings = BINDINGS) {
+  const codes = {};
+  for (const [code, action] of Object.entries(bindings)) {
+    if (!(action in codes)) codes[action] = code;
+  }
+  return codes;
+}
+
+/**
+ * The actions a driver has to be able to press, and what is missing from a
+ * given binding table. Rope length is not here: the policy never asks for it.
+ */
+export const REQUIRED_ACTIONS = [
+  "Up",
+  "Down",
+  "Left",
+  "Right",
+  "Fire",
+  "Jump",
+  "Dig",
+  "NinjaRope",
+  "NextWeap",
+  "PrevWeap",
+];
+
+export function missingBindings(bindings) {
+  const codes = codesByAction(bindings);
+  return REQUIRED_ACTIONS.filter((action) => !codes[action]);
+}
+
 /** The action names the game binds keys to, as its own settings spell them. */
 export const ACTIONS = {
   up: "Up",

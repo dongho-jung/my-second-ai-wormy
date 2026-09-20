@@ -54,9 +54,15 @@ def parse_args(argv=None):
     world.add_argument("--no-patch", action="store_true", help="vector observation only, about ten times cheaper")
 
     scale = parser.add_argument_group("how much of it to run")
-    scale.add_argument("--workers", type=int, default=4)
-    scale.add_argument("--envs", type=int, default=8, help="matches per worker")
-    scale.add_argument("--steps", type=int, default=128, help="decisions per worm per update")
+    # Measured on this machine: the environment costs almost nothing (6% of the
+    # CPU) and the gradient steps on the GPU are the whole of it. So the batch
+    # is collected from many worms over a short horizon rather than few worms
+    # over a long one, and it is reused twice rather than four times — fresh
+    # data is nearly free and reuse is not. 576 worms over 24 steps at four
+    # epochs was 10,600 steps/s; this is 19,700.
+    scale.add_argument("--workers", type=int, default=8)
+    scale.add_argument("--envs", type=int, default=48, help="matches per worker")
+    scale.add_argument("--steps", type=int, default=12, help="decisions per worm per update")
     scale.add_argument("--total-steps", type=int, default=2_000_000)
 
     learn = parser.add_argument_group("learning")
@@ -64,8 +70,8 @@ def parse_args(argv=None):
     learn.add_argument("--gamma", type=float, default=0.99)
     learn.add_argument("--lam", type=float, default=0.95)
     learn.add_argument("--clip", type=float, default=0.2)
-    learn.add_argument("--epochs", type=int, default=4)
-    learn.add_argument("--minibatches", type=int, default=4)
+    learn.add_argument("--epochs", type=int, default=2)
+    learn.add_argument("--minibatches", type=int, default=2)
     learn.add_argument("--entropy", type=float, default=0.01)
     learn.add_argument("--value-coef", type=float, default=0.5)
     learn.add_argument("--max-grad-norm", type=float, default=0.5)

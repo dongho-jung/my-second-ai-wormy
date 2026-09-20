@@ -15,7 +15,8 @@
     "monitor": "node scripts/monitor.js",
     "train": "node scripts/train.js",
     "watch": "node scripts/watch.js",
-    "levels": "node scripts/fetch-levels.js"
+    "levels": "node scripts/fetch-levels.js",
+    "play": "node scripts/play.js"
   },
   "dependencies": {
     "playwright": "1.63.0"
