@@ -107,6 +107,16 @@ def main(argv=None):
         "levelFiles": [
             path for path in (args.levels or shape.get("levels") or []) if Path(path).exists()
         ],
+        # Whatever the policy was trained under. Watching it play a different
+        # game than it learned is worse than not watching it at all: the
+        # weapons it never trained with are the ones it handles worst.
+        "weaponPool": shape.get("weaponPool", "all"),
+        "banStart": shape.get("banStart", []),
+        "rules": (
+            {"bonusDrops": 3, "bonusSpawnTicks": 480, "weaponChangeDelay": 45}
+            if shape.get("rules", "room") == "room"
+            else {"bonusDrops": 0}
+        ),
     }
     if args.seed is not None:
         config["seed"] = args.seed

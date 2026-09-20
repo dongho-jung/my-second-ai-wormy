@@ -55,7 +55,8 @@ def parse_args(argv=None):
                             "does, so the name does not live in two languages at once — it was "
                             "spelled here as well, went stale, and the run duly ignored every "
                             "recording from the room it was meant to be learning from")
-    world.add_argument("--ban-start", default="CRAZY IVAN,ENERGY SHIELD,FORCE FIELD,BARRACUDA",
+    world.add_argument("--ban-start",
+                       default="CRAZY IVAN,ENERGY SHIELD,FORCE FIELD,BARRACUDA,BIG BERTHA,NUKA-COLA",
                        help="weapons nobody spawns holding, by the mod's own names. They still "
                             "turn up as crates, which is how the rooms run them")
     world.add_argument("--rules", default="room", choices=["room", "clean"],
@@ -94,12 +95,17 @@ def parse_args(argv=None):
     learn.add_argument("--clip", type=float, default=0.2)
     learn.add_argument("--epochs", type=int, default=2)
     learn.add_argument("--minibatches", type=int, default=4)
-    learn.add_argument("--entropy", type=float, default=0.01,
+    # Sized against the policy loss rather than picked off a paper. With
+    # normalised advantages the policy loss here runs around 0.0005, not the
+    # 0.01-0.05 the usual 0.01 coefficient assumes — so that coefficient paid
+    # the policy fifty-six times more to stay undecided than to win, and a run
+    # sat at 80%% of maximum entropy for twenty million steps without ever
+    # committing to anything. These keep the bonus near the size of the thing
+    # it is competing with.
+    learn.add_argument("--entropy", type=float, default=0.0001,
                        help="how much it is paid to stay undecided, at the start")
-    learn.add_argument("--entropy-final", type=float, default=0.001,
-                       help="and at the end. Held at the start value it never commits: after 33M "
-                            "steps a run at a flat 0.01 was still at 83%% of maximum entropy, which "
-                            "is a policy still mashing buttons")
+    learn.add_argument("--entropy-final", type=float, default=0.00001,
+                       help="and at the end")
     learn.add_argument("--value-coef", type=float, default=0.5)
     learn.add_argument("--max-grad-norm", type=float, default=0.5)
     learn.add_argument("--seed", type=int, default=1)
@@ -107,13 +113,14 @@ def parse_args(argv=None):
     shown = parser.add_argument_group("learning from recorded play")
     shown.add_argument("--demos", default=str(REPO / "artifacts" / "demos"),
                        help="recordings of people playing, as `npm run record` writes them")
-    shown.add_argument("--bc-coef", type=float, default=0.05,
+    shown.add_argument("--bc-coef", type=float, default=0.005,
                        help="how much of each update is spent agreeing with the recordings, once "
                             "there are enough of them. The cloning loss is a sum of seven "
-                            "cross-entropies and starts near 6; the policy loss, against normalised "
-                            "advantages, is nearer 0.02. At 0.5 the recordings were pulling a "
-                            "hundred times harder than the reward, and a run duly memorised 2,571 "
-                            "frames to 99.9% and learned to stand still for two thirds of a match. "
+                            "cross-entropies; the policy loss, against normalised advantages, is "
+                            "around 0.0005. At 0.5 the recordings pulled a hundred times harder "
+                            "than the reward and a run memorised 2,571 frames to 99.9%. At 0.05 "
+                            "they pulled seven times harder, which is subtler and ends the same "
+                            "way: 99.5% agreement with the recordings while the kills fell. "
                             "0 ignores them")
     shown.add_argument("--bc-full-frames", type=int, default=20_000,
                        help="how many frames of play the coefficient above is worth in full. Below "
@@ -257,6 +264,12 @@ def main(argv=None):
         # its own — the difference between watching it play and watching it
         # flounder somewhere it has never been.
         "levels": stock_levels(args),
+        # The same for the weapons and the bonus rules: a viewer that spawns
+        # worms holding the weapons training bars is showing a game nobody is
+        # learning, and BARRACUDA turning up every round is how that looked.
+        "weaponPool": args.weapons,
+        "banStart": [name.strip() for name in args.ban_start.split(",") if name.strip()],
+        "rules": args.rules,
         "usePatch": use_patch,
         "patchShape": list(patch_shape),
         "useMap": use_map,

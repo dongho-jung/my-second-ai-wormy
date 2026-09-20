@@ -56,6 +56,9 @@ const env = new WormEnv(engine, {
   observationFoes: config.observationFoes,
   observations: ["vector", "patchBytes", "map"],
   loadout: config.loadout ?? "random",
+  weaponPool: config.weaponPool ?? "all",
+  banStart: config.banStart ?? [],
+  rules: config.rules ?? {},
   seed: config.seed ?? Math.floor(Math.random() * 0xffffffff),
 });
 env.reset();
