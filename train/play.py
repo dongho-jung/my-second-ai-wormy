@@ -21,6 +21,7 @@ import json
 import struct
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -60,6 +61,46 @@ def parse_args(argv=None):
                         help="open new tabs and a new room instead of taking over the ones already seated")
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
+
+
+def compatible(shape, wants) -> bool:
+    """Whether a checkpoint was trained on the observation this room gives."""
+    return (
+        shape.get("vectorSize") == wants["vectorSize"]
+        and list(shape.get("headSizes") or []) == list(wants["headSizes"])
+        and list(shape.get("patchShape") or []) == list(wants["patchShape"] or [])
+        and bool(shape.get("usePatch", True)) == wants["usePatch"]
+        and bool(shape.get("useMap", False)) == wants["useMap"]
+    )
+
+
+def best_available(runs: Path, wants):
+    """The most-trained checkpoint that still fits this room, and its shape.
+
+    `best.pt` is each run's own high-water mark, kept on smoothed episode
+    reward, so it is the one to take from whichever run is furthest along.
+    Reward cannot be compared across runs — the weights and the opponent both
+    change — so "furthest along" is decided on steps, among the checkpoints
+    that match the observation. Matching is what stops a run from before an
+    observation changed being picked merely for being large.
+    """
+    best = None
+    for run in sorted(runs.glob("*/"), reverse=True):
+        for name in ("best.pt", "policy.pt"):
+            path = run / name
+            if not path.exists():
+                continue
+            try:
+                carried = torch.load(path, map_location="cpu", weights_only=False)
+            except (OSError, RuntimeError, EOFError):
+                continue  # still being written
+            if not compatible(carried.get("layout", {}), wants):
+                continue
+            step = int(carried.get("step", 0))
+            if best is None or step > best[2]:
+                best = (path, carried, step)
+            break
+    return best
 
 
 def main(argv=None):
@@ -122,6 +163,14 @@ def main(argv=None):
                 f"the policy wants a vector of {shape['vectorSize']} and the game "
                 f"gives {layout['vectorSize']}"
             )
+        # The vector is not the whole observation, and a patch of the wrong size
+        # reshapes into nonsense rather than failing.
+        wanted_cells = shape.get("patchShape") and shape["patchShape"][-2] * shape["patchShape"][-1]
+        if shape.get("usePatch", True) and wanted_cells and layout["patchCells"] != wanted_cells:
+            raise RuntimeError(
+                f"the policy looked at {wanted_cells:,} patch cells and the game "
+                f"gives {layout['patchCells']:,}"
+            )
         print(
             f"playing {path.parent.name} ({checkpoint.get('step', 0):,} steps"
             + (f", reward {checkpoint['reward']:.2f}" if "reward" in checkpoint else "")
@@ -134,6 +183,22 @@ def main(argv=None):
         map_bytes = layout["agents"] * layout.get("mapCells", 0)
         use_map = shape.get("useMap", False) and map_bytes > 0
         heads_count = len(layout["heads"])
+        wants = {
+            "vectorSize": shape["vectorSize"],
+            "headSizes": shape["headSizes"],
+            "patchShape": list(shape.get("patchShape") or []),
+            "usePatch": shape.get("usePatch", True),
+            "useMap": shape.get("useMap", False),
+        }
+        # A policy loaded once is the policy the room keeps for as long as it is
+        # open, however far the training has moved on meanwhile — which is how
+        # a room spent an evening showing a 172,800-step checkpoint while the
+        # run behind it passed 2.6M. So it is picked up again whenever a round
+        # ends. The driver zeroes the vector of every worm it cannot see, so an
+        # all-zero frame is nobody alive: between rounds, or everyone dead.
+        playing_step = int(checkpoint.get("step", 0))
+        anyone_alive = True
+        looked_at = 0.0
         while True:
             frame = _read_frame(driver.stdout)
             vectors = torch.from_numpy(
@@ -157,6 +222,24 @@ def main(argv=None):
                     .reshape(layout["agents"], -1)
                     .copy()
                 ).to(device)
+            was_alive, anyone_alive = anyone_alive, bool(vectors.any())
+            if was_alive and not anyone_alive and not args.checkpoint:
+                now = time.monotonic()
+                # Worms die often; the directory is only re-read on a round that
+                # ends at least this long after the last look.
+                if now - looked_at > 20:
+                    looked_at = now
+                    found = best_available(runs, wants)
+                    if found and found[2] > playing_step:
+                        path, carried, playing_step = found
+                        policy.load_state_dict(carried["policy"])
+                        policy.eval()
+                        print(
+                            f"now playing {path.parent.name} ({playing_step:,} steps"
+                            + (f", reward {carried['reward']:.2f}" if "reward" in carried else "")
+                            + ")",
+                            flush=True,
+                        )
             with torch.no_grad():
                 if args.greedy:
                     logits, _ = policy(vectors, patches, maps)
