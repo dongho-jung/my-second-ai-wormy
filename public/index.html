@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Wormy II — state &amp; terrain</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <h1>Wormy II</h1>
+      <div class="status">
+        <span class="chip" id="status">loading</span>
+        <span class="dim" id="heading">—</span>
+        <label class="toggle"
+          ><input type="checkbox" id="material" /> material</label
+        >
+      </div>
+      <div class="legend" id="legend" aria-label="Colour legend"></div>
+    </header>
+
+    <p class="alert" id="alert" hidden></p>
+
+    <main class="views">
+      <section class="panel map-panel">
+        <div class="panel-head">
+          <h2>Map</h2>
+          <span class="dim" id="map-scale">—</span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="map"></canvas>
+        </div>
+      </section>
+
+      <section class="panel near-panel">
+        <div class="panel-head">
+          <h2>Near</h2>
+          <span class="dim" id="near-scale">—</span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="near"></canvas>
+        </div>
+      </section>
+    </main>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Surroundings</h2></div>
+      <ul class="facts" id="surroundings"></ul>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Worm</h2></div>
+      <ul class="facts" id="self"></ul>
+      <div class="keys" id="keys"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Players</h2></div>
+      <table class="players">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Team</th>
+            <th>Score</th>
+            <th>K/D</th>
+            <th>Health</th>
+            <th>Weapon</th>
+            <th>Position</th>
+            <th>Velocity</th>
+            <th>Ping</th>
+          </tr>
+        </thead>
+        <tbody id="players"></tbody>
+      </table>
+    </section>
+  </body>
+</html>
