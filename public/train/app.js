@@ -188,6 +188,223 @@ function renderHeading() {
   element("heading").textContent = parts.join(" · ");
 }
 
+// ---------------------------------------------------------------------------
+// The headline: six questions, answered in words.
+//
+// Everything below this section is a chart of one quantity, and a page of forty
+// charts answers "how is it going" only for somebody who already knows which
+// four of them matter. These do the reading: each takes a number, compares it
+// with where it was earlier in the run, and says what that means in a sentence.
+//
+// `read` is the number, `show` prints it, `track` is the series whose direction
+// decides the colour, and `say` writes the line underneath.
+
+/**
+ * Where a quantity has moved: its recent third against the third before it.
+ *
+ * Only over the records that actually carry it. Combat figures are written when
+ * episodes finish, which at 900 decisions an episode is one record in forty-odd
+ * — so thirds of the whole run would compare two windows of mostly nothing and
+ * report "waiting for enough episodes" forever.
+ */
+function movement(key) {
+  if (!key) return null;
+  const seen = [];
+  for (const record of records) {
+    const value = record?.[key];
+    if (Number.isFinite(value)) seen.push(value);
+  }
+  if (seen.length < 6) return null;
+  const third = Math.floor(seen.length / 3);
+  const mean = (from, to) => {
+    let sum = 0;
+    for (let index = from; index < to; index++) sum += seen[index];
+    return sum / (to - from);
+  };
+  const before = mean(seen.length - third * 2, seen.length - third);
+  const after = mean(seen.length - third, seen.length);
+  return { before, after, change: (after - before) / Math.max(Math.abs(before), 1e-9) };
+}
+
+const percent = (value) => `${Math.round(value * 100)}%`;
+const CHANGED = 0.08;
+
+const HEADLINES = [
+  {
+    title: "Is it fighting?",
+    good: "up",
+    track: "kills",
+    read: () => latest("kills"),
+    show: (value) => value.toFixed(2),
+    unit: () => {
+      const dealt = latest("damageDealt");
+      return Number.isFinite(dealt)
+        ? `kills a match, dealing ${dealt.toFixed(0)} damage`
+        : "kills a match";
+    },
+    say: (move) =>
+      !move
+        ? "Waiting for enough episodes to tell."
+        : move.change > CHANGED
+          ? "Killing more than it was earlier in the run."
+          : move.change < -CHANGED
+            ? "Killing less than it was earlier in the run."
+            : "No change over the last stretch of the run.",
+  },
+  {
+    title: "Is it blowing itself up?",
+    good: "down",
+    track: "selfDamage",
+    read: () => {
+      const self = latest("selfDamage");
+      const dealt = latest("damageDealt");
+      if (!Number.isFinite(self) || !Number.isFinite(dealt)) return undefined;
+      return self + dealt > 0 ? self / (self + dealt) : 0;
+    },
+    show: percent,
+    unit: () => "of the damage it causes lands on itself",
+    say: (move, value) => {
+      const state =
+        value > 0.45
+          ? "It hurts itself about as much as it hurts anyone else."
+          : value > 0.2
+            ? "Still costing itself a lot of health."
+            : "Mostly hurting the other worms, not itself.";
+      if (!move) return state;
+      if (move.change < -CHANGED) return `${state} Improving.`;
+      if (move.change > CHANGED) return `${state} Getting worse.`;
+      return state;
+    },
+  },
+  {
+    title: "Can it get around?",
+    good: "down",
+    track: "stuckSteps",
+    read: () => {
+      const stuck = latest("stuckSteps");
+      const steps = latest("episodeSteps");
+      if (!Number.isFinite(stuck) || !Number.isFinite(steps) || steps <= 0) return undefined;
+      return stuck / steps;
+    },
+    show: percent,
+    unit: () => "of the match spent unable to move",
+    say: (move, value) => {
+      const state =
+        value > 0.3
+          ? "Wedged or pacing for a third of the match."
+          : value > 0.15
+            ? "Gets stuck regularly."
+            : "Moving freely most of the time.";
+      if (!move) return state;
+      if (move.change < -CHANGED) return `${state} Improving.`;
+      if (move.change > CHANGED) return `${state} Getting worse.`;
+      return state;
+    },
+  },
+  {
+    title: "Has it made up its mind?",
+    good: "down",
+    track: "entropyShare",
+    read: () => latest("entropyShare"),
+    show: percent,
+    unit: () => "as undecided as pressing keys at random",
+    say: (move, value) =>
+      value > 0.8
+        ? "Still close to mashing buttons — nearly every key is a coin toss."
+        : value > 0.5
+          ? "Committing to some keys, still experimenting with others."
+          : value > 0.2
+            ? "Playing deliberately."
+            : "Very decided; it has stopped trying new things.",
+  },
+  {
+    title: "Is it still learning?",
+    // Not one quantity but the health of the updates themselves: how far the
+    // policy moves each time, how much of the batch the clip holds back, and
+    // whether the critic can predict anything at all. A run can look alive on
+    // every chart above while these say the gradients stopped meaning anything.
+    read: () => {
+      const kl = latest("approxKL");
+      const clipped = latest("clipFraction");
+      const explained = latest("explainedVariance");
+      if (![kl, clipped, explained].every(Number.isFinite)) return undefined;
+      const moving = kl > 0.0015 && clipped > 0.02;
+      const predicting = explained > 0.1;
+      return moving && predicting ? 1 : moving || predicting ? 0.5 : 0;
+    },
+    show: (value) => (value === 1 ? "yes" : value === 0.5 ? "half" : "stalled"),
+    unit: () => {
+      const kl = latest("approxKL");
+      const explained = latest("explainedVariance");
+      return `moves ${Number.isFinite(kl) ? kl.toFixed(4) : "—"} per update · `
+        + `critic explains ${Number.isFinite(explained) ? percent(explained) : "—"}`;
+    },
+    state: (value) => (value === 1 ? "good" : value === 0.5 ? "flat" : "bad"),
+    say: (move, value) =>
+      value === 1
+        ? "Updates are changing the policy, and the critic can predict the reward."
+        : value === 0.5
+          ? "Half healthy — one of the two has gone flat. Worth a look."
+          : "The updates have stopped moving anything. This will not recover on its own.",
+  },
+  {
+    title: "Is it learning from you?",
+    good: "up",
+    track: "demoFrames",
+    read: () => latest("demoFrames"),
+    show: (value) =>
+      value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(Math.round(value)),
+    unit: () => "frames of your own play in the pile",
+    say: () => {
+      const frames = latest("demoFrames") ?? 0;
+      if (!frames) return "Nothing recorded yet. Play a match and it lands here by itself.";
+      const weight = latest("demoWeight");
+      const agree = latest("demoAgreement");
+      const counts = Number.isFinite(weight)
+        ? `Counts for ${percent(Math.min(1, weight / 0.05))} of what it could.`
+        : "";
+      const matching = Number.isFinite(agree)
+        ? ` Presses what you pressed ${percent(agree)} of the time.`
+        : "";
+      return `${counts}${matching}`.trim();
+    },
+  },
+];
+
+function renderHeadlines() {
+  const cards = [];
+  for (const headline of HEADLINES) {
+    const value = headline.read();
+    if (value === undefined) continue;
+    const move = movement(headline.track);
+    const card = document.createElement("article");
+    card.className = "headline";
+    const title = document.createElement("h2");
+    title.textContent = headline.title;
+    const figure = document.createElement("strong");
+    figure.textContent = headline.show(value);
+    const unit = document.createElement("span");
+    unit.className = "unit";
+    unit.textContent = headline.unit();
+    const verdict = document.createElement("p");
+    verdict.textContent = headline.say(move, value);
+    card.dataset.state = headline.state
+      ? headline.state(value)
+      : move && headline.good
+        ? (headline.good === "up" ? move.change > CHANGED : move.change < -CHANGED)
+          ? "good"
+          : (headline.good === "up" ? move.change < -CHANGED : move.change > CHANGED)
+            ? "bad"
+            : "flat"
+        : "flat";
+    card.append(title, figure, unit, verdict);
+    cards.push(card);
+  }
+  const board = element("headlines");
+  board.replaceChildren(...cards);
+  board.hidden = cards.length === 0;
+}
+
 function renderFigures() {
   const shown = FIGURES.map(([key, label, format]) => [label, format, latest(key)]).filter(
     ([, , value]) => value !== undefined,
@@ -452,6 +669,7 @@ function render() {
   renderRunList();
   renderWatchButton();
   renderHeading();
+  renderHeadlines();
   renderFigures();
   renderCharts();
   renderNotes();

@@ -123,6 +123,69 @@ select {
   color: var(--bad);
 }
 
+/* The headline: the six panels that answer "is this working" without needing
+   to know which of the charts below matters. Bigger than a figure on purpose —
+   the eye should land here first and only go down if something reads badly. */
+.headlines {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.headline {
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-left: 3px solid var(--dim);
+  border-radius: 4px;
+}
+
+.headline[data-state="good"] {
+  border-left-color: var(--live);
+}
+
+.headline[data-state="bad"] {
+  border-left-color: var(--bad);
+}
+
+.headline[data-state="flat"] {
+  border-left-color: var(--warn);
+}
+
+.headline h2 {
+  color: var(--dim);
+}
+
+.headline strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.headline[data-state="good"] strong {
+  color: var(--live);
+}
+
+.headline[data-state="bad"] strong {
+  color: var(--bad);
+}
+
+.headline .unit {
+  display: block;
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.headline p {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .figures {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

@@ -229,6 +229,9 @@ def main(argv=None):
         "useMap": use_map,
         "mapSide": map_side,
     }
+    # Seven independent choices, so the most undecided a policy can be is the
+    # sum of each head's own maximum, not one action space's worth.
+    max_entropy = float(np.log(np.array(layout.head_sizes, dtype=np.float64)).sum())
     optimiser = torch.optim.Adam(policy.parameters(), lr=args.lr, eps=1e-5)
     learning_rate = args.lr
     lr_low, lr_high = (float(part) for part in args.lr_range.split(","))
@@ -587,6 +590,10 @@ def main(argv=None):
                 policyLoss=losses["policy"],
                 valueLoss=losses["value"],
                 entropy=losses["entropy"],
+                # The same thing as a share of "every key equally likely". The
+                # raw figure means nothing without knowing there are seven
+                # decisions in an action; this reads straight as "still mashing".
+                entropyShare=losses["entropy"] / max_entropy,
                 entropyCoef=entropy_coef,
                 clipFraction=losses["clipped"],
                 approxKL=losses["kl"],
