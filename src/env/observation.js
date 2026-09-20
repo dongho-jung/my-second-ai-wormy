@@ -9,6 +9,7 @@
 //
 // So: state in the vector, shape in the patch. Start a task on the vector alone
 // to prove the pipeline, add the patch when the terrain starts to matter.
+import { WEAPON_FEATURE_COUNT } from "./engine.js";
 import {
   BACKGROUND,
   DIGGABLE,
@@ -51,6 +52,11 @@ export const PROJECTILE_SLOTS = 3;
  */
 export const DEFAULT_FOE_SLOTS = 2;
 const FOE_FIELDS = 9;
+/** Health and weapon crates worth walking to. */
+export const PICKUP_SLOTS = 3;
+const PICKUP_FIELDS = 4;
+/** Of a shot's weapon, the part that says how afraid to be. */
+const SHOT_WEAPON_FIELDS = 4;
 
 /**
  * The vector, field by field. Exported because a layout you cannot print is a
@@ -64,6 +70,8 @@ const FOE_FIELDS = 9;
 export function observationSpec({
   foeSlots = DEFAULT_FOE_SLOTS,
   projectileSlots = PROJECTILE_SLOTS,
+  pickupSlots = PICKUP_SLOTS,
+  weaponFeatures = null,
 } = {}) {
   const layout = [
     ["rays", RAY_COUNT], //   distance to the first solid pixel, 1 = clear to the limit
@@ -76,16 +84,30 @@ export function observationSpec({
     ["walkLeft", WALK.length], //   one-hot clear/step/dirt/rock
     ["walkRight", WALK.length],
     ["weapons", WEAPON_SLOTS * 3], // per slot: ammo left, ready to fire, selected
+    ["weaponsReload", WEAPON_SLOTS], // how far through reloading each one is
+    ["weapon", WEAPON_FEATURE_COUNT], // what the held weapon actually does
     ["rope", 5], //           out, attached, where it is, how long
-    ["foes", foeSlots * FOE_FIELDS], // each: alive, where, how far, which way, health, speed
-    ["projectiles", projectileSlots * 4], // the nearest shots: where and where to
+    // Each foe: alive, where, how far, which way, health, speed — and what it
+    // is pointing at you, which decides whether to close or break off.
+    ["foes", foeSlots * (FOE_FIELDS + WEAPON_FEATURE_COUNT)],
+    // The nearest shots: where, where to, and how much they are going to hurt.
+    ["projectiles", projectileSlots * (4 + SHOT_WEAPON_FIELDS)],
+    ["pickups", pickupSlots * PICKUP_FIELDS], // health and weapon crates nearby
   ];
   const offsets = {};
   const vectorSize = layout.reduce((at, [name, size]) => {
     offsets[name] = at;
     return at + size;
   }, 0);
-  return { foeSlots, projectileSlots, layout, offsets, vectorSize };
+  return {
+    foeSlots,
+    projectileSlots,
+    pickupSlots,
+    weaponFeatures,
+    layout,
+    offsets,
+    vectorSize,
+  };
 }
 
 export const DEFAULT_SPEC = observationSpec();
@@ -107,6 +129,31 @@ export const PATCH = {
 export const PATCH_CELLS = PATCH.cells * PATCH.cells;
 export const PATCH_SIZE = PATCH.channels.length * PATCH_CELLS;
 
+/**
+ * The whole level, small.
+ *
+ * The patch above is nine worm-heights across. The map is five hundred pixels
+ * across. A policy given only the patch can climb a ledge in front of it and
+ * has no way at all to decide which direction the rest of the match is in —
+ * which is exactly what it looks like: worms that fire the rope at the floor
+ * until the round ends, because nothing in what they can see says where to go.
+ *
+ * So: the level stretched onto a fixed grid, as three fractions rather than a
+ * hardest-wins code. At this scale a cell holds hundreds of pixels and "a
+ * quarter of this is open" is the useful thing to know, not "some of it is
+ * rock". The fourth channel is where everybody is.
+ */
+export const MAP = {
+  channels: ["free", "dirt", "rock", "occupants"],
+  cells: 32,
+};
+export const MAP_CELLS = MAP.cells * MAP.cells;
+export const MAP_SIZE = MAP.channels.length * MAP_CELLS;
+/** Where the occupant channel starts, and what it writes. */
+const MAP_OCCUPANTS = 3 * MAP_CELLS;
+export const MAP_SELF = 255;
+export const MAP_FOE = 128;
+
 const clamp = (value, low, high) => (value < low ? low : value > high ? high : value);
 
 /** The pictures a policy is given, and their order of expense. */
@@ -117,11 +164,22 @@ export const OBSERVATIONS = ["vector", "patch"];
  * the vector, so a task that does not turn on the terrain — walking to a point,
  * a first pipeline check — should ask for `["vector"]` and get the speed back.
  */
-export function observe(view, into = {}, kinds = OBSERVATIONS, spec = DEFAULT_SPEC) {
+export function observe(
+  view,
+  into = {},
+  kinds = OBSERVATIONS,
+  spec = DEFAULT_SPEC,
+  mapTerrain = null,
+) {
   const out = {};
   if (kinds.includes("vector")) out.vector = encodeVector(view, into.vector, spec);
   if (kinds.includes("patch")) out.patch = encodePatch(view, into.patch);
   if (kinds.includes("patchBytes")) out.patchBytes = encodePatchBytes(view, into.patchBytes);
+  if (kinds.includes("map")) {
+    out.map = mapTerrain
+      ? encodeMap(view, mapTerrain, into.map)
+      : encodeMap(view, encodeMapTerrain(view.terrain), into.map);
+  }
   return out;
 }
 
@@ -177,6 +235,19 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
     into[at++] = slot === self.selectedWeapon ? 1 : 0;
   }
 
+  // How far through reloading each slot is: a policy that switches to an empty
+  // gun and stands there is one that was never told.
+  for (let slot = 0; slot < WEAPON_SLOTS; slot++) {
+    const weapon = self.weapons[slot];
+    if (!weapon) {
+      at++;
+      continue;
+    }
+    const waiting = weapon.reloadTicksRemaining + weapon.cooldownTicksRemaining;
+    into[at++] = waiting > 0 ? Math.min(1, waiting / 300) : 0;
+  }
+  at = writeWeapon(into, at, spec, self.weapons?.[self.selectedWeapon]?.id);
+
   if (self.rope) {
     into[at++] = 1;
     into[at++] = self.rope.attached ? 1 : 0;
@@ -191,7 +262,9 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
   for (let slot = 0; slot < spec.foeSlots; slot++) {
     const foe = foes[slot];
     if (!foe) {
-      at += FOE_FIELDS;
+      // The whole slot, weapon and all: skipping only the first half shifts
+      // every field after the foes block by ten whenever somebody is dead.
+      at += FOE_FIELDS + WEAPON_FEATURE_COUNT;
       continue;
     }
     const dx = foe.position.x - x;
@@ -207,16 +280,126 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
     into[at++] = foe.health / HEALTH_MAX;
     into[at++] = foe.velocity.x;
     into[at++] = foe.velocity.y;
+    at = writeWeapon(into, at, spec, foe.weapons?.[foe.selectedWeapon]?.id);
   }
 
   // Own shots are in here too: a worm's own explosion is most of the damage it
   // ever takes, so there is nothing to gain by hiding them.
-  for (const shot of nearestProjectiles(view, spec.projectileSlots)) {
+  const shots = nearestProjectiles(view, spec.projectileSlots);
+  for (let slot = 0; slot < spec.projectileSlots; slot++) {
+    const shot = shots[slot];
+    if (!shot) {
+      at += 4 + SHOT_WEAPON_FIELDS;
+      continue;
+    }
     into[at++] = clamp((shot.position.x - x) / REACH_PX, -1, 1);
     into[at++] = clamp((shot.position.y - y) / REACH_PX, -1, 1);
     into[at++] = shot.velocity.x;
     into[at++] = shot.velocity.y;
+    // Enough of the weapon to know whether to dodge it or ignore it: what it
+    // does on a hit, what it does to whoever fired it, whether it arcs, how
+    // fast it is.
+    const features = spec.weaponFeatures;
+    const from = shot.weaponId == null ? -1 : shot.weaponId * WEAPON_FEATURE_COUNT;
+    for (const index of [4, 6, 1, 0]) {
+      into[at++] = features && from >= 0 ? features[from + index] : 0;
+    }
   }
+
+  // Crates worth a detour, nearest first.
+  const crates = nearestPickups(view, spec.pickupSlots);
+  for (let slot = 0; slot < spec.pickupSlots; slot++) {
+    const crate = crates[slot];
+    if (!crate) {
+      at += PICKUP_FIELDS;
+      continue;
+    }
+    into[at++] = clamp((crate.position.x - x) / REACH_PX, -1, 1);
+    into[at++] = clamp((crate.position.y - y) / REACH_PX, -1, 1);
+    into[at++] = crate.kind === "health" ? 1 : 0;
+    into[at++] = crate.kind === "health" ? 0 : 1;
+  }
+  return into;
+}
+
+/** One weapon's measured character, or zeros when there is nothing to say. */
+function writeWeapon(into, at, spec, weaponId) {
+  const features = spec.weaponFeatures;
+  const from = weaponId == null ? -1 : weaponId * WEAPON_FEATURE_COUNT;
+  for (let index = 0; index < WEAPON_FEATURE_COUNT; index++) {
+    into[at + index] = features && from >= 0 ? features[from + index] : 0;
+  }
+  return at + WEAPON_FEATURE_COUNT;
+}
+
+const crates = [];
+
+/** The nearest crates, closest first. */
+export function nearestPickups(view, count = PICKUP_SLOTS) {
+  crates.length = 0;
+  if (!view.self.alive || !view.pickups?.length) return crates;
+  const { x, y } = view.self.position;
+  for (const crate of view.pickups) {
+    const distance = (crate.position.x - x) ** 2 + (crate.position.y - y) ** 2;
+    let at = crates.length;
+    while (at > 0 && crates[at - 1].distance > distance) at--;
+    if (at >= count) continue;
+    crates.splice(at, 0, { crate, distance });
+    if (crates.length > count) crates.pop();
+  }
+  return crates.map((entry) => entry.crate);
+}
+
+/**
+ * The level's terrain on the map grid, as three fractions per cell. Slow —
+ * it reads every pixel — so a caller keeps the result and refreshes it on a
+ * clock of its own rather than every decision.
+ */
+export function encodeMapTerrain(terrain, into = new Uint8Array(3 * MAP_CELLS)) {
+  into.fill(0);
+  const { data, width, height, materialFlags } = terrain;
+  const { cells } = MAP;
+  const counts = new Uint32Array(3 * MAP_CELLS);
+  const perCell = new Uint32Array(MAP_CELLS);
+  for (let y = 0; y < height; y++) {
+    const row = Math.min(cells - 1, ((y * cells) / height) | 0);
+    const base = y * width;
+    for (let x = 0; x < width; x++) {
+      const cell = row * cells + Math.min(cells - 1, ((x * cells) / width) | 0);
+      const flags = materialFlags[data[base + x]];
+      const kind = flags & BACKGROUND ? 0 : flags & DIGGABLE ? 1 : 2;
+      counts[kind * MAP_CELLS + cell]++;
+      perCell[cell]++;
+    }
+  }
+  for (let cell = 0; cell < MAP_CELLS; cell++) {
+    const total = perCell[cell] || 1;
+    for (let kind = 0; kind < 3; kind++) {
+      into[kind * MAP_CELLS + cell] = Math.round((counts[kind * MAP_CELLS + cell] / total) * 255);
+    }
+  }
+  return into;
+}
+
+/** Where this worm and the others are on that grid. */
+export function encodeMapOccupants(view, into = new Uint8Array(MAP_CELLS)) {
+  into.fill(0);
+  const { terrain, self } = view;
+  const { cells } = MAP;
+  const at = (position) => {
+    const column = Math.min(cells - 1, Math.max(0, ((position.x * cells) / terrain.width) | 0));
+    const row = Math.min(cells - 1, Math.max(0, ((position.y * cells) / terrain.height) | 0));
+    return row * cells + column;
+  };
+  for (const foe of view.foes) if (foe.alive) into[at(foe.position)] = MAP_FOE;
+  if (self.alive) into[at(self.position)] = MAP_SELF;
+  return into;
+}
+
+/** The two halves together, in the layout the trainer reads. */
+export function encodeMap(view, terrainBytes, into = new Uint8Array(MAP_SIZE)) {
+  into.set(terrainBytes.subarray(0, MAP_OCCUPANTS), 0);
+  encodeMapOccupants(view, into.subarray(MAP_OCCUPANTS, MAP_OCCUPANTS + MAP_CELLS));
   return into;
 }
 

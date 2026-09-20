@@ -17,7 +17,9 @@
     "watch": "node scripts/watch.js",
     "levels": "node scripts/fetch-levels.js",
     "play": "node scripts/play.js",
-    "weapons": "node scripts/profile-weapons.js"
+    "weapons": "node scripts/profile-weapons.js",
+    "record": "node src/live/record.js",
+    "clone": "node scripts/clone.js"
   },
   "dependencies": {
     "playwright": "1.63.0"

@@ -12,7 +12,7 @@
 // told where the boundary was.
 import { readFileSync } from "node:fs";
 import { actionFromHeads, ACTION_HEADS } from "./actions.js";
-import { PATCH_CELLS } from "./observation.js";
+import { MAP_SIZE, PATCH_CELLS } from "./observation.js";
 import { WormEnv } from "./env.js";
 
 /**
@@ -106,9 +106,9 @@ export class VecWormEnv {
           // row of different fights and not the same one N times.
           seed: (seed + index * 0x85ebca6b) >>> 0,
           level,
-          // The byte patch is what goes on the wire; the one-hot expansion is
-          // the trainer's job, where it is free.
-          observations: options.observations ?? ["vector", "patchBytes"],
+          // The byte forms are what go on the wire; expanding them into planes
+          // is the trainer's job, where it is free.
+          observations: options.observations ?? ["vector", "patchBytes", "map"],
         }),
     );
     this.agents = this.envs[0].agents;
@@ -116,10 +116,12 @@ export class VecWormEnv {
     const slots = envs * this.agents;
     this.vectors = new Float32Array(slots * this.spec.vectorSize);
     this.patches = new Uint8Array(slots * PATCH_CELLS);
+    this.maps = new Uint8Array(slots * MAP_SIZE);
     this.rewards = new Float32Array(slots);
     this.dones = new Uint8Array(envs);
     this.stats = new Float32Array(envs * EPISODE_STATS.length);
     this.wantsPatch = this.envs[0].observationKinds.includes("patchBytes");
+    this.wantsMap = this.envs[0].observationKinds.includes("map");
 
     // Hand each world a window onto the flat buffers as its own scratch, so an
     // observation is encoded straight into the block that will be sent and
@@ -138,6 +140,9 @@ export class VecWormEnv {
             slot * PATCH_CELLS,
             (slot + 1) * PATCH_CELLS,
           );
+        }
+        if (this.wantsMap) {
+          into.map = this.maps.subarray(slot * MAP_SIZE, (slot + 1) * MAP_SIZE);
         }
         return into;
       });
@@ -211,6 +216,8 @@ export class VecWormEnv {
       vectorSize: this.spec.vectorSize,
       patchCells: this.wantsPatch ? PATCH_CELLS : 0,
       patchShape: this.wantsPatch ? [4, 32, 32] : null,
+      mapCells: this.wantsMap ? MAP_SIZE : 0,
+      mapShape: this.wantsMap ? [4, 32, 32] : null,
       statFields: EPISODE_STATS,
       frameskip: this.envs[0].frameskip,
       episodeTicks: this.envs[0].episodeTicks,

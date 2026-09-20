@@ -49,6 +49,8 @@ class Layout:
     vector_size: int
     patch_cells: int
     patch_shape: tuple
+    map_cells: int
+    map_shape: tuple
     head_sizes: list
     stat_fields: list
     action_bytes: int
@@ -75,6 +77,8 @@ class Layout:
             vector_size=raw["vectorSize"],
             patch_cells=raw["patchCells"],
             patch_shape=tuple(raw["patchShape"]) if raw["patchShape"] else None,
+            map_cells=raw.get("mapCells", 0),
+            map_shape=tuple(raw["mapShape"]) if raw.get("mapShape") else None,
             head_sizes=[head["choices"] for head in raw["heads"]],
             stat_fields=raw["statFields"],
             action_bytes=raw["actionBytes"],
@@ -128,12 +132,17 @@ class WorkerPool:
             self._frames[index] = _read_frame(process.stdout)
 
     def observations(self):
-        """Vectors, patches, rewards, dones and finished-episode stats."""
+        """Vectors, patches, maps, rewards, dones and finished-episode stats."""
         layout = self.layout
         vectors = np.empty((self.slots, layout.vector_size), dtype=np.float32)
         patches = (
             np.empty((self.slots, layout.patch_cells), dtype=np.uint8)
             if layout.patch_cells
+            else None
+        )
+        maps = (
+            np.empty((self.slots, layout.map_cells), dtype=np.uint8)
+            if layout.map_cells
             else None
         )
         rewards = np.empty(self.slots, dtype=np.float32)
@@ -150,10 +159,12 @@ class WorkerPool:
             vectors[agents] = take("vectors", np.float32).reshape(per_worker, -1)
             if patches is not None:
                 patches[agents] = take("patches", np.uint8).reshape(per_worker, -1)
+            if maps is not None:
+                maps[agents] = take("maps", np.uint8).reshape(per_worker, -1)
             rewards[agents] = take("rewards", np.float32)
             dones[envs] = take("dones", np.uint8)
             stats[envs] = take("stats", np.float32).reshape(layout.envs, -1)
-        return vectors, patches, rewards, dones, stats
+        return vectors, patches, maps, rewards, dones, stats
 
     def step(self, heads: np.ndarray):
         """`heads` is (slots, head_count) of uint8 choices."""

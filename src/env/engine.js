@@ -9,7 +9,7 @@
 // closure would otherwise keep to itself. Everything before it, which is all of
 // the simulation, runs untouched.
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import vm from "node:vm";
 import { CLIENT_SHA256 } from "../adapter-v20.js";
 
@@ -43,6 +43,31 @@ const CLASSES = {
 };
 
 const BOOT_CALL = "u.js()";
+
+/**
+ * What a policy is told about the weapon in its hands, and the one pointed at
+ * it. Ten numbers per weapon, measured by `npm run weapons` rather than read
+ * out of minified settings fields, and scaled so none of them dwarfs the rest.
+ *
+ * Without these a worm sees "slot 3, four rounds left" and has to learn what
+ * slot 3 is separately on every map — and cannot tell a sniper rifle from a
+ * grenade until it has thrown one at its own feet.
+ */
+export const WEAPON_FEATURES = [
+  ["speed", 4],
+  ["dropPx", 180], //        how far it falls on the way: flat gun or thrown bomb
+  ["rangePx", 450],
+  ["shots", 40], //          one bullet or a wall of pellets
+  ["damageNear", 50],
+  ["damageFar", 50], //      near but not far is a close-quarters weapon
+  ["selfNear", 50], //       what it does to the worm holding it
+  ["reloadTicks", 300],
+  ["fireDelay", 100],
+  ["capacity", 10],
+];
+
+export const WEAPON_FEATURE_COUNT = WEAPON_FEATURES.length;
+const WEAPON_PROFILES = new URL("../../artifacts/weapons.json", import.meta.url);
 const HANDOUT = "__wormyEngineClasses";
 
 // The world settings a room lets its host change, under the names the game's
@@ -323,7 +348,14 @@ export function loadEngine({ dir = DEFAULT_ENGINE_DIR, mod = "liero133" } = {}) 
     );
     const settings = loadMod(classes, zip, mod);
     instrumentDamage(classes.Worm);
-    return new Engine({ classes, settings, sha256, dir, mod });
+    return new Engine({
+      classes,
+      settings,
+      sha256,
+      dir,
+      mod,
+      profiles: loadWeaponProfiles(settings),
+    });
   })();
   return loading;
 }
@@ -331,6 +363,25 @@ export function loadEngine({ dir = DEFAULT_ENGINE_DIR, mod = "liero133" } = {}) 
 /** Only for tests that need a second engine: the bundle is process-global. */
 export function resetEngineForTesting() {
   loading = null;
+}
+
+/**
+ * The measured profiles, flattened into one row of scaled numbers per weapon.
+ * Missing, every row is zeros and the policy is simply told nothing — better
+ * than telling it something invented.
+ */
+function loadWeaponProfiles(settings) {
+  const features = new Float32Array(settings.O.length * WEAPON_FEATURE_COUNT);
+  if (!existsSync(WEAPON_PROFILES)) return { features, measured: false };
+  const { weapons } = JSON.parse(readFileSync(WEAPON_PROFILES, "utf8"));
+  for (const weapon of weapons) {
+    if (weapon.id >= settings.O.length) continue;
+    WEAPON_FEATURES.forEach(([field, scale], index) => {
+      const value = (weapon[field] ?? 0) / scale;
+      features[weapon.id * WEAPON_FEATURE_COUNT + index] = Math.max(-2, Math.min(2, value));
+    });
+  }
+  return { features, measured: true };
 }
 
 function loadMod(classes, zip, mod) {
@@ -349,12 +400,14 @@ function loadMod(classes, zip, mod) {
 }
 
 export class Engine {
-  constructor({ classes, settings, sha256, dir, mod }) {
+  constructor({ classes, settings, sha256, dir, mod, profiles }) {
     this.classes = classes;
     this.settings = settings;
     this.sha256 = sha256;
     this.dir = dir;
     this.mod = mod;
+    this.weaponFeatures = profiles.features;
+    this.weaponsMeasured = profiles.measured;
   }
 
   /** What every weapon id in a loadout means. */

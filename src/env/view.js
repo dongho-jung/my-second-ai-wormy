@@ -40,7 +40,26 @@ export function viewFromWorld(world, self, foes = []) {
       ...poolFromEngine(world.Ib, "weapon"),
       ...poolFromEngine(world.Zb, "particle"),
     ],
+    // Health and weapon crates. A worm on 20 health with a medkit two ledges
+    // away is in a different situation from one with none, and until now the
+    // observation could not tell them apart.
+    pickups: pickupsFromEngine(world),
   };
+}
+
+function pickupsFromEngine(world) {
+  const out = [];
+  const pool = world.Yb;
+  for (let slot = 0; slot < pool.$; slot++) {
+    const crate = pool.list[slot];
+    if (!crate.u) continue;
+    out.push({
+      kind: crate.kind === 1 ? "health" : "weapon",
+      weaponId: crate.kind === 1 ? null : crate.lf,
+      position: vector(crate.x, crate.y),
+    });
+  }
+  return out;
 }
 
 function wormFromEngine(world, worm) {
@@ -88,6 +107,8 @@ function poolFromEngine(pool, kind) {
       position: vector(entity.x, entity.y),
       velocity: vector(entity.f, entity.b),
       ownerPlayerId: entity.H < 0 ? null : entity.H,
+      // Which weapon threw it, so the policy can tell a pellet from a rocket.
+      weaponId: entity.La === 255 ? null : entity.La,
     });
   }
   return out;
@@ -98,9 +119,15 @@ function poolFromEngine(pool, kind) {
  * `/map` read. The terrain changes far more slowly than the state, so the two
  * are read on different clocks and passed in together here.
  */
-export function viewFromSnapshot(state, terrain) {
-  const self = state.players.find((player) => player.local);
-  if (!self) throw new Error("the snapshot has no local player");
+export function viewFromSnapshot(state, terrain, { playerId = null } = {}) {
+  // Any player, not only the one at this keyboard: the game replicates
+  // everybody's state, so a person's match can be watched and learned from
+  // through a tab that is not theirs.
+  const self =
+    playerId === null
+      ? state.players.find((player) => player.local)
+      : state.players.find((player) => player.id === playerId);
+  if (!self) throw new Error(`the snapshot has no player ${playerId ?? "(local)"}`);
   const worm = (player) =>
     player.worm
       ? { alive: true, playerId: player.id, ...player.worm }
@@ -115,12 +142,18 @@ export function viewFromSnapshot(state, terrain) {
       materialFlags: Uint8Array.from(terrain.materialFlags),
     }),
     self: worm(self),
-    foes: state.players.filter((player) => !player.local).map(worm),
+    foes: state.players.filter((player) => player.id !== self.id).map(worm),
     projectiles: state.projectiles.map((shot) => ({
       kind: shot.kind,
       position: shot.position,
       velocity: shot.velocity,
       ownerPlayerId: shot.ownerPlayerId,
+      weaponId: shot.weaponId ?? null,
+    })),
+    pickups: (state.pickups ?? []).map((crate) => ({
+      kind: crate.kind,
+      weaponId: crate.weaponId,
+      position: crate.position,
     })),
   };
 }

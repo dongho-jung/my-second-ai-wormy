@@ -51,7 +51,10 @@ def parse_args(argv=None):
                        help="a real room lets a player pick any of the forty, explosives included")
     world.add_argument("--rules", default="room", choices=["room", "clean"],
                        help="room matches the engine's own defaults, bonus drops and all")
-    world.add_argument("--no-patch", action="store_true", help="vector observation only, about ten times cheaper")
+    world.add_argument("--no-patch", action="store_true", help="drop the close terrain patch")
+    world.add_argument("--no-map", action="store_true",
+                       help="drop the whole-level picture. Without it a policy can climb the ledge in "
+                            "front of it and has no way to decide which direction the match is in")
 
     scale = parser.add_argument_group("how much of it to run")
     # Measured on this machine: the environment costs almost nothing (6% of the
@@ -114,7 +117,7 @@ def stock_levels(args):
     return [str(path) for path in found]
 
 
-def save(policy, layout, use_patch, side, step, path, **extra):
+def save(policy, layout, shape, step, path, **extra):
     """A checkpoint carries the shape of what it expects, so a viewer can load it
     without being told how the run was configured."""
     torch.save(
@@ -123,8 +126,7 @@ def save(policy, layout, use_patch, side, step, path, **extra):
             "layout": {
                 "vectorSize": layout.vector_size,
                 "headSizes": layout.head_sizes,
-                "usePatch": use_patch,
-                "patchSide": side,
+                **shape,
                 "agents": layout.agents,
                 "frameskip": layout.frameskip,
                 "episodeTicks": layout.episode_ticks,
@@ -166,7 +168,11 @@ def main(argv=None):
         weaponPool=args.weapons,
         rules={} if args.rules == "room" else {"bonusDrops": 0},
         seed=args.seed,
-        observations=["vector"] if args.no_patch else ["vector", "patchBytes"],
+        observations=[
+            "vector",
+            *([] if args.no_patch else ["patchBytes"]),
+            *([] if args.no_map else ["map"]),
+        ],
     )
     if args.observation_foes is not None:
         config["observationFoes"] = args.observation_foes
@@ -175,11 +181,25 @@ def main(argv=None):
     layout = pool.layout
     slots = pool.slots
     use_patch = not args.no_patch and layout.patch_cells > 0
+    use_map = not args.no_map and layout.map_cells > 0
     side = layout.patch_shape[1] if layout.patch_shape else 32
+    map_side = layout.map_shape[1] if layout.map_shape else 32
 
     policy = WormPolicy(
-        layout.vector_size, layout.head_sizes, patch_side=side, use_patch=use_patch
+        layout.vector_size,
+        layout.head_sizes,
+        patch_side=side,
+        use_patch=use_patch,
+        use_map=use_map,
+        map_side=map_side,
     ).to(device)
+    # What a checkpoint has to carry for a viewer or a resume to rebuild it.
+    shape_of = {
+        "usePatch": use_patch,
+        "patchSide": side,
+        "useMap": use_map,
+        "mapSide": map_side,
+    }
     optimiser = torch.optim.Adam(policy.parameters(), lr=args.lr, eps=1e-5)
     parameters = sum(p.numel() for p in policy.parameters())
 
@@ -211,7 +231,9 @@ def main(argv=None):
             "matches": pool.envs,
             "parallelWorms": slots,
             "observation": (
-                f"vector {layout.vector_size}" + (f" + patch 4x{side}x{side}" if use_patch else "")
+                f"vector {layout.vector_size}"
+                + (f" + patch 4x{side}x{side}" if use_patch else "")
+                + (f" + map 4x{map_side}x{map_side}" if use_map else "")
             ),
             "rolloutSteps": args.steps,
             "batch": args.steps * slots,
@@ -252,15 +274,21 @@ def main(argv=None):
         if use_patch
         else None
     )
+    obs_m = (
+        torch.zeros(args.steps, slots, layout.map_cells, dtype=torch.uint8, device=device)
+        if use_map
+        else None
+    )
     acts = torch.zeros(args.steps, slots, heads_count, dtype=torch.long, device=device)
     logps = torch.zeros(args.steps, slots, device=device)
     vals = torch.zeros(args.steps, slots, device=device)
     rews = torch.zeros(args.steps, slots, device=device)
     dones = torch.zeros(args.steps, slots, device=device)
 
-    vectors, patches, _, _, _ = pool.observations()
+    vectors, patches, maps, _, _, _ = pool.observations()
     next_v = torch.as_tensor(vectors, device=device)
     next_p = torch.as_tensor(patches, device=device) if use_patch else None
+    next_m = torch.as_tensor(maps, device=device) if use_map else None
     next_done = torch.zeros(slots, device=device)
 
     finished = []          # episodes that ended since the last update
@@ -294,22 +322,28 @@ def main(argv=None):
                 obs_v[step] = next_v
                 if use_patch:
                     obs_p[step] = next_p
+                if use_map:
+                    obs_m[step] = next_m
                 dones[step] = next_done
                 with torch.no_grad():
-                    head, logp, _, value = policy.act(next_v, next_p, want_entropy=False)
+                    head, logp, _, value = policy.act(
+                        next_v, next_p, next_m, want_entropy=False
+                    )
                 acts[step] = head
                 logps[step] = logp
                 vals[step] = value
 
                 at = time.perf_counter()
                 pool.step(head.to(torch.uint8).cpu().numpy())
-                vectors, patches, rewards, env_done, stats = pool.observations()
+                vectors, patches, maps, rewards, env_done, stats = pool.observations()
                 env_seconds += time.perf_counter() - at
 
                 rews[step] = torch.as_tensor(rewards, device=device)
                 next_v = torch.as_tensor(vectors, device=device)
                 if use_patch:
                     next_p = torch.as_tensor(patches, device=device)
+                if use_map:
+                    next_m = torch.as_tensor(maps, device=device)
                 # A match ends for all of its worms at once.
                 next_done = torch.as_tensor(
                     np.repeat(env_done, layout.agents).astype(np.float32), device=device
@@ -321,7 +355,7 @@ def main(argv=None):
             rollout_seconds_only = time.perf_counter() - rollout_started
             # Generalised advantage estimation, back through the rollout.
             with torch.no_grad():
-                _, _, _, bootstrap = policy.act(next_v, next_p, want_entropy=False)
+                _, _, _, bootstrap = policy.act(next_v, next_p, next_m, want_entropy=False)
                 advantages = torch.zeros_like(rews)
                 running = torch.zeros(slots, device=device)
                 for step in reversed(range(args.steps)):
@@ -336,6 +370,7 @@ def main(argv=None):
 
             flat_v = obs_v.reshape(batch, -1)
             flat_p = obs_p.reshape(batch, -1) if use_patch else None
+            flat_m = obs_m.reshape(batch, -1) if use_map else None
             flat_a = acts.reshape(batch, heads_count)
             flat_logp = logps.reshape(batch)
             flat_adv = advantages.reshape(batch)
@@ -354,7 +389,10 @@ def main(argv=None):
                 for start in range(0, batch, minibatch):
                     take = order[start : start + minibatch]
                     _, logp, entropy, value = policy.act(
-                        flat_v[take], flat_p[take] if use_patch else None, flat_a[take]
+                        flat_v[take],
+                        flat_p[take] if use_patch else None,
+                        flat_m[take] if use_map else None,
+                        flat_a[take],
                     )
                     ratio = (logp - flat_logp[take]).exp()
                     advantage = flat_adv[take]
@@ -436,11 +474,11 @@ def main(argv=None):
                 )
                 if best_reward is None or smoothed > best_reward:
                     best_reward = smoothed
-                    save(policy, layout, use_patch, side, total_steps, run.path / "best.pt",
+                    save(policy, layout, shape_of, total_steps, run.path / "best.pt",
                          reward=best_reward)
                     run.record(step=total_steps, bestReward=best_reward)
             if updates % args.save_every == 0:
-                save(policy, layout, use_patch, side, total_steps, run.path / "policy.pt")
+                save(policy, layout, shape_of, total_steps, run.path / "policy.pt")
     except KeyboardInterrupt:
         run.note("stopped by hand")
         run.close(status="stopped", steps=total_steps)
@@ -448,7 +486,7 @@ def main(argv=None):
     finally:
         pool.close()
 
-    save(policy, layout, use_patch, side, total_steps, run.path / "policy.pt")
+    save(policy, layout, shape_of, total_steps, run.path / "policy.pt")
     run.note(f"finished: {total_steps:,} steps over {updates} updates")
     run.close(
         status="done",

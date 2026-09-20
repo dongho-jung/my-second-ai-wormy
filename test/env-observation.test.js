@@ -92,10 +92,22 @@ test("the vector puts every field where the layout says", () => {
     "the four empty slots read as nothing, not as ready",
   );
   assert.deepEqual(span("rope", 5), [0, 0, 0, 0, 0], "no rope out");
+  const FOE_WIDTH = DEFAULT_SPEC.layout.find(([name]) => name === "foes")[1] / DEFAULT_SPEC.foeSlots;
   assert.deepEqual(
-    span("foes", DEFAULT_SPEC.foeSlots * 9),
-    new Array(DEFAULT_SPEC.foeSlots * 9).fill(0),
+    span("foes", DEFAULT_SPEC.foeSlots * FOE_WIDTH),
+    new Array(DEFAULT_SPEC.foeSlots * FOE_WIDTH).fill(0),
     "a dead foe is all zeros, starting with the alive flag",
+  );
+  // The fixture's weapon is not one the profiler knows, so its character reads
+  // as nothing rather than as something invented.
+  assert.deepEqual(span("weapon", 10), new Array(10).fill(0));
+  // 38 ticks left of a reload, against the 300 the field is scaled by.
+  assert.equal(span("weaponsReload", 5)[0], Math.fround(38 / 300));
+  assert.deepEqual(span("weaponsReload", 5).slice(1), [0, 0, 0, 0]);
+  assert.deepEqual(
+    span("pickups", 12).slice(0, 4),
+    [Math.fround((2 - 32) / 300), Math.fround((3 - 26) / 300), 1, 0],
+    "the health crate the fixture holds",
   );
   // One shot, ten pixels left and two below, and two empty slots after it.
   assert.equal(Math.round(at("projectiles", 0) * 300), -10);
@@ -103,8 +115,8 @@ test("the vector puts every field where the layout says", () => {
   assert.equal(at("projectiles", 2), 2);
   assert.equal(at("projectiles", 3), -3);
   assert.deepEqual(
-    span("projectiles", 12).slice(4),
-    new Array(8).fill(0),
+    span("projectiles", 24).slice(8),
+    new Array(16).fill(0),
     "the two empty shot slots stay empty",
   );
 });
@@ -120,8 +132,12 @@ test("both foes appear, nearest first, in a free-for-all", () => {
   // The far one is listed first, to prove the ordering is by distance.
   view.foes = [worm(32 + 400, 26, 90), worm(32 + 30, 26 - 40, 50)];
   const vector = encodeVector(view);
+  const width = DEFAULT_SPEC.layout.find(([name]) => name === "foes")[1] / DEFAULT_SPEC.foeSlots;
   const slot = (index) =>
-    vector.subarray(VECTOR_OFFSETS.foes + index * 9, VECTOR_OFFSETS.foes + (index + 1) * 9);
+    vector.subarray(
+      VECTOR_OFFSETS.foes + index * width,
+      VECTOR_OFFSETS.foes + (index + 1) * width,
+    );
   const near = slot(0);
   assert.equal(near[0], 1);
   assert.equal(Math.round(near[1] * 300), 30);
@@ -145,7 +161,7 @@ test("both foes appear, nearest first, in a free-for-all", () => {
   view.foes[0].alive = false;
   const alone = encodeVector(view);
   assert.equal(alone[VECTOR_OFFSETS.foes], 1);
-  assert.equal(alone[VECTOR_OFFSETS.foes + 9], 0);
+  assert.equal(alone[VECTOR_OFFSETS.foes + width], 0);
 });
 
 test("a dead worm sees nothing at all", () => {

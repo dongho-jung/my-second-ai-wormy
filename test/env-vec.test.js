@@ -101,6 +101,7 @@ test("a row of worlds writes into one buffer per kind", { skip }, async () => {
 
 test("one policy can drive any number of worms", { skip }, async () => {
   const engine = await loadEngine();
+  let width = null;
   for (const agents of [1, 2, 5]) {
     const vec = new VecWormEnv(engine, {
       envs: 2,
@@ -112,8 +113,9 @@ test("one policy can drive any number of worms", { skip }, async () => {
     vec.reset();
     // The vector is sized for four foes whatever is playing, so the same
     // network takes a solo run, a duel and a brawl.
-    assert.equal(vec.describe().vectorSize, 103);
-    assert.equal(vec.vectors.length, 2 * agents * 103);
+    if (width === null) width = vec.describe().vectorSize;
+    assert.equal(vec.describe().vectorSize, width);
+    assert.equal(vec.vectors.length, 2 * agents * width);
     vec.step(new Uint8Array(2 * agents * HEADS));
   }
 });
@@ -159,7 +161,8 @@ test("the worker speaks the frames it says it will", { skip }, async () => {
     assert.equal(layout.agents, 3);
     assert.equal(layout.patchCells, PATCH_CELLS);
     assert.equal(layout.actionBytes, 2 * 3 * HEADS);
-    assert.deepEqual(layout.order, ["vectors", "patches", "rewards", "dones", "stats"]);
+    assert.deepEqual(layout.order, ["vectors", "patches", "maps", "rewards", "dones", "stats"]);
+    assert.ok(layout.mapCells > 0, "the whole level goes on the wire too");
     // The layout is the only thing a reader needs: every block's size is in it.
     const total = Object.values(layout.bytes).reduce((sum, one) => sum + one, 0);
 
@@ -174,10 +177,18 @@ test("the worker speaks the frames it says it will", { skip }, async () => {
     child.stdin.write(Buffer.concat([size, heads]));
     const stepped = await next();
     assert.equal(stepped.length, total);
+    // Read by the layout rather than by a remembered order: the frame grew a
+    // whole-level block between the patches and the rewards.
+    const offsets = {};
+    let at = 0;
+    for (const name of layout.order) {
+      offsets[name] = at;
+      at += layout.bytes[name];
+    }
     const rewards = new Float32Array(
       stepped.buffer.slice(
-        stepped.byteOffset + layout.bytes.vectors + layout.bytes.patches,
-        stepped.byteOffset + layout.bytes.vectors + layout.bytes.patches + layout.bytes.rewards,
+        stepped.byteOffset + offsets.rewards,
+        stepped.byteOffset + offsets.rewards + layout.bytes.rewards,
       ),
     );
     assert.equal(rewards.length, 6);

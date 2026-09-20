@@ -86,6 +86,8 @@ def main(argv=None):
         shape["headSizes"],
         patch_side=shape.get("patchSide", 32),
         use_patch=shape.get("usePatch", True),
+        use_map=shape.get("useMap", False),
+        map_side=shape.get("mapSide", 32),
     ).to(device)
     policy.load_state_dict(checkpoint["policy"])
     policy.eval()
@@ -128,6 +130,8 @@ def main(argv=None):
         vector_bytes = layout["agents"] * layout["vectorSize"] * 4
         patch_bytes = layout["agents"] * layout["patchCells"]
         use_patch = shape.get("usePatch", True) and patch_bytes > 0
+        map_bytes = layout["agents"] * layout.get("mapCells", 0)
+        use_map = shape.get("useMap", False) and map_bytes > 0
         heads_count = len(layout["heads"])
         while True:
             frame = _read_frame(viewer.stdout)
@@ -143,12 +147,21 @@ def main(argv=None):
                     .reshape(layout["agents"], -1)
                     .copy()
                 ).to(device)
+            maps = None
+            if use_map:
+                maps = torch.from_numpy(
+                    np.frombuffer(
+                        frame, dtype=np.uint8, count=map_bytes, offset=vector_bytes + patch_bytes
+                    )
+                    .reshape(layout["agents"], -1)
+                    .copy()
+                ).to(device)
             with torch.no_grad():
                 if args.greedy:
-                    logits, _ = policy(vectors, patches)
+                    logits, _ = policy(vectors, patches, maps)
                     heads = torch.stack([head.argmax(dim=1) for head in logits], dim=1)
                 else:
-                    heads, _, _, _ = policy.act(vectors, patches, want_entropy=False)
+                    heads, _, _, _ = policy.act(vectors, patches, maps, want_entropy=False)
             block = heads.to(torch.uint8).cpu().numpy().tobytes()
             viewer.stdin.write(struct.pack("<I", heads_count * layout["agents"]) + block)
             viewer.stdin.flush()

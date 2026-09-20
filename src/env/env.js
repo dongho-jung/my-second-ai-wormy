@@ -8,7 +8,13 @@
 // policy's bad episode can be replayed exactly.
 import { applyNormalizedAction, normalizeAction } from "./actions.js";
 import { makeRng, respawnWorm, watchDamage } from "./engine.js";
-import { OBSERVATIONS, observationSpec, observe } from "./observation.js";
+import {
+  MAP_CELLS,
+  OBSERVATIONS,
+  encodeMapTerrain,
+  observationSpec,
+  observe,
+} from "./observation.js";
 import { Progress } from "./progress.js";
 import {
   addEvents,
@@ -77,6 +83,11 @@ export const DEFAULTS = {
   // A place each worm is paid to reach, as (env, agent) => ({x, y}) or null.
   // Off for a fight; on for the walking task that checks the pipeline learns.
   goals: null,
+  // Decisions between re-reading the whole level for the map observation.
+  // Reading it costs every pixel, so it is amortised: the terrain only changes
+  // where somebody is digging, and four seconds of staleness at this scale is a
+  // fraction of one cell.
+  mapEvery: 60,
 };
 
 const NO_ACTION = { keys: 0, rope: 0, weapon: 0, fresh: false };
@@ -93,7 +104,13 @@ export class WormEnv {
     this.agents = settings.agents;
     this.spec = observationSpec({
       foeSlots: settings.observationFoes ?? this.agents - 1,
+      weaponFeatures: engine.weaponFeatures,
     });
+    this.mapEvery = settings.mapEvery;
+    // Shared by every worm in this world: the terrain is the same for all of
+    // them, and only where they are differs.
+    this.mapTerrain = new Uint8Array(3 * MAP_CELLS);
+    this.mapAt = -1;
     this.frameskip = settings.frameskip;
     this.episodeTicks = settings.episodeTicks;
     this.respawn = settings.respawn;
@@ -162,6 +179,8 @@ export class WormEnv {
     this.world.reset(episodeSeed);
     this.world.level.Of(this.makeLevel(this.engine, episodeSeed));
     this.watch.clear();
+    // A new level is a new map; nothing cached about the last one holds.
+    this.mapAt = -1;
 
     this.loadouts = Array.from({ length: this.agents }, (_, agent) =>
       this.loadout === "random"
@@ -297,8 +316,15 @@ export class WormEnv {
 
   /** The expensive half, so it runs once per step and not once per view. */
   encodeObservations() {
+    if (this.observationKinds.includes("map")) {
+      const now = this.world.qb;
+      if (this.mapAt < 0 || now - this.mapAt >= this.mapEvery * this.frameskip) {
+        encodeMapTerrain(this.views[0].terrain, this.mapTerrain);
+        this.mapAt = now;
+      }
+    }
     this.observations = this.views.map((view, agent) =>
-      observe(view, this.observations[agent] ?? {}, this.observationKinds, this.spec),
+      observe(view, this.observations[agent] ?? {}, this.observationKinds, this.spec, this.mapTerrain),
     );
     return this.observations;
   }

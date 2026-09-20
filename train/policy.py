@@ -24,6 +24,16 @@ PATCH_PROJECTILE = 4
 TERRAIN_CHANNELS = 3
 
 
+def expand_map(view: torch.Tensor, side: int) -> torch.Tensor:
+    """The whole level's four channels, which are already fractions.
+
+    Unlike the close patch, these are not categories: a cell is some proportion
+    free, some dirt, some rock, and the fourth channel says who is standing in
+    it. All that is needed is the scale.
+    """
+    return (view.to(torch.float32) / 255.0).reshape(view.shape[0], 4, side, side)
+
+
 def expand_patch(patch: torch.Tensor, side: int) -> torch.Tensor:
     """Bytes from the environment into the four planes the convolution reads."""
     batch = patch.shape[0]
@@ -75,6 +85,8 @@ class WormPolicy(nn.Module):
         head_sizes: list,
         patch_side: int = 32,
         use_patch: bool = True,
+        use_map: bool = True,
+        map_side: int = 32,
         width: int = 256,
         vector_width: int = 128,
     ):
@@ -82,6 +94,8 @@ class WormPolicy(nn.Module):
         self.head_sizes = list(head_sizes)
         self.patch_side = patch_side
         self.use_patch = use_patch
+        self.map_side = map_side
+        self.use_map = use_map
         self.norm = RunningNorm(vector_size)
         self.vector = nn.Sequential(
             nn.Linear(vector_size, vector_width),
@@ -98,6 +112,19 @@ class WormPolicy(nn.Module):
             )
             with torch.no_grad():
                 joined += self.conv(torch.zeros(1, 4, patch_side, patch_side)).shape[1]
+        if use_map:
+            # The same shape of tower as the patch, on a picture of the whole
+            # level instead of the worm's own few metres. This is the half that
+            # can answer "which way is the rest of the match".
+            self.map_conv = nn.Sequential(
+                nn.Conv2d(4, 16, kernel_size=4, stride=2),
+                nn.ReLU(),
+                nn.Conv2d(16, 32, kernel_size=3, stride=2),
+                nn.ReLU(),
+                nn.Flatten(),
+            )
+            with torch.no_grad():
+                joined += self.map_conv(torch.zeros(1, 4, map_side, map_side)).shape[1]
         self.trunk = nn.Sequential(
             nn.Linear(joined, width),
             nn.ReLU(),
@@ -114,24 +141,26 @@ class WormPolicy(nn.Module):
         nn.init.orthogonal_(self.critic.weight, gain=1.0)
         nn.init.zeros_(self.critic.bias)
 
-    def features(self, vectors: torch.Tensor, patches: torch.Tensor | None) -> torch.Tensor:
+    def features(self, vectors, patches=None, maps=None) -> torch.Tensor:
         parts = [self.vector(self.norm(vectors))]
         if self.use_patch:
             parts.append(self.conv(expand_patch(patches, self.patch_side)))
+        if self.use_map:
+            parts.append(self.map_conv(expand_map(maps, self.map_side)))
         return self.trunk(torch.cat(parts, dim=1) if len(parts) > 1 else parts[0])
 
-    def forward(self, vectors, patches=None):
-        hidden = self.features(vectors, patches)
+    def forward(self, vectors, patches=None, maps=None):
+        hidden = self.features(vectors, patches, maps)
         return torch.split(self.actor(hidden), self.head_sizes, dim=1), self.critic(hidden).squeeze(-1)
 
-    def act(self, vectors, patches=None, heads=None, want_entropy=True):
+    def act(self, vectors, patches=None, maps=None, heads=None, want_entropy=True):
         """Sample (or score) one action per head, and value the state.
 
         Collecting a rollout does not need the entropy, and seven distributions'
         worth of it is seven more kernels per step on a batch small enough that
         the launch is most of the cost.
         """
-        logits, value = self(vectors, patches)
+        logits, value = self(vectors, patches, maps)
         distributions = [Categorical(logits=head) for head in logits]
         if heads is None:
             heads = torch.stack([one.sample() for one in distributions], dim=1)

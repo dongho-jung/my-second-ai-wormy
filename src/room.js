@@ -80,7 +80,10 @@ export async function createRoom(
   page,
   {
     name = "wormy",
-    maxPlayers = 3,
+    // Room size is not the number of worms being driven. It is private, so
+    // there is no reason to make it exactly big enough and then have nowhere
+    // for a person to sit down and play.
+    maxPlayers = 20,
     isPublic = false,
     timeoutMs = 600_000,
     pollMs = 1000,

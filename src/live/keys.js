@@ -175,3 +175,28 @@ export function pressesForAction({ rope = 0, weapon = 0 } = {}) {
   else if (weapon < 0) presses.push(ACTIONS.previousWeapon);
   return presses;
 }
+
+/**
+ * A held bitmask read back as the seven choices a policy emits.
+ *
+ * This is how a person's play becomes something to learn from: the game
+ * replicates every player's input to everyone in the room, so what somebody
+ * pressed arrives in the same field the policy writes.
+ *
+ * Left and right together is the engine's other way of digging, so it is read
+ * as dig with no movement rather than as a contradiction.
+ */
+export function headsFromKeys(keys, { rope = 0, weapon = 0 } = {}) {
+  const left = Boolean(keys & KEY_BITS.left);
+  const right = Boolean(keys & KEY_BITS.right);
+  const both = left && right;
+  return Uint8Array.from([
+    both ? 0 : left ? 1 : right ? 2 : 0,
+    keys & KEY_BITS.aimUp ? 1 : keys & KEY_BITS.aimDown ? 2 : 0,
+    keys & KEY_BITS.fire ? 1 : 0,
+    keys & KEY_BITS.jump ? 1 : 0,
+    both || keys & KEY_BITS.dig ? 1 : 0,
+    rope > 0 ? 1 : rope < 0 ? 2 : 0,
+    weapon > 0 ? 1 : weapon < 0 ? 2 : 0,
+  ]);
+}

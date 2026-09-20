@@ -35,7 +35,13 @@ import {
   spawned,
 } from "../room.js";
 import { ACTION_HEADS, actionFromHeads } from "../env/actions.js";
-import { PATCH_CELLS, observationSpec, observe } from "../env/observation.js";
+import {
+  MAP_SIZE,
+  PATCH_CELLS,
+  encodeMapTerrain,
+  observationSpec,
+  observe,
+} from "../env/observation.js";
 import { viewFromSnapshot } from "../env/view.js";
 import { Controls } from "./controls.js";
 
@@ -69,7 +75,7 @@ const players = config.players ?? 3;
 const decideMs = 1000 / (config.decideHz ?? 15);
 const mapMs = config.mapMs ?? 1000;
 const foeSlots = config.observationFoes ?? players - 1;
-const spec = observationSpec({ foeSlots });
+let spec = observationSpec({ foeSlots });
 const log = createLogger({ level: config.verbose ? "debug" : "info", scope: "live" });
 
 // stdout carries frames and nothing else; anything to say goes to stderr.
@@ -164,7 +170,8 @@ if (seated) {
   say(`creating a room for ${players}`);
   await createRoom(seats[0].page, {
     name: config.roomName ?? "wormy",
-    maxPlayers: players,
+    // Seats for the driven worms and for anyone who wants to join and play.
+    maxPlayers: config.roomSize ?? 20,
     isPublic: false,
     onCaptcha: () =>
       say("\n*** WebLiero is asking for a CAPTCHA to create the room. Please solve it in the game window. ***\n"),
@@ -208,10 +215,15 @@ for (const seat of seats) {
 
 const vectors = new Float32Array(players * spec.vectorSize);
 const patches = new Uint8Array(players * PATCH_CELLS);
+const maps = new Uint8Array(players * MAP_SIZE);
 const scratch = seats.map((_, index) => ({
   vector: vectors.subarray(index * spec.vectorSize, (index + 1) * spec.vectorSize),
   patchBytes: patches.subarray(index * PATCH_CELLS, (index + 1) * PATCH_CELLS),
+  map: maps.subarray(index * MAP_SIZE, (index + 1) * MAP_SIZE),
 }));
+// The level is the same for every seat and changes only where somebody digs,
+// so it is reduced once per terrain read rather than once per worm per step.
+let mapTerrain = null;
 
 /**
  * One player's observation, built from what the adapter reports.
@@ -228,6 +240,7 @@ async function look(seat, now) {
     if (map?.game) {
       seat.terrain = map.game;
       seat.terrainAt = now;
+      if (seat.index === 0) mapTerrain = null;
     }
   }
   if (!seat.terrain) return null;
@@ -242,6 +255,8 @@ writeFrame(
       vectorSize: spec.vectorSize,
       patchCells: PATCH_CELLS,
       patchShape: [4, 32, 32],
+      mapCells: MAP_SIZE,
+      mapShape: [4, 32, 32],
       heads: ACTION_HEADS.map(([name, choices]) => ({ name, choices: choices.length })),
       actionBytes: players * HEADS,
       live: true,
@@ -259,6 +274,7 @@ async function sample() {
   const now = Date.now();
   vectors.fill(0);
   patches.fill(0);
+  maps.fill(0);
   await Promise.all(
     seats.map(async (seat) => {
       const view = await look(seat, now);
@@ -269,10 +285,11 @@ async function sample() {
         await seat.controls.release().catch(() => {});
         return;
       }
-      observe(view, scratch[seat.index], ["vector", "patchBytes"], spec);
+      if (!mapTerrain) mapTerrain = encodeMapTerrain(view.terrain);
+      observe(view, scratch[seat.index], ["vector", "patchBytes", "map"], spec, mapTerrain);
     }),
   );
-  writeFrame(vectors, patches);
+  writeFrame(vectors, patches, maps);
 }
 
 playing = true;

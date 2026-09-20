@@ -17,7 +17,7 @@ import { readFile } from "node:fs/promises";
 import { actionFromHeads, ACTION_HEADS } from "./actions.js";
 import { loadEngine } from "./engine.js";
 import { WormEnv } from "./env.js";
-import { PATCH_CELLS } from "./observation.js";
+import { MAP_SIZE, PATCH_CELLS } from "./observation.js";
 
 const HEADS = ACTION_HEADS.length;
 const MAX_CLIENTS = 8;
@@ -45,7 +45,7 @@ const env = new WormEnv(engine, {
   frameskip: config.frameskip ?? 4,
   inputLatencyTicks: config.inputLatencyTicks ?? 0,
   observationFoes: config.observationFoes,
-  observations: ["vector", "patchBytes"],
+  observations: ["vector", "patchBytes", "map"],
   loadout: config.loadout ?? "random",
   seed: config.seed ?? Math.floor(Math.random() * 0xffffffff),
 });
@@ -200,10 +200,12 @@ function writeFrame(...parts) {
 
 const vectors = new Float32Array(agents * env.spec.vectorSize);
 const patches = new Uint8Array(agents * PATCH_CELLS);
+const maps = new Uint8Array(agents * MAP_SIZE);
 const gather = () => {
   for (let agent = 0; agent < agents; agent++) {
     vectors.set(env.observations[agent].vector, agent * env.spec.vectorSize);
     patches.set(env.observations[agent].patchBytes, agent * PATCH_CELLS);
+    maps.set(env.observations[agent].map, agent * MAP_SIZE);
   }
 };
 
@@ -215,6 +217,8 @@ writeFrame(
       vectorSize: env.spec.vectorSize,
       patchCells: PATCH_CELLS,
       patchShape: [4, 32, 32],
+      mapCells: MAP_SIZE,
+      mapShape: [4, 32, 32],
       heads: ACTION_HEADS.map(([name, choices]) => ({ name, choices: choices.length })),
       actionBytes: agents * HEADS,
       viewer: origin,
@@ -226,7 +230,7 @@ writeFrame(
   ),
 );
 gather();
-writeFrame(vectors, patches);
+writeFrame(vectors, patches, maps);
 
 const broadcast = () => {
   if (!clients.size) return;
@@ -262,7 +266,7 @@ const advance = (heads) => {
   }
   gather();
   broadcast();
-  writeFrame(vectors, patches);
+  writeFrame(vectors, patches, maps);
 };
 
 let held = Buffer.alloc(0);

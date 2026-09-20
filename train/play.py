@@ -43,6 +43,8 @@ def parse_args(argv=None):
     parser.add_argument("--checkpoint", default=None, help="a .pt file, overriding --run")
     parser.add_argument("--room-url", default=None, help="join this room instead of making one")
     parser.add_argument("--room-name", default="wormy")
+    parser.add_argument("--room-size", type=int, default=20,
+                        help="seats in the room; it is private, so leave room for people to join")
     parser.add_argument("--nickname", default="Wormy")
     parser.add_argument("--decide-hz", type=float, default=15.0,
                         help="decisions a second; 15 is the 4-tick frameskip it trained on")
@@ -54,6 +56,8 @@ def parse_args(argv=None):
     parser.add_argument("--device", default="cpu", choices=["cpu", "mps", "cuda"],
                         help="three worms at 15 Hz is far too small to be worth a GPU")
     parser.add_argument("--runs-dir", default=str(DEFAULT_RUNS))
+    parser.add_argument("--fresh", action="store_true",
+                        help="open new tabs and a new room instead of taking over the ones already seated")
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
 
@@ -78,6 +82,8 @@ def main(argv=None):
         shape["headSizes"],
         patch_side=shape.get("patchSide", 32),
         use_patch=shape.get("usePatch", True),
+        use_map=shape.get("useMap", False),
+        map_side=shape.get("mapSide", 32),
     ).to(device)
     policy.load_state_dict(checkpoint["policy"])
     policy.eval()
@@ -89,11 +95,13 @@ def main(argv=None):
         "observationFoes": trained_agents - 1,
         "roomUrl": args.room_url,
         "roomName": args.room_name,
+        "roomSize": args.room_size,
         "nickname": args.nickname,
         "decideHz": args.decide_hz,
         "mapMs": args.map_ms,
         "cdpPort": args.cdp_port,
         "frameskip": shape.get("frameskip", 4),
+        "fresh": args.fresh,
         "verbose": args.verbose,
     }
     if args.profile:
@@ -123,6 +131,8 @@ def main(argv=None):
         vector_bytes = layout["agents"] * layout["vectorSize"] * 4
         patch_bytes = layout["agents"] * layout["patchCells"]
         use_patch = shape.get("usePatch", True) and patch_bytes > 0
+        map_bytes = layout["agents"] * layout.get("mapCells", 0)
+        use_map = shape.get("useMap", False) and map_bytes > 0
         heads_count = len(layout["heads"])
         while True:
             frame = _read_frame(driver.stdout)
@@ -138,12 +148,21 @@ def main(argv=None):
                     .reshape(layout["agents"], -1)
                     .copy()
                 ).to(device)
+            maps = None
+            if use_map:
+                maps = torch.from_numpy(
+                    np.frombuffer(
+                        frame, dtype=np.uint8, count=map_bytes, offset=vector_bytes + patch_bytes
+                    )
+                    .reshape(layout["agents"], -1)
+                    .copy()
+                ).to(device)
             with torch.no_grad():
                 if args.greedy:
-                    logits, _ = policy(vectors, patches)
+                    logits, _ = policy(vectors, patches, maps)
                     heads = torch.stack([head.argmax(dim=1) for head in logits], dim=1)
                 else:
-                    heads, _, _, _ = policy.act(vectors, patches, want_entropy=False)
+                    heads, _, _, _ = policy.act(vectors, patches, maps, want_entropy=False)
             block = heads.to(torch.uint8).cpu().numpy().tobytes()
             driver.stdin.write(struct.pack("<I", heads_count * layout["agents"]) + block)
             driver.stdin.flush()

@@ -64,10 +64,11 @@ const layout = {
   engineSha256: engine.sha256,
   mod: engine.settings.name,
   statFields: EPISODE_STATS,
-  order: ["vectors", "patches", "rewards", "dones", "stats"],
+  order: ["vectors", "patches", "maps", "rewards", "dones", "stats"],
   bytes: {
     vectors: vec.vectors.byteLength,
     patches: vec.patches.byteLength,
+    maps: vec.maps.byteLength,
     rewards: vec.rewards.byteLength,
     dones: vec.dones.byteLength,
     stats: vec.stats.byteLength,
@@ -77,7 +78,7 @@ const layout = {
 writeFrame(Buffer.from(JSON.stringify(layout), "utf8"));
 
 const send = () =>
-  writeFrame(vec.vectors, vec.patches, vec.rewards, vec.dones, vec.stats);
+  writeFrame(vec.vectors, vec.patches, vec.maps, vec.rewards, vec.dones, vec.stats);
 
 // The first observation is the one the trainer decides on before any action.
 send();
