@@ -326,8 +326,10 @@ async function say_in_chat(seat, lines) {
   // to Chat for this reason.
   await seat.controls?.release().catch(() => {});
   const box = page.locator("[data-hook='input']").first();
-  for (const line of lines) {
-    try {
+  const closed = async () =>
+    !(await box.evaluate((el) => el === document.activeElement).catch(() => false));
+  try {
+    for (const line of lines) {
       await page.keyboard.press("Enter");
       await page.waitForTimeout(150);
       // `fill` puts the whole line in at once, and only works once the box is
@@ -339,10 +341,21 @@ async function say_in_chat(seat, lines) {
       if (!filled) await page.keyboard.type(line, { delay: 15 });
       await page.keyboard.press("Enter");
       await page.waitForTimeout(250);
-    } catch (error) {
-      log.warn("chat_failed", { seat: seat.index, message: error.message });
-      return false;
     }
+  } catch (error) {
+    log.warn("chat_failed", { seat: seat.index, message: error.message });
+  }
+  // However that went, the box must not be left with the focus. While it has
+  // it, every arrow key the policy asks for is typed into a text field instead
+  // of reaching the worm — which is one worm standing still for the rest of the
+  // match while the other two play, and it is what happened.
+  for (let attempt = 0; attempt < 3 && !(await closed()); attempt++) {
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(100);
+  }
+  if (!(await closed())) {
+    log.warn("chat_box_stuck_open", { seat: seat.index });
+    return false;
   }
   return true;
 }
@@ -413,6 +426,14 @@ process.stdin.on("data", (chunk) => {
 });
 
 async function act(heads) {
+  // One keyboard per tab, and chat borrows it. Pressing Enter to open the chat
+  // box while `apply` is holding ArrowLeft hands the held key to a text field.
+  // The frame still has to go out: the policy is waiting on one, and a decision
+  // skipped is a worm that coasts, while a frame skipped is a hung run.
+  if (talking) {
+    await sample();
+    return;
+  }
   await Promise.all(
     seats.map(async (seat) => {
       if (!alive[seat.index]) return;
