@@ -85,6 +85,49 @@ export function normalizeAction(action = 0) {
 }
 
 /**
+ * What a policy actually emits: seven small choices, not one number out of 648.
+ *
+ * Left and right at once is the engine doing nothing, so the two of them are one
+ * three-way choice rather than two bits — and the same for aiming. The rest are
+ * the keys and messages that are genuinely independent. Seven heads is eighteen
+ * logits, against the 648 a single flat distribution would need, and a policy
+ * that has learned to walk right keeps that when it learns to fire.
+ */
+export const ACTION_HEADS = [
+  ["move", ["none", "left", "right"]],
+  ["aim", ["none", "up", "down"]],
+  ["fire", ["no", "yes"]],
+  ["jump", ["no", "yes"]],
+  ["dig", ["no", "yes"]],
+  ["rope", ["none", "throw", "release"]],
+  ["weapon", ["none", "next", "previous"]],
+];
+
+export const ACTION_SIZES = ACTION_HEADS.map(([, choices]) => choices.length);
+
+const MOVE_KEYS = [0, KEYS.left, KEYS.right];
+const AIM_KEYS = [0, KEYS.aimUp, KEYS.aimDown];
+const ROPE_CHOICES = [ROPE.none, ROPE.throw, ROPE.release];
+const WEAPON_CHOICES = [0, 1, -1];
+
+/**
+ * One worm's action, read out of a flat array of head choices — the shape a
+ * batch of them arrives in from a trainer.
+ */
+export function actionFromHeads(heads, at = 0) {
+  return {
+    keys:
+      MOVE_KEYS[heads[at]] |
+      AIM_KEYS[heads[at + 1]] |
+      (heads[at + 2] ? KEYS.fire : 0) |
+      (heads[at + 3] ? KEYS.jump : 0) |
+      (heads[at + 4] ? KEYS.dig : 0),
+    rope: ROPE_CHOICES[heads[at + 5]] ?? ROPE.none,
+    weapon: WEAPON_CHOICES[heads[at + 6]] ?? 0,
+  };
+}
+
+/**
  * Hand one action to one worm, in the order a room does it: the key bitmask is
  * state the next `world.update()` reads, while the rope and weapon messages
  * take effect the moment they arrive.
