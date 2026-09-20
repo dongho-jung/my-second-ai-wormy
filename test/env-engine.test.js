@@ -297,11 +297,11 @@ test("an observation off a real map measures the real ground", { skip }, async (
   assert.equal(vector[VECTOR_OFFSETS.foes], 1, "the other worm is alive");
   const down = vector[VECTOR_OFFSETS.rays + 4];
   assert.ok(down > 0 && down < 1, `the ground is within ray range, got ${down}`);
-  const plane = PATCH.cells * PATCH.cells;
+  const plane = PATCH.columns * PATCH.rows;
   const dirt = patch.subarray(plane, 2 * plane).reduce((sum, one) => sum + one, 0);
   assert.ok(dirt > 0, "a generated level puts dirt in the patch");
   const free = patch.subarray(2 * plane, 3 * plane);
-  assert.equal(free[(PATCH.cells >> 1) * PATCH.cells + (PATCH.cells >> 1)], 1,
+  assert.equal(free[(PATCH.rows >> 1) * PATCH.columns + (PATCH.columns >> 1)], 1,
     "the worm itself stands in open space");
 });
 

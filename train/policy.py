@@ -34,18 +34,23 @@ def expand_map(view: torch.Tensor, side: int) -> torch.Tensor:
     return (view.to(torch.float32) / 255.0).reshape(view.shape[0], 4, side, side)
 
 
-def expand_patch(patch: torch.Tensor, side: int) -> torch.Tensor:
-    """Bytes from the environment into the four planes the convolution reads."""
+def expand_patch(patch: torch.Tensor, shape) -> torch.Tensor:
+    """Bytes from the environment into the four planes the convolution reads.
+
+    The patch is the worm's whole 426x240 window now, so this runs on 25,773
+    cells rather than 1,024 and the one-hot is the largest tensor in an update.
+    Written into one allocation with `scatter_` instead of `one_hot` + `permute`
+    + `reshape`, which would build and then copy the same thing twice.
+    """
+    rows, columns = shape
     batch = patch.shape[0]
     kind = (patch & PATCH_KIND).long().clamp_(0, TERRAIN_CHANNELS - 1)
-    planes = (
-        F.one_hot(kind, TERRAIN_CHANNELS)
-        .to(torch.float32)
-        .permute(0, 2, 1)
-        .reshape(batch, TERRAIN_CHANNELS, side, side)
+    planes = torch.zeros(
+        batch, TERRAIN_CHANNELS, rows * columns, dtype=torch.float32, device=patch.device
     )
-    shots = ((patch & PATCH_PROJECTILE) > 0).to(torch.float32).reshape(batch, 1, side, side)
-    return torch.cat((planes, shots), dim=1)
+    planes.scatter_(1, kind.unsqueeze(1), 1.0)
+    shots = ((patch & PATCH_PROJECTILE) > 0).to(torch.float32).unsqueeze(1)
+    return torch.cat((planes, shots), dim=1).view(batch, TERRAIN_CHANNELS + 1, rows, columns)
 
 
 class RunningNorm(nn.Module):
@@ -83,7 +88,7 @@ class WormPolicy(nn.Module):
         self,
         vector_size: int,
         head_sizes: list,
-        patch_side: int = 32,
+        patch_shape=(121, 213),
         use_patch: bool = True,
         use_map: bool = True,
         map_side: int = 32,
@@ -92,7 +97,7 @@ class WormPolicy(nn.Module):
     ):
         super().__init__()
         self.head_sizes = list(head_sizes)
-        self.patch_side = patch_side
+        self.patch_shape = tuple(patch_shape)
         self.use_patch = use_patch
         self.map_side = map_side
         self.use_map = use_map
@@ -103,15 +108,28 @@ class WormPolicy(nn.Module):
         )
         joined = vector_width
         if use_patch:
+            # Three strided layers rather than two. On the old 32x32 patch a
+            # two-layer tower flattened to 1,568; on the real 213x121 view the
+            # same tower would flatten to 48,256, and the dense layer after it
+            # would hold 12M weights — a quarter of the network looking at one
+            # picture through one enormous matrix. Striding down to 6x12 first
+            # keeps that layer the size it was, and gives the tower the depth to
+            # recognise a ledge or a corridor rather than a texture.
             self.conv = nn.Sequential(
-                nn.Conv2d(4, 16, kernel_size=4, stride=2),
+                nn.Conv2d(4, 32, kernel_size=8, stride=4),
                 nn.ReLU(),
-                nn.Conv2d(16, 32, kernel_size=3, stride=2),
+                nn.Conv2d(32, 64, kernel_size=4, stride=2),
+                nn.ReLU(),
+                # Narrowing on the last layer rather than the first: the
+                # 6x12 grid that reaches the dense layer is the one thing it
+                # cannot rebuild, so keep its shape and spend the channels
+                # earlier, where the weights are shared across every position.
+                nn.Conv2d(64, 32, kernel_size=3, stride=2),
                 nn.ReLU(),
                 nn.Flatten(),
             )
             with torch.no_grad():
-                joined += self.conv(torch.zeros(1, 4, patch_side, patch_side)).shape[1]
+                joined += self.conv(torch.zeros(1, 4, *self.patch_shape)).shape[1]
         if use_map:
             # The same shape of tower as the patch, on a picture of the whole
             # level instead of the worm's own few metres. This is the half that
@@ -144,7 +162,7 @@ class WormPolicy(nn.Module):
     def features(self, vectors, patches=None, maps=None) -> torch.Tensor:
         parts = [self.vector(self.norm(vectors))]
         if self.use_patch:
-            parts.append(self.conv(expand_patch(patches, self.patch_side)))
+            parts.append(self.conv(expand_patch(patches, self.patch_shape)))
         if self.use_map:
             parts.append(self.map_conv(expand_map(maps, self.map_side)))
         return self.trunk(torch.cat(parts, dim=1) if len(parts) > 1 else parts[0])

@@ -176,7 +176,7 @@ test("the patch is one hot channel per cell, with shots on their own", () => {
   const view = liveView();
   const patch = encodePatch(view);
   assert.equal(patch.length, PATCH_SIZE);
-  const plane = PATCH.cells * PATCH.cells;
+  const plane = PATCH.columns * PATCH.rows;
   const channel = (index) => patch.subarray(index * plane, (index + 1) * plane);
   const [rock, dirt, free, shots] = [0, 1, 2, 3].map(channel);
   for (let cell = 0; cell < plane; cell++) {

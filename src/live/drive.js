@@ -38,6 +38,7 @@ import { ACTION_HEADS, actionFromHeads } from "../env/actions.js";
 import {
   MAP_SIZE,
   PATCH_CELLS,
+  PATCH_SHAPE,
   encodeMapTerrain,
   observationSpec,
   observe,
@@ -254,7 +255,7 @@ writeFrame(
       agents: players,
       vectorSize: spec.vectorSize,
       patchCells: PATCH_CELLS,
-      patchShape: [4, 32, 32],
+      patchShape: PATCH_SHAPE,
       mapCells: MAP_SIZE,
       mapShape: [4, 32, 32],
       heads: ACTION_HEADS.map(([name, choices]) => ({ name, choices: choices.length })),

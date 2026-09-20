@@ -115,19 +115,34 @@ export const VECTOR_LAYOUT = DEFAULT_SPEC.layout;
 export const VECTOR_OFFSETS = DEFAULT_SPEC.offsets;
 export const VECTOR_SIZE = DEFAULT_SPEC.vectorSize;
 
-/** The patch: a small square of terrain centred on the worm. */
+/**
+ * The patch: what the player can see, and no more.
+ *
+ * The game draws a 426x240 window of the level around the worm — in the bundle,
+ * `canvas.width=426; canvas.height=240` and a camera held at `+213/+120`. That
+ * window is the whole of what a person at the keyboard has to go on, so it is
+ * what the policy gets too. An earlier version of this showed 64x64 px, nine
+ * worm-heights, and the worms behaved accordingly: nothing within sight said
+ * where to go, so they fired the rope at the floor until the round ended.
+ *
+ * Odd counts so the worm sits in one exact centre cell rather than straddling
+ * four. 121 rows spans 242 px against the true 240 — two pixels of margin is
+ * worth more than an off-centre worm.
+ */
 export const PATCH = {
   // Free space gets a channel of its own instead of being the absence of the
   // other two, so "solid" and "nothing measured" never look alike. Past the
   // edge of the map reads as rock, which is exactly how it behaves.
   channels: ["rock", "dirt", "free", "projectile"],
-  cells: 32,
-  // Two pixels per cell: 64 px across, about nine worm heights, which is the
-  // range footwork happens in. The rays cover the rest.
+  columns: 213,
+  rows: 121,
+  // Two pixels per cell, the resolution footwork happens at.
   scalePx: 2,
 };
-export const PATCH_CELLS = PATCH.cells * PATCH.cells;
+export const PATCH_CELLS = PATCH.columns * PATCH.rows;
 export const PATCH_SIZE = PATCH.channels.length * PATCH_CELLS;
+/** The shape a convolution reads it as: channels, rows, columns. */
+export const PATCH_SHAPE = [PATCH.channels.length, PATCH.rows, PATCH.columns];
 
 /**
  * The whole level, small.
@@ -405,10 +420,11 @@ export function encodeMap(view, terrainBytes, into = new Uint8Array(MAP_SIZE)) {
 
 /** The top-left pixel of the patch, which every cell is counted from. */
 export function patchOriginOf(view) {
-  const half = (PATCH.cells >> 1) * PATCH.scalePx;
+  const { columns, rows, scalePx } = PATCH;
+  const half = scalePx >> 1;
   return {
-    x: Math.round(view.self.position.x) - half,
-    y: Math.round(view.self.position.y) - half,
+    x: Math.round(view.self.position.x) - ((columns >> 1) * scalePx + half),
+    y: Math.round(view.self.position.y) - ((rows >> 1) * scalePx + half),
   };
 }
 
@@ -416,16 +432,16 @@ export function patchOriginOf(view) {
 export function patchCellOf(origin, x, y) {
   const column = Math.floor((x - origin.x) / PATCH.scalePx);
   const row = Math.floor((y - origin.y) / PATCH.scalePx);
-  if (column < 0 || row < 0 || column >= PATCH.cells || row >= PATCH.cells)
+  if (column < 0 || row < 0 || column >= PATCH.columns || row >= PATCH.rows)
     return null;
-  return { column, row, cell: row * PATCH.cells + column };
+  return { column, row, cell: row * PATCH.columns + column };
 }
 
 // Scratch, reused between calls. The level row each of the patch's pixel rows
 // lands on, and the level x of each of its pixel columns, with -1 for the ones
 // that fall off the map.
-const PIXEL_ROWS = new Int32Array(PATCH.cells * PATCH.scalePx);
-const PIXEL_COLUMNS = new Int32Array(PATCH.cells * PATCH.scalePx);
+const PIXEL_ROWS = new Int32Array(PATCH.rows * PATCH.scalePx);
+const PIXEL_COLUMNS = new Int32Array(PATCH.columns * PATCH.scalePx);
 // The first three channels are the hardness order, so the lowest code wins and
 // is also the channel it expands to.
 const ROCK = 0;
@@ -449,19 +465,21 @@ export function encodePatchBytes(view, into = new Uint8Array(PATCH_CELLS)) {
   into.fill(0);
   const { self, terrain } = view;
   if (!self.alive) return into;
-  const { cells, scalePx } = PATCH;
+  const { columns, rows, scalePx } = PATCH;
   const { data, width, height, materialFlags } = terrain;
   const origin = patchOriginOf(view);
   // The bounds arithmetic is done once for the whole patch rather than once per
-  // pixel: 64 rows and 64 columns against 4,096 cells.
-  for (let pixel = 0; pixel < cells * scalePx; pixel++) {
+  // pixel: 242 rows and 426 columns against 25,773 cells.
+  for (let pixel = 0; pixel < rows * scalePx; pixel++) {
     const y = origin.y + pixel;
     PIXEL_ROWS[pixel] = y < 0 || y >= height ? -1 : y * width;
+  }
+  for (let pixel = 0; pixel < columns * scalePx; pixel++) {
     const x = origin.x + pixel;
     PIXEL_COLUMNS[pixel] = x < 0 || x >= width ? -1 : x;
   }
-  for (let row = 0; row < cells; row++) {
-    for (let column = 0; column < cells; column++) {
+  for (let row = 0; row < rows; row++) {
+    for (let column = 0; column < columns; column++) {
       // A cell stands for `scalePx` squared real pixels and answers for the
       // hardest of them, so a wall one pixel thick cannot fall between two
       // samples and be reported as open air. Off the level answers rock, which
@@ -485,7 +503,7 @@ export function encodePatchBytes(view, into = new Uint8Array(PATCH_CELLS)) {
           if (hardest === ROCK) break;
         }
       }
-      into[row * cells + column] = hardest;
+      into[row * columns + column] = hardest;
     }
   }
   // Shots get a bit of their own, so a policy handles ten of them and one of

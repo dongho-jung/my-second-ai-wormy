@@ -84,7 +84,7 @@ def main(argv=None):
     policy = WormPolicy(
         shape["vectorSize"],
         shape["headSizes"],
-        patch_side=shape.get("patchSide", 32),
+        patch_shape=tuple(shape.get("patchShape") or (121, 213)),
         use_patch=shape.get("usePatch", True),
         use_map=shape.get("useMap", False),
         map_side=shape.get("mapSide", 32),

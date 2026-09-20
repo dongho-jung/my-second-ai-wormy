@@ -153,11 +153,14 @@ def main(argv=None):
         return 1
     device = pick_device(args.device)
     head_sizes = [head["choices"] for head in meta["heads"]]
+    # Recordings made before the view widened carry no shape; they no longer
+    # match an observation anyway, and `demos.load` has already skipped them.
+    patch_shape = tuple((meta.get("patchShape") or [4, 121, 213])[1:])
 
     policy = WormPolicy(
         meta["vectorSize"],
         head_sizes,
-        patch_side=32,
+        patch_shape=patch_shape,
         use_patch=meta["patchCells"] > 0,
         use_map=meta["mapCells"] > 0,
         map_side=32,
@@ -261,7 +264,7 @@ def main(argv=None):
                         "vectorSize": meta["vectorSize"],
                         "headSizes": head_sizes,
                         "usePatch": meta["patchCells"] > 0,
-                        "patchSide": 32,
+                        "patchShape": list(patch_shape),
                         "useMap": meta["mapCells"] > 0,
                         "mapSide": 32,
                         "agents": meta.get("foeSlots", 2) + 1,

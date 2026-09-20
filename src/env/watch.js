@@ -17,7 +17,7 @@ import { readFile } from "node:fs/promises";
 import { actionFromHeads, ACTION_HEADS } from "./actions.js";
 import { loadEngine } from "./engine.js";
 import { WormEnv } from "./env.js";
-import { MAP_SIZE, PATCH_CELLS } from "./observation.js";
+import { MAP_SIZE, PATCH_CELLS, PATCH_SHAPE } from "./observation.js";
 
 const HEADS = ACTION_HEADS.length;
 const MAX_CLIENTS = 8;
@@ -216,7 +216,7 @@ writeFrame(
       agents,
       vectorSize: env.spec.vectorSize,
       patchCells: PATCH_CELLS,
-      patchShape: [4, 32, 32],
+      patchShape: PATCH_SHAPE,
       mapCells: MAP_SIZE,
       mapShape: [4, 32, 32],
       heads: ACTION_HEADS.map(([name, choices]) => ({ name, choices: choices.length })),

@@ -12,7 +12,7 @@
 // told where the boundary was.
 import { readFileSync } from "node:fs";
 import { actionFromHeads, ACTION_HEADS } from "./actions.js";
-import { MAP_SIZE, PATCH_CELLS } from "./observation.js";
+import { MAP_SIZE, PATCH_CELLS, PATCH_SHAPE } from "./observation.js";
 import { WormEnv } from "./env.js";
 
 /**
@@ -215,7 +215,7 @@ export class VecWormEnv {
       heads: ACTION_HEADS.map(([name, choices]) => ({ name, choices: choices.length })),
       vectorSize: this.spec.vectorSize,
       patchCells: this.wantsPatch ? PATCH_CELLS : 0,
-      patchShape: this.wantsPatch ? [4, 32, 32] : null,
+      patchShape: this.wantsPatch ? PATCH_SHAPE : null,
       mapCells: this.wantsMap ? MAP_SIZE : 0,
       mapShape: this.wantsMap ? [4, 32, 32] : null,
       statFields: EPISODE_STATS,

@@ -211,13 +211,13 @@ def main(argv=None):
     slots = pool.slots
     use_patch = not args.no_patch and layout.patch_cells > 0
     use_map = not args.no_map and layout.map_cells > 0
-    side = layout.patch_shape[1] if layout.patch_shape else 32
+    patch_shape = tuple(layout.patch_shape[1:]) if layout.patch_shape else (121, 213)
     map_side = layout.map_shape[1] if layout.map_shape else 32
 
     policy = WormPolicy(
         layout.vector_size,
         layout.head_sizes,
-        patch_side=side,
+        patch_shape=patch_shape,
         use_patch=use_patch,
         use_map=use_map,
         map_side=map_side,
@@ -225,7 +225,7 @@ def main(argv=None):
     # What a checkpoint has to carry for a viewer or a resume to rebuild it.
     shape_of = {
         "usePatch": use_patch,
-        "patchSide": side,
+        "patchShape": list(patch_shape),
         "useMap": use_map,
         "mapSide": map_side,
     }
@@ -247,6 +247,12 @@ def main(argv=None):
                 f"{args.resume} was trained on a vector of {shape['vectorSize']} "
                 f"and this run gives {layout.vector_size}"
             )
+        seen = tuple(shape.get("patchShape") or ())
+        if use_patch and seen and seen != patch_shape:
+            raise RuntimeError(
+                f"{args.resume} looked at a {seen[1]}x{seen[0]} patch and this run "
+                f"shows a {patch_shape[1]}x{patch_shape[0]} one"
+            )
         policy.load_state_dict(carried["policy"])
         resumed_from = args.resume
         resumed_at = int(carried.get("step", 0))
@@ -263,7 +269,7 @@ def main(argv=None):
             "parallelWorms": slots,
             "observation": (
                 f"vector {layout.vector_size}"
-                + (f" + patch 4x{side}x{side}" if use_patch else "")
+                + (f" + patch 4x{patch_shape[0]}x{patch_shape[1]}" if use_patch else "")
                 + (f" + map 4x{map_side}x{map_side}" if use_map else "")
             ),
             "rolloutSteps": args.steps,

@@ -25,6 +25,7 @@ import { loadEngine } from "../env/engine.js";
 import {
   MAP_SIZE,
   PATCH_CELLS,
+  PATCH_SHAPE,
   encodeMap,
   encodeMapTerrain,
   observationSpec,
@@ -128,6 +129,7 @@ const describe = () =>
       vectorSize: spec.vectorSize,
       foeSlots: spec.foeSlots,
       patchCells: PATCH_CELLS,
+      patchShape: PATCH_SHAPE,
       mapCells: MAP_SIZE,
       heads: ACTION_HEADS.map(([name, choices]) => ({ name, choices: choices.length })),
       recordBytes: RECORD_BYTES,
