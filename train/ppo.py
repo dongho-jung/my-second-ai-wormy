@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from policy import WormPolicy
 from run import Run
-from workers import WorkerPool
+from workers import REPO, WorkerPool
 
 
 def parse_args(argv=None):
@@ -39,11 +39,18 @@ def parse_args(argv=None):
     world.add_argument("--frameskip", type=int, default=4)
     world.add_argument("--input-latency", type=str, default="0-3",
                        help="ticks between deciding and acting, for the move to a live game")
-    world.add_argument("--maps", type=int, default=24, help="generated levels to cycle through")
-    world.add_argument("--map-width", type=int, default=336,
-                       help="narrower than the game's 504 so three worms actually meet")
-    world.add_argument("--weapons", default="direct", choices=["direct", "all"],
-                       help="direct-fire guns only, or all forty including the explosives")
+    world.add_argument("--maps", type=int, default=12,
+                       help="generated levels to mix in alongside the pool, as a random room would")
+    world.add_argument("--map-width", type=int, default=504,
+                       help="the width the game itself generates; narrower makes worms meet sooner")
+    world.add_argument("--levels-dir", default=str(REPO / "artifacts" / "levels"),
+                       help="the game's own level pool, as `npm run levels` downloads it")
+    world.add_argument("--stock-levels", type=int, default=64,
+                       help="how many of them to use; 0 trains on generated maps alone")
+    world.add_argument("--weapons", default="all", choices=["direct", "all"],
+                       help="a real room lets a player pick any of the forty, explosives included")
+    world.add_argument("--rules", default="room", choices=["room", "clean"],
+                       help="room matches the engine's own defaults, bonus drops and all")
     world.add_argument("--no-patch", action="store_true", help="vector observation only, about ten times cheaper")
 
     scale = parser.add_argument_group("how much of it to run")
@@ -67,6 +74,8 @@ def parse_args(argv=None):
     where = parser.add_argument_group("where it goes")
     where.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     where.add_argument("--label", default=None, help="a name for this run on the monitor page")
+    where.add_argument("--resume", default=None,
+                       help="a .pt to carry on from, so changing the layout does not throw away what it learned")
     where.add_argument("--save-every", type=int, default=20, help="updates between checkpoints")
     where.add_argument("--torch-threads", type=int, default=2,
                        help="more than a couple is slower here, and the cores are wanted by the workers")
@@ -75,6 +84,16 @@ def parse_args(argv=None):
 
 # The figures carried across updates that ended with no episode finished.
 SHOWN = ("episodeReward", "kills", "deaths", "damageDealt", "selfDamage", "stuckSteps")
+
+
+def stock_levels(args):
+    """The .lev files to mix in, so training sees the maps a room actually picks."""
+    if args.stock_levels <= 0:
+        return []
+    found = sorted(Path(args.levels_dir).glob("*.lev"))[: args.stock_levels]
+    if not found:
+        print(f"no .lev files in {args.levels_dir}: training on generated maps alone", flush=True)
+    return [str(path) for path in found]
 
 
 def save(policy, layout, use_patch, side, step, path, **extra):
@@ -124,8 +143,10 @@ def main(argv=None):
         frameskip=args.frameskip,
         inputLatencyTicks=latency if len(latency) > 1 else latency[0],
         levelPool=args.maps,
+        levelFiles=stock_levels(args),
         levelOptions={"width": args.map_width},
         weaponPool=args.weapons,
+        rules={} if args.rules == "room" else {"bonusDrops": 0},
         seed=args.seed,
         observations=["vector"] if args.no_patch else ["vector", "patchBytes"],
     )
@@ -143,6 +164,24 @@ def main(argv=None):
     ).to(device)
     optimiser = torch.optim.Adam(policy.parameters(), lr=args.lr, eps=1e-5)
     parameters = sum(p.numel() for p in policy.parameters())
+
+    # Carrying on from a checkpoint. The rollout shape is free to change — how
+    # many worlds run at once is about how the machine is used, not about what
+    # the policy is — so only the observation has to still match.
+    resumed_from = None
+    resumed_at = 0
+    if args.resume:
+        carried = torch.load(args.resume, map_location="cpu", weights_only=False)
+        shape = carried["layout"]
+        if shape["vectorSize"] != layout.vector_size or shape["headSizes"] != layout.head_sizes:
+            raise RuntimeError(
+                f"{args.resume} was trained on a vector of {shape['vectorSize']} "
+                f"and this run gives {layout.vector_size}"
+            )
+        policy.load_state_dict(carried["policy"])
+        resumed_from = args.resume
+        resumed_at = int(carried.get("step", 0))
+        print(f"carrying on from {args.resume} at {resumed_at:,} steps", flush=True)
 
     run = Run(
         label=args.label or f"{args.agents}-way self-play",
@@ -162,14 +201,18 @@ def main(argv=None):
             "episodeTicks": args.episode_ticks,
             "inputLatencyTicks": args.input_latency,
             "maps": layout.maps,
+            "stockMaps": layout.stock_maps,
             "mapWidth": args.map_width,
             "weapons": args.weapons,
+            "rules": args.rules,
             "engineSha256": layout.engine_sha256,
             "mod": layout.mod,
             "lr": args.lr,
             "gamma": args.gamma,
             "clip": args.clip,
             "entropy": args.entropy,
+            "resumedFrom": resumed_from,
+            "resumedAt": resumed_at,
         },
     )
     print(f"run {run.id} -> {run.path}", flush=True)
@@ -210,14 +253,16 @@ def main(argv=None):
     # An episode is longer than a rollout, so most updates end with none of them
     # finished. The last numbers stay on the line rather than reading as zero.
     latest = {}
-    total_steps = 0
+    # Counted from where the checkpoint left off, so the charts continue rather
+    # than starting again at zero.
+    total_steps = resumed_at
     updates = 0
     started = time.perf_counter()
     batch = args.steps * slots
     minibatch = max(1, batch // args.minibatches)
 
     try:
-        while total_steps < args.total_steps:
+        while total_steps - resumed_at < args.total_steps:
             rollout_started = time.perf_counter()
             env_seconds = 0.0
             for step in range(args.steps):

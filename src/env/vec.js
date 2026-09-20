@@ -10,6 +10,7 @@
 // terrain to dig, its own seed and its own episode clock, and one finishing
 // does not interrupt the others: it restarts on the spot and the trainer is
 // told where the boundary was.
+import { readFileSync } from "node:fs";
 import { actionFromHeads, ACTION_HEADS } from "./actions.js";
 import { PATCH_CELLS } from "./observation.js";
 import { WormEnv } from "./env.js";
@@ -31,17 +32,33 @@ export const EPISODE_STATS = [
 export const HEADS = ACTION_HEADS.length;
 
 export class VecWormEnv {
-  constructor(engine, { envs = 8, levelPool = 16, seed = 1, ...options } = {}) {
+  constructor(
+    engine,
+    { envs = 8, levelPool = 16, levelFiles = [], seed = 1, ...options } = {},
+  ) {
     if (!Number.isInteger(envs) || envs < 1) {
       throw new Error(`envs must be a whole number of at least 1, got ${envs}`);
     }
     this.engine = engine;
     this.count = envs;
-    // Generating a map costs about seven milliseconds, which is a fifth of a
-    // short episode. A pool keeps the variety and pays for it once.
-    this.levels = Array.from({ length: Math.max(1, levelPool) }, (_, index) =>
-      engine.randomLevel((seed + index * 0x9e3779b9) >>> 0, options.levelOptions),
-    );
+    // Two kinds of map, because a real room has two kinds. A host who asks for
+    // a random one gets the generated dirt; a host who picks a level gets one
+    // of the stock files, which are almost entirely rock. Train on only the
+    // first and the policy has never seen a map it cannot dig through.
+    //
+    // Generating one costs about seven milliseconds, a fifth of a short
+    // episode, so the pool is built once and cycled.
+    const stock = levelFiles.map((path) => {
+      const bytes = readFileSync(path);
+      return engine.readLevel(path.split("/").pop().replace(/\.lev$/i, ""), bytes);
+    });
+    this.levels = [
+      ...Array.from({ length: Math.max(1, levelPool) }, (_, index) =>
+        engine.randomLevel((seed + index * 0x9e3779b9) >>> 0, options.levelOptions),
+      ),
+      ...stock,
+    ];
+    this.stockLevels = stock.length;
     const level = (_engine, episodeSeed) =>
       this.levels[episodeSeed % this.levels.length];
     this.envs = Array.from(
@@ -167,6 +184,7 @@ export class VecWormEnv {
       frameskip: this.envs[0].frameskip,
       episodeTicks: this.envs[0].episodeTicks,
       maps: this.levels.length,
+      stockMaps: this.stockLevels,
     };
   }
 }

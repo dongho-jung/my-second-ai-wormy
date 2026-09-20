@@ -59,6 +59,7 @@ class Layout:
     frameskip: int
     episode_ticks: int
     maps: int
+    stock_maps: int
 
     @classmethod
     def parse(cls, raw: dict) -> "Layout":
@@ -84,6 +85,7 @@ class Layout:
             frameskip=raw["frameskip"],
             episode_ticks=raw["episodeTicks"],
             maps=raw["maps"],
+            stock_maps=raw.get("stockMaps", 0),
         )
 
 
