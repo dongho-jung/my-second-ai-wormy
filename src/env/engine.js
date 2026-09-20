@@ -437,8 +437,11 @@ export class Engine {
    * policy that has only ever held a shotgun has learned the shotgun, not the
    * game.
    */
-  randomLoadout(random, slots = 5) {
-    const ids = this.settings.O.map((_, id) => id);
+  randomLoadout(random, { slots = 5, pool = null } = {}) {
+    const ids = pool ? [...pool] : this.settings.O.map((_, id) => id);
+    if (ids.length < slots) {
+      throw new Error(`a loadout of ${slots} needs at least that many weapons`);
+    }
     for (let index = 0; index < slots; index++) {
       const pick = index + Math.floor(random() * (ids.length - index));
       [ids[index], ids[pick]] = [ids[pick], ids[index]];

@@ -40,6 +40,10 @@ def parse_args(argv=None):
     world.add_argument("--input-latency", type=str, default="0-3",
                        help="ticks between deciding and acting, for the move to a live game")
     world.add_argument("--maps", type=int, default=24, help="generated levels to cycle through")
+    world.add_argument("--map-width", type=int, default=336,
+                       help="narrower than the game's 504 so three worms actually meet")
+    world.add_argument("--weapons", default="direct", choices=["direct", "all"],
+                       help="direct-fire guns only, or all forty including the explosives")
     world.add_argument("--no-patch", action="store_true", help="vector observation only, about ten times cheaper")
 
     scale = parser.add_argument_group("how much of it to run")
@@ -120,6 +124,8 @@ def main(argv=None):
         frameskip=args.frameskip,
         inputLatencyTicks=latency if len(latency) > 1 else latency[0],
         levelPool=args.maps,
+        levelOptions={"width": args.map_width},
+        weaponPool=args.weapons,
         seed=args.seed,
         observations=["vector"] if args.no_patch else ["vector", "patchBytes"],
     )
@@ -156,6 +162,8 @@ def main(argv=None):
             "episodeTicks": args.episode_ticks,
             "inputLatencyTicks": args.input_latency,
             "maps": layout.maps,
+            "mapWidth": args.map_width,
+            "weapons": args.weapons,
             "engineSha256": layout.engine_sha256,
             "mod": layout.mod,
             "lr": args.lr,

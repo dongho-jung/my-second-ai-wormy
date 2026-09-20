@@ -20,10 +20,26 @@ import {
 import { viewFromWorld } from "./view.js";
 
 // Stock Liero weapons that give a worm something to do at every range: shotgun,
-// rifle, bazooka, mine, crackler. Pass "random" instead to draw five of the
-// mod's forty per worm per episode, which is what teaches the game rather than
-// the shotgun.
+// rifle, bazooka, mine, crackler. Pass "random" instead to draw five per worm
+// per episode, which is what teaches the game rather than the shotgun.
 export const DEFAULT_LOADOUT = [0, 2, 3, 5, 10];
+
+/**
+ * Weapons that do their damage where they hit, rather than by exploding.
+ *
+ * Half of the mod's forty are explosives, and a policy that has not yet learned
+ * to aim fires them at its own feet: at the start of a run, self-inflicted
+ * damage outweighs damage dealt fifteen to one. What it learns from that is not
+ * "aim better", it is "never fire" — measured, twice. Guns first, and widen the
+ * pool once it can hit something.
+ *
+ * Shotgun, chaingun, rifle, winchester, flamer, minigun, super shotgun,
+ * handgun, zimm, laser, uzi, mini rockets, dart.
+ */
+export const DIRECT_FIRE = [0, 1, 2, 7, 9, 14, 16, 17, 21, 28, 31, 36, 37];
+
+/** Named pools a trainer can ask for by name. */
+export const WEAPON_POOLS = { direct: DIRECT_FIRE, all: null };
 
 export const DEFAULTS = {
   // Three is a free-for-all, which is the interesting case; two is a duel and
@@ -47,6 +63,8 @@ export const DEFAULTS = {
   // survive the move, so train across a range and it stops mattering.
   inputLatencyTicks: 0,
   loadout: "random",
+  // Which weapons "random" draws from. Null is all of them.
+  weaponPool: DIRECT_FIRE,
   // Both pictures by default. The terrain patch is about ten times the cost of
   // the vector, so a task that does not need it — walking somewhere, a first
   // check that the pipeline learns anything at all — should pass ["vector"].
@@ -82,6 +100,17 @@ export class WormEnv {
     this.terminateOnKill = settings.terminateOnKill;
     this.inputLatencyTicks = range(settings.inputLatencyTicks);
     this.loadout = settings.loadouts ?? settings.loadout;
+    if (typeof settings.weaponPool === "string" && !(settings.weaponPool in WEAPON_POOLS)) {
+      throw new Error(
+        `unknown weapon pool ${settings.weaponPool}: expected ${Object.keys(WEAPON_POOLS).join(", ")}`,
+      );
+    }
+    // "all" is null, which is every weapon — so the name has to be looked up
+    // rather than defaulted through, or asking for all of them reads as a typo.
+    this.weaponPool =
+      typeof settings.weaponPool === "string"
+        ? WEAPON_POOLS[settings.weaponPool]
+        : settings.weaponPool;
     this.weights = settings.weights;
     this.observationKinds = settings.observations;
     this.makeGoal = settings.goals;
@@ -136,7 +165,7 @@ export class WormEnv {
 
     this.loadouts = Array.from({ length: this.agents }, (_, agent) =>
       this.loadout === "random"
-        ? this.engine.randomLoadout(this.rng)
+        ? this.engine.randomLoadout(this.rng, { pool: this.weaponPool })
         : Array.isArray(this.loadout[0])
           ? this.loadout[agent]
           : this.loadout,

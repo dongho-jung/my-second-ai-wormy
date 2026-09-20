@@ -24,7 +24,7 @@ import {
   packKeys,
   unpackKeys,
 } from "../src/env/actions.js";
-import { WormEnv } from "../src/env/env.js";
+import { DIRECT_FIRE, WormEnv } from "../src/env/env.js";
 import {
   PATCH,
   VECTOR_OFFSETS,
@@ -413,6 +413,41 @@ test("the reward goes to whoever earned it, with a third worm watching", { skip 
     `and is paid nothing for the fight it watched, got ${bystanderReward}`,
   );
   assert.ok(bystander.Xa > 0);
+});
+
+test("weapons are drawn fresh, from the pool the run asked for", { skip }, async () => {
+  const engine = await loadEngine();
+  const explodes = (id) => engine.settings.O[id].be?.Bd === 0;
+  // Half of the forty do their damage by exploding, and a policy that cannot
+  // aim yet fires those at its own feet. The default pool has none of them.
+  assert.ok(DIRECT_FIRE.every((id) => !explodes(id)), "the direct-fire pool must not explode");
+  assert.ok(
+    engine.settings.O.some((_, id) => explodes(id)),
+    "and the mod must have some that do, or this test proves nothing",
+  );
+
+  const env = new WormEnv(engine, { agents: 3, episodeTicks: 120, seed: 2 });
+  const seen = new Set();
+  for (let episode = 0; episode < 6; episode++) {
+    env.reset();
+    for (const loadout of env.loadouts) {
+      assert.equal(new Set(loadout).size, 5, "five different weapons");
+      for (const id of loadout) {
+        assert.ok(DIRECT_FIRE.includes(id), `${engine.weaponNames[id]} is not direct fire`);
+        seen.add(id);
+      }
+    }
+  }
+  assert.ok(seen.size > 5, `six episodes should show more than one loadout, saw ${seen.size}`);
+
+  const anything = new WormEnv(engine, { agents: 2, weaponPool: "all", episodeTicks: 120 });
+  const drawn = new Set();
+  for (let episode = 0; episode < 20; episode++) {
+    anything.reset();
+    for (const loadout of anything.loadouts) for (const id of loadout) drawn.add(id);
+  }
+  assert.ok([...drawn].some(explodes), "`all` has to reach the explosives");
+  assert.throws(() => new WormEnv(engine, { weaponPool: "nope" }), /unknown weapon pool/);
 });
 
 test("any number of worms, from a solo run to a brawl", { skip }, async () => {
