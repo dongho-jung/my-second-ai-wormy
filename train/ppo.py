@@ -70,11 +70,18 @@ def parse_args(argv=None):
 
     learn = parser.add_argument_group("learning")
     learn.add_argument("--lr", type=float, default=3e-4)
+    learn.add_argument("--target-kl", type=float, default=0.012,
+                       help="how far the policy should move per update. Measured on a 63M-step run: "
+                            "at a fixed rate it settled at a KL of 0.001, a tenth of what PPO normally "
+                            "does, and the combat numbers went flat while it crawled. The rate is "
+                            "nudged to hit this instead. 0 turns it off")
+    learn.add_argument("--lr-range", type=str, default="1e-5,3e-3",
+                       help="how far the rate may be nudged")
     learn.add_argument("--gamma", type=float, default=0.99)
     learn.add_argument("--lam", type=float, default=0.95)
     learn.add_argument("--clip", type=float, default=0.2)
     learn.add_argument("--epochs", type=int, default=2)
-    learn.add_argument("--minibatches", type=int, default=2)
+    learn.add_argument("--minibatches", type=int, default=4)
     learn.add_argument("--entropy", type=float, default=0.01,
                        help="how much it is paid to stay undecided, at the start")
     learn.add_argument("--entropy-final", type=float, default=0.001,
@@ -201,6 +208,8 @@ def main(argv=None):
         "mapSide": map_side,
     }
     optimiser = torch.optim.Adam(policy.parameters(), lr=args.lr, eps=1e-5)
+    learning_rate = args.lr
+    lr_low, lr_high = (float(part) for part in args.lr_range.split(","))
     parameters = sum(p.numel() for p in policy.parameters())
 
     # Carrying on from a checkpoint. The rollout shape is free to change — how
@@ -248,6 +257,7 @@ def main(argv=None):
             "engineSha256": layout.engine_sha256,
             "mod": layout.mod,
             "lr": args.lr,
+            "targetKL": args.target_kl,
             "gamma": args.gamma,
             "clip": args.clip,
             "entropy": args.entropy,
@@ -423,6 +433,20 @@ def main(argv=None):
             wall = time.perf_counter() - started
             rollout_seconds = time.perf_counter() - rollout_started
             losses = dict(zip(names, (running_losses / passes).tolist()))
+            # Keep the size of an update honest. Too small and it learns almost
+            # nothing per sample however many samples it sees; too large and it
+            # falls off the cliff PPO's clipping exists to avoid.
+            if args.target_kl > 0:
+                kl = abs(losses["kl"])
+                scale = 1.0
+                if kl < args.target_kl / 1.5:
+                    scale = 1.02
+                elif kl > args.target_kl * 1.5:
+                    scale = 1 / 1.02
+                if scale != 1.0:
+                    learning_rate = min(lr_high, max(lr_low, learning_rate * scale))
+                    for group in optimiser.param_groups:
+                        group["lr"] = learning_rate
             variance = float(flat_ret.var())
             explained = 0.0 if variance == 0 else 1 - float((flat_ret - flat_val).var()) / variance
             episodes = np.array(finished) if finished else None
@@ -442,6 +466,7 @@ def main(argv=None):
                 entropyCoef=entropy_coef,
                 clipFraction=losses["clipped"],
                 approxKL=losses["kl"],
+                learningRate=learning_rate,
                 explainedVariance=explained,
                 meanReward=float(rews.mean()) * args.steps,
             )
