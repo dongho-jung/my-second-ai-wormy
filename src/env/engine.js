@@ -76,7 +76,7 @@ const HANDOUT = "__wormyEngineClasses";
 // The world settings a room lets its host change, under the names the game's
 // own settings screen uses. Defaults are the engine's own.
 const RULES = {
-  bonusDrops: "qd", //          0 none, 1 health and weapons, 2 health only
+  bonusDrops: "qd", //          0 none, 1 health and weapons, 2 health only, 3 weapons only
   bonusSpawnTicks: "Pe", //     ticks between bonus drops
   weaponChangeDelay: "mf", //   ticks before a swapped-to weapon may fire
   damageMultiplier: "Te",

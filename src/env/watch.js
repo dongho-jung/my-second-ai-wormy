@@ -16,6 +16,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { actionFromHeads, ACTION_HEADS } from "./actions.js";
 import { loadEngine } from "./engine.js";
+import { readFileSync } from "node:fs";
 import { WormEnv } from "./env.js";
 import { MAP_SIZE, PATCH_CELLS, PATCH_SHAPE } from "./observation.js";
 
@@ -39,7 +40,15 @@ const speed = config.speed ?? 1;
 const agents = config.agents ?? 3;
 
 const engine = await loadEngine(config.engine);
+// The maps the policy was trained on, cycled the way the vector environment
+// cycles them. Without these the viewer generates its own dirt fields, and a
+// policy trained on a room's real maps is watched somewhere it has never been —
+// which is how the dashboard came to say "Random Dirt" all evening.
+const stock = (config.levelFiles ?? []).map((path) =>
+  engine.readAnyLevel(path.split("/").pop(), readFileSync(path)),
+);
 const env = new WormEnv(engine, {
+  ...(stock.length ? { level: (_, seed) => stock[seed % stock.length] } : {}),
   agents,
   episodeTicks: config.episodeTicks ?? 3600,
   frameskip: config.frameskip ?? 4,

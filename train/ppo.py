@@ -55,8 +55,14 @@ def parse_args(argv=None):
                             "does, so the name does not live in two languages at once — it was "
                             "spelled here as well, went stale, and the run duly ignored every "
                             "recording from the room it was meant to be learning from")
+    world.add_argument("--ban-start", default="CRAZY IVAN,ENERGY SHIELD,FORCE FIELD,BARRACUDA",
+                       help="weapons nobody spawns holding, by the mod's own names. They still "
+                            "turn up as crates, which is how the rooms run them")
     world.add_argument("--rules", default="room", choices=["room", "clean"],
-                       help="room matches the engine's own defaults, bonus drops and all")
+                       help="room matches the watched room's own settings, read off it: weapon "
+                            "crates every 480 ticks and a weapon-change delay. The engine's bare "
+                            "defaults drop health only, so a weapon barred from the loadout would "
+                            "never be seen at all. clean turns bonuses off")
     world.add_argument("--no-patch", action="store_true", help="drop the close terrain patch")
     world.add_argument("--no-map", action="store_true",
                        help="drop the whole-level picture. Without it a policy can climb the ledge in "
@@ -204,7 +210,15 @@ def main(argv=None):
         levelFiles=stock_levels(args),
         levelOptions={"width": args.map_width},
         weaponPool=args.weapons,
-        rules={} if args.rules == "room" else {"bonusDrops": 0},
+        banStart=[name.strip() for name in args.ban_start.split(",") if name.strip()],
+        # Read off the room this project watches, rather than assumed: it drops
+        # weapon crates only, eight seconds apart, and makes a swapped-to weapon
+        # wait three quarters of a second before it will fire.
+        rules=(
+            {"bonusDrops": 3, "bonusSpawnTicks": 480, "weaponChangeDelay": 45}
+            if args.rules == "room"
+            else {"bonusDrops": 0}
+        ),
         seed=args.seed,
         **({"engine": {"mod": args.mod}} if args.mod else {}),
         observations=[
@@ -234,6 +248,10 @@ def main(argv=None):
     ).to(device)
     # What a checkpoint has to carry for a viewer or a resume to rebuild it.
     shape_of = {
+        # So a viewer replays the maps the policy knows rather than inventing
+        # its own — the difference between watching it play and watching it
+        # flounder somewhere it has never been.
+        "levels": stock_levels(args),
         "usePatch": use_patch,
         "patchShape": list(patch_shape),
         "useMap": use_map,

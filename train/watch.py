@@ -52,6 +52,8 @@ def parse_args(argv=None):
                         help="worms in the match; the number it was trained with by default")
     parser.add_argument("--speed", type=float, default=1.0, help="1 is the speed the game runs at")
     parser.add_argument("--port", type=int, default=8769)
+    parser.add_argument("--levels", nargs="*", default=None,
+                        help="map files to play on; by default the ones the checkpoint was trained on")
     parser.add_argument("--episode-ticks", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--greedy", action="store_true",
@@ -102,6 +104,9 @@ def main(argv=None):
         "port": args.port,
         "episodeTicks": args.episode_ticks or shape.get("episodeTicks", 3600),
         "frameskip": shape.get("frameskip", 4),
+        "levelFiles": [
+            path for path in (args.levels or shape.get("levels") or []) if Path(path).exists()
+        ],
     }
     if args.seed is not None:
         config["seed"] = args.seed

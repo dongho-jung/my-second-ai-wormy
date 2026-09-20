@@ -66,6 +66,8 @@ const { values } = parseArgs({
     "min-samples": { type: "string", default: "600" },
     mod: { type: "string", default: DEFAULT_MOD },
     "room-url": { type: "string" },
+    "min-players": { type: "string", default: "2" },
+    "idle-run": { type: "string", default: "45" },
     nickname: { type: "string", default: "OBSERVER" },
   },
   allowNegative: true,
@@ -128,6 +130,10 @@ if (!pages.length) {
 const observer = new WebLieroObserver(pages[0], { log });
 
 const idleMs = Number(values["idle-seconds"]) * 1000;
+const minPlayers = Number(values["min-players"]);
+const idleRun = Number(values["idle-run"]);
+/** Consecutive samples each player has pressed nothing for. */
+const idleFor = new Map();
 const minSamples = Number(values["min-samples"]);
 
 let started = new Date();
@@ -240,11 +246,29 @@ async function sample() {
     }
   }
   if (!terrain) return;
-  for (const player of read.game.players) {
-    if (!player.alive || !player.worm) continue;
-    if (excluded.has(player.name)) continue;
-    // A replicated worm that has never carried an input cannot be learned from.
-    if (!Number.isFinite(player.worm.keys)) continue;
+  // Who is actually playing, before anything is written. Spectators have no
+  // worm, and a worm waiting to respawn has none either, so both drop out here.
+  const playing = read.game.players.filter(
+    (player) =>
+      player.alive &&
+      player.worm &&
+      !excluded.has(player.name) &&
+      // A replicated worm that has never carried an input cannot be learned from.
+      Number.isFinite(player.worm.keys),
+  );
+  // A room is empty most of the time, and one person alone in it is not playing
+  // the game this is trying to learn — there is nobody to fight, so what gets
+  // recorded is wandering. Wait for a match.
+  if (playing.length < minPlayers) return;
+  for (const player of playing) {
+    // Somebody standing still is still standing still whether they are away or
+    // thinking, and three seconds of it is the same frame forty-five times. A
+    // short pause is part of play and stays; a long one stops being recorded
+    // until they touch something again.
+    const keys = player.worm.keys;
+    const still = keys === 0 ? (idleFor.get(player.id) ?? 0) + 1 : 0;
+    idleFor.set(player.id, still);
+    if (still > idleRun) continue;
     const view = viewFromSnapshot(read.game, terrain, { playerId: player.id });
     if (!mapTerrain) mapTerrain = encodeMapTerrain(view.terrain);
     observe(view, scratch, ["vector", "patchBytes", "map"], spec, mapTerrain);

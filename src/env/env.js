@@ -105,6 +105,8 @@ export const DEFAULTS = {
   loadout: "random",
   // Which weapons "random" draws from. Null is all of them.
   weaponPool: "direct",
+  // Weapons nobody spawns holding, by name. They still appear in crates.
+  banStart: [],
   // Both pictures by default. The terrain patch is about ten times the cost of
   // the vector, so a task that does not need it — walking somewhere, a first
   // check that the pipeline learns anything at all — should pass ["vector"].
@@ -158,12 +160,17 @@ export class WormEnv {
     }
     // "all" is null, which is every weapon — so the name has to be looked up
     // rather than defaulted through, or asking for all of them reads as a typo.
-    this.weaponPool =
+    const chosen =
       typeof settings.weaponPool === "string"
         ? settings.weaponPool === "direct"
           ? this.#directOrEverything(settings.slots ?? 5)
           : null
         : settings.weaponPool;
+    const barred = this.#bannedAtStart(settings.banStart);
+    // Null means every weapon, so the ban has to be spelled out as a list.
+    this.weaponPool = !barred.size
+      ? chosen
+      : (chosen ?? this.engine.settings.O.map((_, id) => id)).filter((id) => !barred.has(id));
     this.weights = settings.weights;
     this.observationKinds = settings.observations;
     this.makeGoal = settings.goals;
@@ -203,6 +210,33 @@ export class WormEnv {
    * own generator, so a worker can loop `reset()` and still replay any episode
    * from the seed the returned info reports.
    */
+  /**
+   * The ids of weapons named in `banStart`, for dropping from a loadout.
+   *
+   * Only from the loadout. Crates are filled by the engine from the mod's whole
+   * list, so a weapon barred here still turns up as a bonus now and then —
+   * which is how the rooms run it: the awkward ones are something you find,
+   * not something you spawn holding.
+   */
+  #bannedAtStart(names) {
+    if (!names?.length) return new Set();
+    const wanted = new Set(names.map((name) => String(name).trim().toUpperCase()));
+    const ids = new Set();
+    this.engine.settings.O.forEach((weapon, id) => {
+      if (wanted.has(String(weapon.name).trim().toUpperCase())) ids.add(id);
+    });
+    const missed = [...wanted].filter(
+      (name) => !this.engine.settings.O.some((w) => String(w.name).trim().toUpperCase() === name),
+    );
+    if (missed.length) {
+      console.warn(
+        `no weapon called ${missed.join(", ")} in ${this.engine.settings.name}; ` +
+          "check the spelling against the mod's own names",
+      );
+    }
+    return ids;
+  }
+
   /**
    * The guns, when this mod's guns can be told apart by name; otherwise all of
    * them, loudly.
