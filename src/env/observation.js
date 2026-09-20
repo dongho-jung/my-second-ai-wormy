@@ -315,9 +315,9 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
     // does on a hit, what it does to whoever fired it, whether it arcs, how
     // fast it is.
     const features = spec.weaponFeatures;
-    const from = shot.weaponId == null ? -1 : shot.weaponId * WEAPON_FEATURE_COUNT;
+    const from = weaponFeaturesAt(spec, shot.weaponId);
     for (const index of [4, 6, 1, 0]) {
-      into[at++] = features && from >= 0 ? features[from + index] : 0;
+      into[at++] = from >= 0 ? features[from + index] : 0;
     }
   }
 
@@ -337,12 +337,28 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
   return into;
 }
 
+/**
+ * Where one weapon's measured character starts in the table, or -1 for none.
+ *
+ * Reading past the end of a Float32Array gives `undefined`, and writing that
+ * into another one gives NaN rather than throwing. A live room running a mod
+ * whose weapon ids outrun the measured table therefore produced observations
+ * that looked fine, were recorded, and turned the whole policy to NaN on the
+ * first update that learned from them. Out of range is zeros, like no weapon.
+ */
+function weaponFeaturesAt(spec, weaponId) {
+  const features = spec.weaponFeatures;
+  if (!features || weaponId == null || weaponId < 0) return -1;
+  const from = weaponId * WEAPON_FEATURE_COUNT;
+  return from + WEAPON_FEATURE_COUNT <= features.length ? from : -1;
+}
+
 /** One weapon's measured character, or zeros when there is nothing to say. */
 function writeWeapon(into, at, spec, weaponId) {
   const features = spec.weaponFeatures;
-  const from = weaponId == null ? -1 : weaponId * WEAPON_FEATURE_COUNT;
+  const from = weaponFeaturesAt(spec, weaponId);
   for (let index = 0; index < WEAPON_FEATURE_COUNT; index++) {
-    into[at + index] = features && from >= 0 ? features[from + index] : 0;
+    into[at + index] = from >= 0 ? features[from + index] : 0;
   }
   return at + WEAPON_FEATURE_COUNT;
 }

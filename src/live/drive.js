@@ -143,7 +143,9 @@ for (let index = 0; index < players; index++) {
     `${config.nickname ?? "Wormy"} ${String.fromCharCode(65 + index)}`;
   if (!reused[index]) {
     await page.goto(LOBBY, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    await setNickname(page, nickname).catch(() => {});
+    await setNickname(page, nickname, { colour: config.colours?.[index] ?? null }).catch(
+      () => {},
+    );
   }
   seats.push({ index, page, nickname, controls: null, observer: null, terrain: null, terrainAt: 0 });
 }
@@ -316,15 +318,27 @@ const FAREWELL = ["G G"];
 const GREET_EVERY_MS = 5 * 60 * 1000;
 
 async function say_in_chat(seat, lines) {
-  const box = seat.page.locator("[data-hook='input']").first();
-  if (!(await box.count().catch(() => 0))) return false;
+  const page = seat.page;
+  // Through the keyboard, the way `Controls` does and the way a player does.
+  // The chat box sits below the game view and is often off-screen, so clicking
+  // it fails with "element is outside of the viewport" — which is exactly what
+  // it did. Enter opens it wherever it is; `keys.js` has always had Enter bound
+  // to Chat for this reason.
   await seat.controls?.release().catch(() => {});
+  const box = page.locator("[data-hook='input']").first();
   for (const line of lines) {
     try {
-      await box.click({ timeout: 3000 });
-      await box.fill(line, { timeout: 3000 });
-      await box.press("Enter", { timeout: 3000 });
-      await seat.page.waitForTimeout(250);
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(150);
+      // `fill` puts the whole line in at once, and only works once the box is
+      // really focused; typing it is the fallback when it is not.
+      const filled = await box
+        .fill(line, { timeout: 1500, force: true })
+        .then(() => true)
+        .catch(() => false);
+      if (!filled) await page.keyboard.type(line, { delay: 15 });
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(250);
     } catch (error) {
       log.warn("chat_failed", { seat: seat.index, message: error.message });
       return false;

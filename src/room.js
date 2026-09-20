@@ -34,7 +34,7 @@ export async function clickThrough(locator, { timeout = 8000 } = {}) {
 
 // The Player Setup dialog appears a few seconds after the page boots, so a bare
 // presence check races it and silently leaves the dialog covering the game.
-export async function setNickname(page, nickname, { timeoutMs = 20_000 } = {}) {
+export async function setNickname(page, nickname, { timeoutMs = 20_000, colour = null } = {}) {
   const field = page.getByPlaceholder("Nickname");
   try {
     await field.waitFor({ state: "visible", timeout: timeoutMs });
@@ -43,6 +43,26 @@ export async function setNickname(page, nickname, { timeoutMs = 20_000 } = {}) {
     return false;
   }
   await field.fill(nickname);
+  // Player Setup carries the worm's colour as three sliders beside the name.
+  // Three worms in one identical shade are three worms nobody watching can tell
+  // apart, including whoever is trying to work out which one just shot them.
+  if (colour) {
+    const [red, green, blue] = colour;
+    for (const [hook, value] of [["rslider", red], ["gslider", green], ["bslider", blue]]) {
+      const slider = page.locator(`[data-hook="${hook}"]`).first();
+      if (!(await slider.count().catch(() => 0))) continue;
+      // These are `type=range`, which Playwright's fill() refuses outright.
+      // Setting the value and raising the events the widget listens for is
+      // what dragging the handle does, without the arithmetic of where to drag.
+      await slider
+        .evaluate((el, wanted) => {
+          el.value = String(wanted);
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        }, value)
+        .catch(() => {});
+    }
+  }
   // The live dialog carries a data-hook; fall back to the button's name so a
   // markup change costs a slower start rather than a failed one.
   const hooked = page.locator('[data-hook="ok"]');

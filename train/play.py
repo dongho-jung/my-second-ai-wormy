@@ -43,7 +43,14 @@ def parse_args(argv=None):
     parser.add_argument("--run", default=None, help="run id to play; the newest by default")
     parser.add_argument("--checkpoint", default=None, help="a .pt file, overriding --run")
     parser.add_argument("--room-url", default=None, help="join this room instead of making one")
-    parser.add_argument("--room-name", default="wormy")
+    parser.add_argument("--room-name", default="BOT TRAINING ROOM")
+    parser.add_argument("--public", action="store_true", default=True,
+                        help="list the room publicly, so passers-by join and are learned from")
+    parser.add_argument("--private", dest="public", action="store_false")
+    parser.add_argument("--names", default="BOT FOO,BOT BAR,BOT BAZ",
+                        help="one name per driven worm, in order")
+    parser.add_argument("--colours", default="220,60,50 70,200,90 70,120,230",
+                        help="one r,g,b per driven worm, in order")
     parser.add_argument("--room-size", type=int, default=20,
                         help="seats in the room; it is private, so leave room for people to join")
     parser.add_argument("--nickname", default="Wormy")
@@ -138,6 +145,12 @@ def main(argv=None):
         "roomName": args.room_name,
         "roomSize": args.room_size,
         "nickname": args.nickname,
+        "nicknames": [part.strip() for part in args.names.split(",") if part.strip()],
+        "isPublic": args.public,
+        "colours": [
+            [int(channel) for channel in triple.split(",")]
+            for triple in args.colours.split()
+        ],
         "decideHz": args.decide_hz,
         "mapMs": args.map_ms,
         "cdpPort": args.cdp_port,

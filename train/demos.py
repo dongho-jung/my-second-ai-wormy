@@ -32,6 +32,29 @@ class Demos:
         """Frames where the player pressed something. The rest teach stillness."""
         return int((self.heads != 0).any(axis=1).sum())
 
+    def finite(self) -> "Demos":
+        """Without the frames carrying a NaN.
+
+        One NaN anywhere in a batch makes the whole gradient NaN, and the
+        policy never comes back — a run died exactly this way, from a handful
+        of live frames whose weapon block was read past the end of a table.
+        The environment no longer produces them; this is so that a recording
+        already on disk cannot do it either.
+        """
+        good = np.isfinite(self.vectors).all(axis=1)
+        dropped = int(len(good) - good.sum())
+        if not dropped:
+            return self
+        print(f"ignoring {dropped:,} recorded frames that hold no usable numbers", flush=True)
+        return Demos(
+            self.vectors[good],
+            self.patches[good],
+            self.maps[good],
+            self.heads[good],
+            self.sources,
+            self.meta,
+        )
+
     def thin_idle(self, max_share: float, seed: int = 0) -> "Demos":
         """Keep the frames where nothing was pressed down to a share of the whole.
 
@@ -106,7 +129,7 @@ def load(directory: Path, only: str | None = None, expect: dict | None = None) -
         sources.append((meta_path.stem, count))
     if not vectors:
         return None
-    return Demos(
+    every = Demos(
         np.concatenate(vectors),
         np.concatenate(patches),
         np.concatenate(maps),
@@ -114,3 +137,4 @@ def load(directory: Path, only: str | None = None, expect: dict | None = None) -
         sources,
         first,
     )
+    return every.finite()
