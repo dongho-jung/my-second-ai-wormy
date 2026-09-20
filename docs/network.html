@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Wormy II의 관측 입력부터 행동 출력까지, PPO 신경망 구조와 한계를 설명합니다.">
+<title>웜은 어떻게 판단할까 · Wormy II</title>
+<style>
+:root { --bg:#f6f7f9; --card:#fff; --text:#202a38; --muted:#596778; --line:#dce2ea; --accent:#365bc4; --tint:#edf2ff; --good:#217454; --warm:#9b5918; --mono:ui-monospace,SFMono-Regular,Consolas,monospace; }
+@media(prefers-color-scheme:dark) { :root { --bg:#10151e; --card:#19212d; --text:#e6edf6; --muted:#a9b6c8; --line:#354154; --accent:#a4bcff; --tint:#222f4b; --good:#80d6ad; --warm:#efba80; } }
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; scroll-padding-top:24px; }
+body { margin:0; background:var(--bg); color:var(--text); font:16px/1.8 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif; word-break:keep-all; overflow-wrap:anywhere; }
+a { color:var(--accent); text-underline-offset:4px; }
+a:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline:3px solid var(--accent); outline-offset:5px; }
+.skip { position:absolute; top:-100px; left:20px; padding:10px; background:var(--card); z-index:5; }
+.skip:focus { top:10px; }
+.page { width:min(1100px,calc(100% - 48px)); margin:auto; }
+header { padding:64px 0 32px; }
+.brand { display:flex; justify-content:space-between; gap:16px; font-size:12px; font-weight:700; letter-spacing:.06em; color:var(--muted); }
+.brand span:first-child { color:var(--accent); }
+h1 { font-size:clamp(32px,5.5vw,56px); line-height:1.25; letter-spacing:-.055em; margin:34px 0 20px; }
+h2 { font-size:clamp(23px,3vw,29px); letter-spacing:-.035em; line-height:1.4; margin:0 0 16px; }
+h3 { font-size:18px; line-height:1.5; margin:0 0 8px; }
+p { margin:0 0 16px; }
+p:last-child { margin-bottom:0; }
+.lead { max-width:760px; color:var(--muted); font-size:18px; }
+.tags { display:flex; flex-wrap:wrap; gap:8px; margin-top:24px; }
+.tag { padding:4px 12px; border:1px solid var(--line); border-radius:30px; font-size:12px; color:var(--muted); }
+nav { display:flex; flex-wrap:wrap; gap:8px 24px; padding:20px 0; border-block:1px solid var(--line); }
+nav a { font-size:14px; text-decoration:none; font-weight:600; }
+nav a:hover { text-decoration:underline; }
+section { margin-top:56px; }
+.kicker { display:block; color:var(--accent); font:600 12px/1.5 var(--mono); margin-bottom:10px; letter-spacing:.08em; }
+.muted, figcaption { color:var(--muted); }
+.grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+.two { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:24px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:24px; min-width:0; }
+.card p { font-size:14px; color:var(--muted); }
+.shape { display:block; font:600 27px/1.5 var(--mono); color:var(--accent); margin:14px 0; }
+.note { background:var(--tint); border-left:3px solid var(--accent); padding:18px 22px; margin-top:24px; border-radius:0 10px 10px 0; font-size:14px; }
+code { font: .88em/1.6 var(--mono); overflow-wrap:anywhere; }
+.flow { padding:28px; border:1px solid var(--line); border-radius:20px; background:var(--card); margin:24px 0 0; }
+.flow-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+.lane { min-width:0; text-align:center; }
+.node { border:1px solid var(--line); border-radius:10px; padding:16px 10px; background:var(--bg); }
+.node strong { display:block; font-size:15px; }
+.node code { display:block; margin-top:5px; font-size:12px; }
+.node small { display:block; color:var(--muted); font-size:12px; }
+.node.input { background:var(--tint); border-color:var(--accent); }
+.arrow { display:block; color:var(--muted); text-align:center; font:14px/1.5 var(--mono); padding:10px 0; }
+.join { text-align:center; margin-top:20px; padding:14px; border:1px dashed var(--accent); border-radius:10px; color:var(--accent); font-size:14px; }
+.trunk { max-width:480px; margin:auto; text-align:center; }
+.outputs { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.outputs .node:first-child { border-color:var(--accent); }
+.heads { display:flex; flex-wrap:wrap; justify-content:center; gap:8px; margin-top:18px; }
+.heads span { background:var(--tint); border-radius:6px; padding:5px 10px; font-size:12px; }
+figcaption { font-size:13px; margin-top:20px; }
+.table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:12px; background:var(--card); }
+table { width:100%; border-collapse:collapse; text-align:left; font-size:14px; }
+caption { text-align:left; padding:16px; font-weight:700; }
+th,td { padding:12px 16px; border-top:1px solid var(--line); vertical-align:top; }
+th { color:var(--muted); background:var(--bg); font-size:12px; }
+tbody tr:hover { background:var(--tint); }
+.n { text-align:right; font-family:var(--mono); white-space:nowrap; }
+tfoot { font-weight:700; background:var(--tint); }
+.vector-table { min-width:670px; }
+.bar { display:block; height:4px; border-radius:2px; background:var(--accent); margin-top:8px; min-width:2px; }
+details { margin-top:22px; }
+summary { cursor:pointer; font-weight:600; color:var(--accent); padding:10px 0; }
+.scroll-hint { font-size:12px; color:var(--muted); margin:0 0 10px; }
+.verdict { font-size:20px; font-weight:700; }
+.checks { padding-left:22px; margin:16px 0 0; }
+.checks li { padding:5px 0; }
+footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line); font-size:12px; color:var(--muted); }
+.sources { margin-top:20px; font-size:13px; }
+@media(max-width:700px) { .page { width:calc(100% - 32px); } header { padding-top:28px; } .brand { font-size:10px; } h1 { margin-top:24px; } .grid,.two,.flow-grid { grid-template-columns:1fr; } section { margin-top:40px; } .card { padding:20px; } .flow { padding:16px; } .lane { display:grid; grid-template-columns:1fr; } .lane+.lane { border-top:1px solid var(--line); padding-top:16px; } .outputs { grid-template-columns:1fr; } .lead { font-size:16px; } th,td { padding:10px 12px; } }
+@media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+@media print { body { background:white; color:black; } .page { width:100%; } nav,.skip { display:none; } section { break-inside:avoid; } .table-wrap { overflow:visible; } .vector-table { min-width:0; } }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">본문으로 건너뛰기</a>
+<div class="page">
+<header>
+  <div class="brand"><span>WORMY II / 기술 노트</span><span>신경망 구조 · 2026.09.20</span></div>
+  <h1>웜은 어떻게 판단할까</h1>
+  <p class="lead">지형을 보고, 상대를 읽고, 다음 키를 고릅니다. 게임 속 웜이 한 번의 관측을 행동으로 바꾸는 과정과, 이 설계로 할 수 있는 일과 아직 검증해야 할 일을 정리했습니다.</p>
+  <div class="tags"><span class="tag">심층 강화학습 · PPO</span><span class="tag">자가 대전 + 사람 플레이 모방</span><span class="tag">기본 3인전 기준</span></div>
+</header>
+<nav aria-label="문서 목차"><a href="#overview">학습 방식</a><a href="#inputs">관측 입력</a><a href="#architecture">신경망 구조</a><a href="#vector">벡터 상세</a><a href="#parameters">파라미터</a><a href="#review">타당성과 한계</a></nav>
+<main id="main">
+<section id="overview">
+  <span class="kicker">01 / LEARNING</span><h2>정답 대신, 행동의 결과에서 배웁니다</h2>
+  <p>기본 학습 방식은 <strong>심층 강화학습</strong>입니다. 웜이 행동하면 환경이 보상을 주고, 신경망은 더 나은 누적 보상을 얻는 방향으로 바뀝니다. 여기에 녹화한 사람의 플레이가 있으면 모방 학습을 함께 적용합니다.</p>
+  <div class="grid">
+    <article class="card"><h3>PPO · 정책과 가치</h3><p>행동 정책(actor)은 키를 선택합니다. 가치 함수(critic)는 현재 상태에서 기대되는 미래 할인 누적 보상을 추정해, 선택한 행동이 기대보다 나았는지 판단하는 데 쓰입니다.</p></article>
+    <article class="card"><h3>자가 대전 · self-play</h3><p>기본 3인전의 모든 웜이 같은 정책을 공유합니다. 상대도 함께 변하므로 학습 기회가 생기지만, 자기들끼리의 성적만으로 실제 실력 향상을 판정할 수는 없습니다.</p></article>
+    <article class="card"><h3>행동 모방 · BC</h3><p>녹화한 관측과 행동을 따라 하도록 보조 손실을 더합니다. 로프처럼 우연히 익히기 어려운 기술의 탐색을 도울 수 있습니다. 효과는 시연의 질과 학습 비중에 달려 있습니다.</p></article>
+  </div>
+  <p class="note"><strong>의사결정 주기.</strong> 기본 <code>frameskip=4</code>에서는 한 행동을 게임 4틱 동안 적용합니다. 게임을 초당 60틱으로 볼 때 의사결정은 초당 15회에 해당합니다. 실제 학습은 화면 렌더링 없이 더 빠르게 진행합니다.</p>
+</section>
+<section id="inputs">
+  <span class="kicker">02 / OBSERVATION</span><h2>숫자 하나의 묶음, 두 가지 시야</h2>
+  <p class="muted">수치는 기본 상대 슬롯 2개, 패치와 전체 지도 입력을 모두 켠 구성 기준입니다.</p>
+  <div class="grid">
+    <article class="card"><h3>상태 벡터</h3><span class="shape">144</span><p>체력, 탄약, 조준, 16방향 거리 센서, 상대와 투사체 정보입니다. 실행 중 누적한 평균·분산으로 정규화한 뒤 완전연결층에 넣습니다.</p></article>
+    <article class="card"><h3>주변 지형 패치</h3><span class="shape">4 × 32 × 32</span><p>웜 주변 64 × 64픽셀을 셀당 2픽셀 간격으로 관측합니다. 바위·흙·빈 공간과 투사체를 네 채널로 표현합니다.</p></article>
+    <article class="card"><h3>전체 지도</h3><span class="shape">4 × 32 × 32</span><p>맵 전체를 32 × 32 격자로 압축합니다. 빈 공간·흙·바위의 비율과 웜의 위치를 담습니다. 생성 맵의 기본 크기는 504 × 350픽셀입니다.</p></article>
+  </div>
+  <p class="note"><strong>지도는 일부를 재사용합니다.</strong> 전체 지도의 지형 채널은 기본 60번의 의사결정마다 갱신하고, 웜 위치는 매 관측마다 반영합니다. 따라서 최근 파괴된 지형이 전체 지도에는 잠시 늦게 나타날 수 있습니다.</p>
+</section>
+<section id="architecture">
+  <span class="kicker">03 / NETWORK</span><h2>관측에서 행동까지, 한눈에 보기</h2>
+  <p class="muted">세 갈래 입력을 각각 처리한 뒤 합치고, 공통 특징에서 행동과 가치를 읽습니다. 아래 크기는 배치 차원을 생략했습니다.</p>
+  <figure class="flow">
+    <div class="flow-grid">
+      <div class="lane"><div class="node input"><strong>상태 벡터</strong><code>144</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>실행 통계 정규화</strong><small>평균·분산 적용, 범위 제한</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>144 → 128</code></div><span class="arrow">출력 128</span></div>
+      <div class="lane"><div class="node input"><strong>주변 패치</strong><code>4 × 32 × 32</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 4 → 16 + ReLU</strong><small>커널 4 × 4 · 보폭 2</small><code>16 × 15 × 15</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 16 → 32 + ReLU</strong><small>커널 3 × 3 · 보폭 2</small><code>32 × 7 × 7</code></div><span class="arrow">펼치기 → 1,568</span></div>
+      <div class="lane"><div class="node input"><strong>전체 지도</strong><code>4 × 32 × 32</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 4 → 16 + ReLU</strong><small>커널 4 × 4 · 보폭 2</small><code>16 × 15 × 15</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 16 → 32 + ReLU</strong><small>커널 3 × 3 · 보폭 2</small><code>32 × 7 × 7</code></div><span class="arrow">펼치기 → 1,568</span></div>
+    </div>
+    <div class="join"><strong>특징 결합</strong> · 128 + 1,568 + 1,568 = <strong>3,264</strong></div>
+    <div class="trunk"><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>3,264 → 256</code><small>전체 학습 파라미터의 약 89.3%</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>256 → 256</code></div></div>
+    <span class="arrow" aria-hidden="true">↓</span>
+    <div class="outputs"><div class="node"><strong>행동 정책 · actor</strong><code>7개 헤드 · 18개 로짓</code><small>헤드별 선택 확률에서 행동 추출</small></div><div class="node"><strong>가치 함수 · critic</strong><code>스칼라 1개</code><small>미래 할인 누적 보상의 추정값</small></div></div>
+    <div class="heads" aria-label="행동 헤드별 선택지 수"><span>이동 3</span><span>조준 3</span><span>발사 2</span><span>점프 2</span><span>굴착 2</span><span>로프 3</span><span>무기 3</span></div>
+    <figcaption>두 합성곱 경로는 구조가 같지만 가중치를 별도로 학습합니다. 모바일에서는 각 입력 경로를 위에서 아래로 읽은 뒤, 특징 결합 단계로 이어집니다.</figcaption>
+  </figure>
+</section>
+<section id="vector">
+  <span class="kicker">04 / VECTOR</span><h2>144개 숫자에는 무엇이 들어갈까</h2>
+  <p>학습으로 생성한 임베딩이 아니라, 코드가 직접 측정하는 관측값입니다. 아래 표는 인접한 일부 필드를 묶어 표시했습니다.</p>
+  <details><summary>전체 필드와 오프셋 펼치기</summary>
+    <p class="scroll-hint">좁은 화면에서는 표 안에서 좌우로 스크롤할 수 있습니다.</p>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="상태 벡터 상세 표, 가로 스크롤 가능"><table class="vector-table">
+      <caption>상대 슬롯 2개일 때의 벡터 구성</caption><thead><tr><th scope="col" class="n">시작</th><th scope="col" class="n">크기</th><th scope="col">필드</th><th scope="col">의미</th></tr></thead>
+      <tbody>
+      <tr><td class="n">0</td><td class="n">16</td><td><code>rays</code></td><td>오른쪽부터 시계 방향 16개 광선. 첫 고체 지형까지의 거리를 최대 120픽셀 기준으로 정규화</td></tr>
+      <tr><td class="n">16</td><td class="n">1</td><td><code>health</code></td><td>체력 ÷ 100</td></tr>
+      <tr><td class="n">17</td><td class="n">2</td><td><code>velocity</code></td><td>틱당 이동 속도, x·y</td></tr>
+      <tr><td class="n">19</td><td class="n">2</td><td><code>aim</code></td><td>조준 각도의 코사인·사인</td></tr>
+      <tr><td class="n">21</td><td class="n">1</td><td><code>facing</code></td><td>왼쪽 −1, 오른쪽 +1</td></tr>
+      <tr><td class="n">22</td><td class="n">5</td><td><code>contacts / stepping</code></td><td>네 방향 접촉 정보와 턱을 넘는 중인지 여부</td></tr>
+      <tr><td class="n">27</td><td class="n">8</td><td><code>walkLeft / walkRight</code></td><td>좌우 한 걸음의 상태: 통과 가능·턱·흙·바위</td></tr>
+      <tr><td class="n">35</td><td class="n">15</td><td><code>weapons</code></td><td>무기 5슬롯 × 남은 탄약·발사 가능·선택 여부</td></tr>
+      <tr><td class="n">50</td><td class="n">5</td><td><code>weaponsReload</code></td><td>슬롯별 재장전 진행도</td></tr>
+      <tr><td class="n">55</td><td class="n">10</td><td><code>weapon</code></td><td>현재 무기의 속도·낙하·사거리·퍼짐·피해 등 특성</td></tr>
+      <tr><td class="n">65</td><td class="n">5</td><td><code>rope</code></td><td>로프 전개·부착 여부, 상대 위치, 길이</td></tr>
+      <tr><td class="n">70</td><td class="n">38</td><td><code>foes</code></td><td>상대 2명 × 19개: 생존·위치·거리·방향·체력·속도·무기 특성</td></tr>
+      <tr><td class="n">108</td><td class="n">24</td><td><code>projectiles</code></td><td>가까운 투사체 3개 × 8개: 상대 위치·속도·무기 특성</td></tr>
+      <tr><td class="n">132</td><td class="n">12</td><td><code>pickups</code></td><td>가까운 보급품 3개 × 4개: 상대 위치·체력 또는 무기 여부</td></tr>
+      </tbody><tfoot><tr><td class="n">합계</td><td class="n">144</td><td colspan="2">상대 슬롯을 1개로 설정하면 125, 4개면 182</td></tr></tfoot>
+    </table></div>
+  </details>
+  <p class="note">벡터 크기는 실제 참가자 수가 아니라 <strong>설정한 상대 슬롯 수</strong>에 따라 결정됩니다. 같은 정책으로 여러 인원 구성을 다루려면 입력 크기를 유지하고 빈 슬롯을 채우는 방식이 필요합니다.</p>
+</section>
+<section id="parameters">
+  <span class="kicker">05 / PARAMETERS</span><h2>약 94만 개의 파라미터, 대부분은 결합 직후에</h2>
+  <div class="two"><div><p>총 <strong>936,435개</strong>의 학습 파라미터 중 89.3%가 <code>3,264 → 256</code> 완전연결층에 있습니다. 아래 수치는 편향을 포함하고, 정규화의 누적 통계 버퍼는 제외합니다.</p><p class="note"><strong>크다고 곧 병목은 아닙니다.</strong> 파라미터 비중만으로 어디를 넓혀야 할지 결정할 수 없습니다. 합성곱 출력 채널을 늘리면 뒤의 결합층 입력도 커져 전체 비용이 함께 늘어납니다. 먼저 관측·보상·평가의 문제를 구분해야 합니다.</p></div>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="파라미터 수 표"><table><caption>층별 학습 파라미터</caption><thead><tr><th scope="col">층</th><th scope="col" class="n">개수</th><th scope="col" class="n">비중</th></tr></thead><tbody>
+  <tr><td><code>3264 → 256</code><span class="bar" style="width:100%"></span></td><td class="n">835,840</td><td class="n">89.3%</td></tr>
+  <tr><td><code>256 → 256</code></td><td class="n">65,792</td><td class="n">7.0%</td></tr>
+  <tr><td><code>144 → 128</code></td><td class="n">18,560</td><td class="n">2.0%</td></tr>
+  <tr><td>합성곱 16 → 32 × 2</td><td class="n">9,280</td><td class="n">1.0%</td></tr>
+  <tr><td>행동 출력</td><td class="n">4,626</td><td class="n">0.5%</td></tr>
+  <tr><td>합성곱 4 → 16 × 2</td><td class="n">2,080</td><td class="n">0.2%</td></tr>
+  <tr><td>가치 출력</td><td class="n">257</td><td class="n">0.03%</td></tr>
+  </tbody><tfoot><tr><td>합계</td><td class="n">936,435</td><td class="n">100%</td></tr></tfoot></table></div></div>
+</section>
+<section id="actions">
+  <span class="kicker">06 / ACTION</span><h2>648개 조합을 7개의 선택으로 나눕니다</h2>
+  <p>이동·조준·발사·점프·굴착·로프·무기를 각각 고릅니다. <code>3 × 3 × 2 × 2 × 2 × 3 × 3 = 648</code>개의 행동 조합을, 각 헤드의 선택지 수를 더한 <strong>18개 로짓</strong>으로 표현합니다. 로짓은 확률로 바꾸기 전의 점수입니다.</p>
+  <p>이동은 유지·왼쪽·오른쪽, 조준은 유지·위·아래 중 하나입니다. 로프는 유지·발사·해제, 무기는 유지·다음·이전입니다. 발사·점프·굴착은 각각 끄기·켜기입니다.</p>
+  <p class="note"><strong>간결함의 대가도 있습니다.</strong> 현재 정책은 같은 관측 아래에서 헤드별 확률을 곱합니다. 공통 특징으로 행동을 조율할 수 있지만, 임의의 행동 간 확률적 의존성을 모두 표현하지는 못합니다. 또한 현재 7개 헤드에는 로프 길이 조절이 없습니다.</p>
+</section>
+<section id="review">
+  <span class="kicker">07 / REVIEW</span><h2>이 설계, 유효할까?</h2>
+  <p class="verdict">반응형 전투를 배우는 출발점으로는 타당합니다.<br>실전에서 강하다는 결론은 별도의 평가가 필요합니다.</p>
+  <div class="two">
+    <article class="card"><h3>설계에서 기대할 수 있는 점</h3><p>상태 벡터는 전투 수치를, 주변 패치는 발밑 지형을, 전체 지도는 넓은 위치 관계를 제공합니다. 공유 특징을 쓰는 actor-critic과 PPO는 이산 행동 정책을 학습하는 데 합리적인 구성입니다.</p><p>사람의 시연은 탐색의 출발점을 줄 수 있습니다. 다만 모방 손실을 함께 쓰므로 결과는 PPO뿐 아니라 시연 데이터와 가중치에도 영향을 받습니다.</p></article>
+    <article class="card"><h3>현재 구조의 한계</h3><p>순환 상태나 과거 프레임 입력이 없어, 현재 관측으로 복원할 수 없는 과거 사건을 기억할 수 없습니다. 이것이 모든 장기 전략이 불가능하다는 뜻은 아닙니다. 기억이 필요한 행동은 프레임 누적이나 순환 신경망으로 비교해야 합니다.</p><p>가치 함수의 설명 분산은 보상 예측 진단 지표입니다. 원문의 65%는 실행·측정 조건이 확인되지 않아 성능 근거에서 제외했습니다. 높은 값만으로 승률이나 관측의 충분성을 보장하지 않습니다.</p></article>
+  </div>
+  <h3 style="margin-top:28px">모델을 키우기 전에 확인할 것</h3>
+  <ol class="checks">
+    <li><strong>고정된 상대와 미사용 맵에서 평가하기.</strong> 과거 체크포인트와 고정 기준 정책을 상대로 여러 시드에서 승률·피해량·이동 성과를 측정합니다. 같은 정책끼리의 평균 보상만으로는 향상을 구분하기 어렵습니다.</li>
+    <li><strong>시간 제한 종료 처리 확인하기.</strong> 현재 학습 코드는 시간 예산 만료도 <code>done</code>으로 처리해 다음 가치 추정을 끊습니다. 학습 편의상 자른 구간이라면 실제 게임 종료와 구분해 부트스트래핑해야 합니다. 규칙상 진짜 종료라면 남은 시간도 관측에 필요한지 검토해야 합니다.</li>
+    <li><strong>입력과 시연의 기여 분리하기.</strong> 벡터만 사용한 경우, 패치·지도 추가, 시연 추가를 같은 평가 조건에서 비교합니다. 실전에서는 관측 정보의 가용성, 입력 지연과 로프 조작 차이도 확인합니다.</li>
+  </ol>
+  <p class="sources">원리 참고: <a href="https://arxiv.org/abs/1707.06347">PPO 원 논문</a> · <a href="https://gymnasium.farama.org/v0.27.0/tutorials/handling_time_limits/">Gymnasium의 시간 제한 처리</a></p>
+</section>
+</main>
+<footer><p>Wormy II · 2026-09-20 로컬 구현 기준: <code>train/policy.py</code>, <code>train/ppo.py</code>, <code>src/env/observation.js</code>, <code>src/env/actions.js</code>, <code>src/env/env.js</code>. 설정과 코드가 바뀌면 입력 크기와 파라미터 수도 달라집니다.</p><p>공식 WebLiero v20 게임 번들을 렌더링 없이 실행하는 환경입니다. 번들 체크섬 접두사: <code>b3c7b33c</code>. 이 문서는 구조 설명과 코드 검토이며, 실전 성능 평가 결과는 아닙니다.</p></footer>
+</div>
+</body>
+</html>
