@@ -161,7 +161,7 @@ export class WormEnv {
     this.weaponPool =
       typeof settings.weaponPool === "string"
         ? settings.weaponPool === "direct"
-          ? directFire(this.engine)
+          ? this.#directOrEverything(settings.slots ?? 5)
           : null
         : settings.weaponPool;
     this.weights = settings.weights;
@@ -203,6 +203,27 @@ export class WormEnv {
    * own generator, so a worker can loop `reset()` and still replay any episode
    * from the seed the returned info reports.
    */
+  /**
+   * The guns, when this mod's guns can be told apart by name; otherwise all of
+   * them, loudly.
+   *
+   * "Direct fire" is a list of weapons this project knows to be safe for a
+   * policy that cannot aim yet. Under a community mod it is a list of names
+   * nothing matches — CS Rewormed's hundred and twenty-nine weapons share not
+   * one name with Liero's forty. Falling back silently would train on
+   * explosives while the run log still said "direct", so it says so instead.
+   */
+  #directOrEverything(slots) {
+    const ids = directFire(this.engine);
+    if (ids.length >= slots) return ids;
+    console.warn(
+      `the direct-fire weapons cannot be named in ${this.engine.settings.name}: ` +
+        `${ids.length} of them matched, and a loadout needs ${slots}. ` +
+        "Training on every weapon instead.",
+    );
+    return null;
+  }
+
   reset({ seed } = {}) {
     const episodeSeed = (seed ?? this.seed) >>> 0;
     this.seed = (episodeSeed + 0x9e3779b9) >>> 0;

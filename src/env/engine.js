@@ -401,7 +401,40 @@ function loadWeaponProfiles(settings, mod) {
 /** The mod every other one borrows from when it ships no art of its own. */
 const BASE_MOD = "liero133";
 
+/** Mods that are not in res.dat, downloaded next to the other artifacts. */
+export const MODS_DIR = new URL("../../artifacts/mods/", import.meta.url);
+
+/**
+ * A mod kept as files rather than inside res.dat.
+ *
+ * Rooms run community mods — the one this project watches is CS Rewormed, off
+ * a GitLab repository — and res.dat only carries the six the client ships. The
+ * two halves of the guarantee are the bundle, which is checksummed, and the
+ * mod, which is whatever the room is set to; so a mod has to be loadable from
+ * wherever it came from, not only from the file the client happens to bundle.
+ */
+function modOnDisk(mod) {
+  const at = new URL(`${mod}/`, MODS_DIR);
+  return existsSync(new URL("mod.json5", at)) ? at : null;
+}
+
 function loadMod(classes, zip, mod) {
+  const onDisk = modOnDisk(mod);
+  if (onDisk) {
+    const settings = classes.Mod.dj(readFileSync(new URL("mod.json5", onDisk), "utf8"));
+    const art = existsSync(new URL("sprites.wlsprt", onDisk))
+      ? readFileSync(new URL("sprites.wlsprt", onDisk))
+      : Buffer.from(zip.get(`mods/${BASE_MOD}/sprites.wlsprt`).Ug());
+    const sprites = classes.Sprites.read(
+      new classes.Reader(
+        new DataView(art.buffer, art.byteOffset, art.byteLength),
+        true,
+      ),
+    );
+    settings.ba = sprites.ba;
+    settings.Ha = sprites.bj;
+    return settings.normalize();
+  }
   const entry = (name, from = mod) => {
     const found = zip.get(`mods/${from}/${name}`);
     if (!found) throw new Error(`res.dat has no mods/${from}/${name}`);

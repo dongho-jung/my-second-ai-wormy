@@ -19,7 +19,8 @@
     "play": "node scripts/play.js",
     "weapons": "node scripts/profile-weapons.js",
     "record": "node src/live/record.js",
-    "clone": "node scripts/clone.js"
+    "clone": "node scripts/clone.js",
+    "mods": "node scripts/fetch-mods.js"
   },
   "dependencies": {
     "playwright": "1.63.0"
