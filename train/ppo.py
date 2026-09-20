@@ -121,6 +121,11 @@ def parse_args(argv=None):
                             "finding their feet is a hint, not an authority")
     shown.add_argument("--bc-idle-share", type=float, default=0.2,
                        help="most of a recording is frames with nothing pressed; thin them to this")
+    shown.add_argument("--bc-max-frames", type=int, default=30_000,
+                       help="how many recorded frames to hold at once. Each carries the worm's "
+                            "whole 426x240 view at thirty kilobytes, and they all live on the "
+                            "training device together — an unbounded pile is what ran this "
+                            "machine out of memory, at 227,592 frames and 6.9GB")
     shown.add_argument("--bc-rescan", type=int, default=40,
                        help="updates between re-reading the directory, so a match played now is "
                             "learned from without restarting anything")
@@ -376,7 +381,11 @@ def main(argv=None):
 
     def reload_demos():
         nonlocal shown, shown_at
-        found = demo_store.load(Path(args.demos), expect=expect) if args.bc_coef > 0 else None
+        found = (
+            demo_store.load(Path(args.demos), expect=expect, limit=args.bc_max_frames)
+            if args.bc_coef > 0
+            else None
+        )
         shown = found.thin_idle(args.bc_idle_share) if found else None
         shown_at = updates
         if shown is not None:

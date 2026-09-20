@@ -106,19 +106,32 @@ class Demos:
         )
 
 
-def load(directory: Path, only: str | None = None, expect: dict | None = None) -> Demos | None:
+def load(
+    directory: Path,
+    only: str | None = None,
+    expect: dict | None = None,
+    limit: int | None = None,
+) -> Demos | None:
     """Read the recordings in a directory, or None when there are none to read.
 
     `expect` is the shape a caller already has — a recording taken with a
     different observation is skipped rather than reshaped into nonsense.
+
+    `limit` caps how many frames are held. Every frame carries the worm's whole
+    426x240 view, thirty kilobytes of it, and all of them live in memory at once
+    on the training device — so an afternoon of watching a busy room is tens of
+    gigabytes, and the machine runs out. Newest first, because the recent play
+    is the play worth keeping, and the cloning weight stops rising at twenty
+    thousand frames anyway.
     """
-    metas = sorted(Path(directory).glob("*.json"))
+    metas = sorted(Path(directory).glob("*.json"), reverse=True)
     if only:
         metas = [path for path in metas if path.stem == only]
     shape = None
     if expect:
         shape = (expect["vectorSize"], expect["patchCells"], expect["mapCells"], expect["heads"])
     first = None
+    kept = 0
     skipped_mods = set()
     vectors, patches, maps, heads, sources = [], [], [], [], []
     for meta_path in metas:
@@ -153,6 +166,15 @@ def load(directory: Path, only: str | None = None, expect: dict | None = None) -
         if count == 0:
             continue
         raw = raw[: count * size].reshape(count, size)
+        if limit is not None:
+            room = limit - kept
+            if room <= 0:
+                break
+            if count > room:
+                # The tail of a file is its most recent play.
+                raw = raw[count - room :]
+                count = room
+        kept += count
         at = meta["vectorSize"] * 4
         vectors.append(raw[:, :at].copy().view(np.float32).reshape(count, -1))
         patches.append(raw[:, at : at + meta["patchCells"]].copy())
@@ -170,11 +192,11 @@ def load(directory: Path, only: str | None = None, expect: dict | None = None) -
     if not vectors:
         return None
     every = Demos(
-        np.concatenate(vectors),
-        np.concatenate(patches),
-        np.concatenate(maps),
-        np.concatenate(heads),
-        sources,
+        np.concatenate(vectors[::-1]),
+        np.concatenate(patches[::-1]),
+        np.concatenate(maps[::-1]),
+        np.concatenate(heads[::-1]),
+        sources[::-1],
         first,
     )
     return every.finite()
