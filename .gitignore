@@ -2,3 +2,7 @@ node_modules/
 .ai-memory
 artifacts/
 *.log
+
+# Python leaves these beside the trainer; they are not source.
+__pycache__/
+*.pyc
