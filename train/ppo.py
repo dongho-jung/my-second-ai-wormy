@@ -72,7 +72,12 @@ def parse_args(argv=None):
     learn.add_argument("--clip", type=float, default=0.2)
     learn.add_argument("--epochs", type=int, default=2)
     learn.add_argument("--minibatches", type=int, default=2)
-    learn.add_argument("--entropy", type=float, default=0.01)
+    learn.add_argument("--entropy", type=float, default=0.01,
+                       help="how much it is paid to stay undecided, at the start")
+    learn.add_argument("--entropy-final", type=float, default=0.001,
+                       help="and at the end. Held at the start value it never commits: after 33M "
+                            "steps a run at a flat 0.01 was still at 83%% of maximum entropy, which "
+                            "is a policy still mashing buttons")
     learn.add_argument("--value-coef", type=float, default=0.5)
     learn.add_argument("--max-grad-norm", type=float, default=0.5)
     learn.add_argument("--seed", type=int, default=1)
@@ -224,6 +229,7 @@ def main(argv=None):
             "gamma": args.gamma,
             "clip": args.clip,
             "entropy": args.entropy,
+            "entropyFinal": args.entropy_final,
             "resumedFrom": resumed_from,
             "resumedAt": resumed_at,
         },
@@ -276,6 +282,12 @@ def main(argv=None):
 
     try:
         while total_steps - resumed_at < args.total_steps:
+            # Exploration is worth paying for early and worth stopping later:
+            # the bonus is a fixed size while the advantages are normalised, so
+            # a coefficient that does not come down eventually outweighs
+            # whatever the policy has learned and holds it at random.
+            progress = min(1.0, max(0.0, (total_steps - resumed_at) / max(1, args.total_steps)))
+            entropy_coef = args.entropy + (args.entropy_final - args.entropy) * progress
             rollout_started = time.perf_counter()
             env_seconds = 0.0
             for step in range(args.steps):
@@ -352,7 +364,7 @@ def main(argv=None):
                     policy_loss = -torch.min(unclipped, clipped).mean()
                     value_loss = 0.5 * (value - flat_ret[take]).pow(2).mean()
                     entropy_loss = entropy.mean()
-                    loss = policy_loss + args.value_coef * value_loss - args.entropy * entropy_loss
+                    loss = policy_loss + args.value_coef * value_loss - entropy_coef * entropy_loss
                     optimiser.zero_grad(set_to_none=True)
                     loss.backward()
                     nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
@@ -389,6 +401,7 @@ def main(argv=None):
                 policyLoss=losses["policy"],
                 valueLoss=losses["value"],
                 entropy=losses["entropy"],
+                entropyCoef=entropy_coef,
                 clipFraction=losses["clipped"],
                 approxKL=losses["kl"],
                 explainedVariance=explained,

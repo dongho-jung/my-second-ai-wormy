@@ -15,7 +15,14 @@ import { actionFromHeads, ACTION_HEADS } from "./actions.js";
 import { PATCH_CELLS } from "./observation.js";
 import { WormEnv } from "./env.js";
 
-/** Per-episode numbers, in the order they are written. Averaged over the worms. */
+/**
+ * Per-episode numbers, in the order they are written, averaged over the worms.
+ *
+ * The `from*` half is the reward broken into the terms it is made of. Without
+ * it a run reports one number going up or down and no way to tell whether it is
+ * winning fights or collecting an exploration bonus for tunnelling — which is
+ * the first question anyone asks when the behaviour looks wrong.
+ */
 export const EPISODE_STATS = [
   "steps",
   "reward",
@@ -26,8 +33,37 @@ export const EPISODE_STATS = [
   "deaths",
   "stuckSteps",
   "cellsVisited",
+  "fromDamageDealt",
+  "fromDamageTaken",
+  "fromKill",
+  "fromDeath",
+  "fromExplore",
+  "fromRevisit",
+  "fromStuck",
+  "fromGoal",
   "seed",
 ];
+
+// What each of them is called in a worm's running totals. Written by name so
+// adding one cannot silently shift every number after it.
+const STAT_SOURCE = {
+  reward: "reward",
+  damageDealt: "damageDealt",
+  damageTaken: "damageTaken",
+  selfDamage: "selfDamage",
+  kills: "killed",
+  deaths: "died",
+  stuckSteps: "stuckSteps",
+  cellsVisited: "cellsVisited",
+  fromDamageDealt: "fromDamageDealt",
+  fromDamageTaken: "fromDamageTaken",
+  fromKill: "fromKill",
+  fromDeath: "fromDeath",
+  fromExplore: "fromExplore",
+  fromRevisit: "fromRevisit",
+  fromStuck: "fromStuck",
+  fromGoal: "fromGoal",
+};
 
 export const HEADS = ACTION_HEADS.length;
 
@@ -159,16 +195,11 @@ export class VecWormEnv {
     const mean = (field) =>
       totals.reduce((sum, one) => sum + (one[field] ?? 0), 0) / totals.length;
     const at = index * EPISODE_STATS.length;
-    this.stats[at] = env.elapsedSteps ?? env.episodeTicks / env.frameskip;
-    this.stats[at + 1] = mean("reward");
-    this.stats[at + 2] = mean("damageDealt");
-    this.stats[at + 3] = mean("damageTaken");
-    this.stats[at + 4] = mean("selfDamage");
-    this.stats[at + 5] = mean("killed");
-    this.stats[at + 6] = mean("died");
-    this.stats[at + 7] = mean("stuckSteps");
-    this.stats[at + 8] = mean("cellsVisited");
-    this.stats[at + 9] = env.episodeSeed;
+    for (const [offset, field] of EPISODE_STATS.entries()) {
+      if (field === "steps") this.stats[at + offset] = env.episodeTicks / env.frameskip;
+      else if (field === "seed") this.stats[at + offset] = env.episodeSeed;
+      else this.stats[at + offset] = mean(STAT_SOURCE[field]);
+    }
   }
 
   /** What a consumer needs to know to read the buffers. */
