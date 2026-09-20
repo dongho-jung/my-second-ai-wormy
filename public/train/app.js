@@ -19,6 +19,10 @@ const SERIES = {
   stuckSteps: { label: "steps stuck", good: "down" },
   cellsVisited: { label: "ground covered", good: "up" },
   entropy: { label: "entropy: how undecided it still is" },
+  demoAgreement: { label: "agrees with recorded play", good: "up" },
+  demoFrames: { label: "frames of recorded play", good: "up" },
+  bcLoss: { label: "disagreement with recorded play", good: "down" },
+  learningRate: { label: "learning rate" },
   policyLoss: { label: "policy loss", good: "down" },
   valueLoss: { label: "value loss", good: "down" },
   explainedVariance: { label: "explained variance", good: "up" },
@@ -55,6 +59,8 @@ const FIGURES = [
   ["deaths", "deaths", (value) => value.toFixed(2)],
   ["selfDamage", "self damage", (value) => value.toFixed(0)],
   ["stuckSteps", "stuck", (value) => value.toFixed(0)],
+  ["demoFrames", "your frames", (value) => count(value)],
+  ["demoAgreement", "agrees with you", (value) => `${(value * 100).toFixed(0)}%`],
 ];
 
 const STATUS = {

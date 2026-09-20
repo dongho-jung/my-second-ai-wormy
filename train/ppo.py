@@ -24,6 +24,7 @@ from torch import nn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import demos as demo_store
 from policy import WormPolicy
 from run import Run
 from workers import REPO, WorkerPool
@@ -75,7 +76,7 @@ def parse_args(argv=None):
                             "at a fixed rate it settled at a KL of 0.001, a tenth of what PPO normally "
                             "does, and the combat numbers went flat while it crawled. The rate is "
                             "nudged to hit this instead. 0 turns it off")
-    learn.add_argument("--lr-range", type=str, default="1e-5,3e-3",
+    learn.add_argument("--lr-range", type=str, default="1e-5,1e-3",
                        help="how far the rate may be nudged")
     learn.add_argument("--gamma", type=float, default=0.99)
     learn.add_argument("--lam", type=float, default=0.95)
@@ -91,6 +92,27 @@ def parse_args(argv=None):
     learn.add_argument("--value-coef", type=float, default=0.5)
     learn.add_argument("--max-grad-norm", type=float, default=0.5)
     learn.add_argument("--seed", type=int, default=1)
+
+    shown = parser.add_argument_group("learning from recorded play")
+    shown.add_argument("--demos", default=str(REPO / "artifacts" / "demos"),
+                       help="recordings of people playing, as `npm run record` writes them")
+    shown.add_argument("--bc-coef", type=float, default=0.05,
+                       help="how much of each update is spent agreeing with the recordings, once "
+                            "there are enough of them. The cloning loss is a sum of seven "
+                            "cross-entropies and starts near 6; the policy loss, against normalised "
+                            "advantages, is nearer 0.02. At 0.5 the recordings were pulling a "
+                            "hundred times harder than the reward, and a run duly memorised 2,571 "
+                            "frames to 99.9% and learned to stand still for two thirds of a match. "
+                            "0 ignores them")
+    shown.add_argument("--bc-full-frames", type=int, default=20_000,
+                       help="how many frames of play the coefficient above is worth in full. Below "
+                            "it the weight is scaled down in proportion: a few minutes of somebody "
+                            "finding their feet is a hint, not an authority")
+    shown.add_argument("--bc-idle-share", type=float, default=0.2,
+                       help="most of a recording is frames with nothing pressed; thin them to this")
+    shown.add_argument("--bc-rescan", type=int, default=40,
+                       help="updates between re-reading the directory, so a match played now is "
+                            "learned from without restarting anything")
 
     where = parser.add_argument_group("where it goes")
     where.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
@@ -258,6 +280,7 @@ def main(argv=None):
             "mod": layout.mod,
             "lr": args.lr,
             "targetKL": args.target_kl,
+            "bcCoef": args.bc_coef,
             "gamma": args.gamma,
             "clip": args.clip,
             "entropy": args.entropy,
@@ -301,6 +324,34 @@ def main(argv=None):
     next_m = torch.as_tensor(maps, device=device) if use_map else None
     next_done = torch.zeros(slots, device=device)
 
+    # Recorded play, folded into every update rather than left in a file
+    # nothing reads. Re-read as the run goes, so somebody playing right now is
+    # being learned from within a minute.
+    expect = {
+        "vectorSize": layout.vector_size,
+        "patchCells": layout.patch_cells if use_patch else 0,
+        "mapCells": layout.map_cells if use_map else 0,
+        "heads": len(layout.head_sizes),
+    }
+    shown = None
+    shown_at = -1
+
+    def reload_demos():
+        nonlocal shown, shown_at
+        found = demo_store.load(Path(args.demos), expect=expect) if args.bc_coef > 0 else None
+        shown = found.thin_idle(args.bc_idle_share) if found else None
+        shown_at = updates
+        if shown is not None:
+            return dict(
+                vectors=torch.as_tensor(shown.vectors, device=device),
+                patches=torch.as_tensor(shown.patches, device=device) if use_patch else None,
+                maps=torch.as_tensor(shown.maps, device=device) if use_map else None,
+                heads=torch.as_tensor(shown.heads.astype(np.int64), device=device),
+                acting=shown.acting,
+                count=len(shown),
+            )
+        return None
+
     finished = []          # episodes that ended since the last update
     # The last policy is not the best one: self-play wanders, and a run watched
     # afterwards should be the best it ever played, not wherever it happened to
@@ -314,6 +365,21 @@ def main(argv=None):
     # than starting again at zero.
     total_steps = resumed_at
     updates = 0
+    demo_batch = reload_demos()
+
+    def demo_weight():
+        """Trust the recordings in proportion to how many there are."""
+        if not demo_batch or args.bc_coef <= 0:
+            return 0.0
+        return args.bc_coef * min(1.0, demo_batch["acting"] / max(1, args.bc_full_frames))
+
+    if demo_batch:
+        print(
+            f"learning from {demo_batch['count']:,} recorded frames "
+            f"({demo_batch['acting']:,} with something pressed), "
+            f"at weight {demo_weight():.4f} of {args.bc_coef}",
+            flush=True,
+        )
     started = time.perf_counter()
     batch = args.steps * slots
     minibatch = max(1, batch // args.minibatches)
@@ -324,6 +390,7 @@ def main(argv=None):
             # the bonus is a fixed size while the advantages are normalised, so
             # a coefficient that does not come down eventually outweighs
             # whatever the policy has learned and holds it at random.
+            bc_weight = demo_weight()
             progress = min(1.0, max(0.0, (total_steps - resumed_at) / max(1, args.total_steps)))
             entropy_coef = args.entropy + (args.entropy_final - args.entropy) * progress
             rollout_started = time.perf_counter()
@@ -391,7 +458,14 @@ def main(argv=None):
             # Kept on the device and read once at the end: turning a loss into a
             # Python float waits for the GPU, and doing that five times per
             # minibatch is most of an update spent synchronising.
-            names = ("policy", "value", "entropy", "clipped", "kl")
+            if args.bc_coef > 0 and updates - shown_at >= args.bc_rescan:
+                before = demo_batch["count"] if demo_batch else 0
+                demo_batch = reload_demos()
+                after = demo_batch["count"] if demo_batch else 0
+                if after != before:
+                    run.note(f"recorded play: {after:,} frames to learn from")
+                    print(f"recordings now hold {after:,} frames", flush=True)
+            names = ("policy", "value", "entropy", "clipped", "kl", "bc", "bcAgree")
             running_losses = torch.zeros(len(names), device=device)
             passes = 0
             for _ in range(args.epochs):
@@ -412,7 +486,40 @@ def main(argv=None):
                     policy_loss = -torch.min(unclipped, clipped).mean()
                     value_loss = 0.5 * (value - flat_ret[take]).pow(2).mean()
                     entropy_loss = entropy.mean()
-                    loss = policy_loss + args.value_coef * value_loss - entropy_coef * entropy_loss
+                    # Agreeing with what a person did, alongside being paid
+                    # for the outcome. The reward says what is good; the
+                    # recordings say what to try, which is the half exploration
+                    # is worst at — nothing random ever throws the rope.
+                    bc_loss = torch.zeros((), device=device)
+                    bc_agree = torch.zeros((), device=device)
+                    if demo_batch is not None:
+                        pick = torch.randint(
+                            0, demo_batch["count"], (min(minibatch, demo_batch["count"]),),
+                            device=device,
+                        )
+                        shown_logits, _ = policy(
+                            demo_batch["vectors"][pick],
+                            demo_batch["patches"][pick] if use_patch else None,
+                            demo_batch["maps"][pick] if use_map else None,
+                        )
+                        target = demo_batch["heads"][pick]
+                        bc_loss = sum(
+                            nn.functional.cross_entropy(head, target[:, at])
+                            for at, head in enumerate(shown_logits)
+                        )
+                        with torch.no_grad():
+                            bc_agree = torch.stack(
+                                [
+                                    (head.argmax(dim=1) == target[:, at]).to(torch.float32).mean()
+                                    for at, head in enumerate(shown_logits)
+                                ]
+                            ).mean()
+                    loss = (
+                        policy_loss
+                        + args.value_coef * value_loss
+                        - entropy_coef * entropy_loss
+                        + bc_weight * bc_loss
+                    )
                     optimiser.zero_grad(set_to_none=True)
                     loss.backward()
                     nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
@@ -424,7 +531,18 @@ def main(argv=None):
                                 value_loss.detach(),
                                 entropy_loss.detach(),
                                 ((ratio - 1).abs() > args.clip).to(torch.float32).mean(),
-                                (flat_logp[take] - logp).mean(),
+                                # The signed mean of the log-ratio is an
+                                # estimator that cancels itself out: a policy
+                                # that moved a long way in both directions
+                                # reports nearly zero, and a controller reading
+                                # it keeps raising the rate until the updates
+                                # are scrambling what was learned — which is
+                                # what happened, entropy climbing while the
+                                # bonus for it was being annealed away. This is
+                                # the standard non-negative estimator instead.
+                                ((ratio - 1) - (logp - flat_logp[take])).mean(),
+                                bc_loss.detach(),
+                                bc_agree,
                             )
                         )
                     passes += 1
@@ -467,6 +585,12 @@ def main(argv=None):
                 clipFraction=losses["clipped"],
                 approxKL=losses["kl"],
                 learningRate=learning_rate,
+                bcLoss=losses["bc"],
+                # How often it would press what the person pressed. This is the
+                # number that says whether playing a match made any difference.
+                demoAgreement=losses["bcAgree"],
+                demoFrames=demo_batch["count"] if demo_batch else 0,
+                demoWeight=bc_weight,
                 explainedVariance=explained,
                 meanReward=float(rews.mean()) * args.steps,
             )

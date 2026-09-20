@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How the Worm Decides</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700&family=IBM+Plex+Mono:wght@400;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+  :root {
+    /* Taken off the game's own terrain: burnt dirt, cold rock, dug-out dark. */
+    --dirt: #a8521a;
+    --dirt-soft: #c98a4d;
+    --rock: #6a7482;
+    --signal: #2f7a46;
+    --ground: #f4f2ef;
+    --raised: #ffffff;
+    --edge: #ddd7cf;
+    --ink: #221d18;
+    --ink-soft: #5d554c;
+    --shadow: 0 1px 2px rgb(34 29 24 / 0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --dirt: #d9832f;
+      --dirt-soft: #8a5526;
+      --rock: #96a1b0;
+      --signal: #77bd82;
+      --ground: #15110e;
+      --raised: #1e1915;
+      --edge: #342c25;
+      --ink: #ece5da;
+      --ink-soft: #a2978a;
+      --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    --dirt: #d9832f;
+    --dirt-soft: #8a5526;
+    --rock: #96a1b0;
+    --signal: #77bd82;
+    --ground: #15110e;
+    --raised: #1e1915;
+    --edge: #342c25;
+    --ink: #ece5da;
+    --ink-soft: #a2978a;
+    --shadow: none;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding-block: clamp(2rem, 6vw, 4rem);
+    padding-inline: 20px;
+    background: var(--ground);
+    color: var(--ink);
+    font: 400 1.0625rem/1.65 "Source Serif 4", Georgia, serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page { max-width: 62rem; margin-inline: auto; display: flex; flex-direction: column; gap: clamp(2.5rem, 5vw, 3.75rem); }
+
+  .eyebrow {
+    font: 600 0.6875rem/1 "IBM Plex Mono", monospace;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--dirt);
+  }
+
+  h1 {
+    font: 700 clamp(2rem, 6vw, 3rem)/1.05 Archivo, system-ui, sans-serif;
+    letter-spacing: -0.02em;
+    margin: 0.5rem 0 0;
+    text-wrap: balance;
+  }
+  h2 {
+    font: 700 clamp(1.25rem, 3vw, 1.5rem)/1.2 Archivo, system-ui, sans-serif;
+    letter-spacing: -0.01em;
+    margin: 0 0 0.75rem;
+    text-wrap: balance;
+  }
+  h3 {
+    font: 600 0.75rem/1 "IBM Plex Mono", monospace;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0 0 0.5rem;
+  }
+  p { margin: 0 0 1rem; max-width: 62ch; }
+  p:last-child { margin-bottom: 0; }
+  header p { font-size: 1.1875rem; color: var(--ink-soft); }
+  section > p + p { margin-top: 0; }
+
+  code, .num { font-family: "IBM Plex Mono", monospace; font-size: 0.9em; }
+  code { color: var(--dirt); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .figure-wrap { overflow-x: auto; }
+  figure { margin: 0; }
+  svg { display: block; max-width: 100%; height: auto; min-width: 560px; margin-inline: auto; }
+  figcaption {
+    margin-top: 1rem;
+    font-size: 0.9375rem;
+    color: var(--ink-soft);
+    max-width: 62ch;
+    margin-inline: auto;
+  }
+
+  /* Three input descriptions, one object repeated. */
+  .inputs { display: grid; gap: 1px; background: var(--edge); border: 1px solid var(--edge); }
+  @media (min-width: 720px) { .inputs { grid-template-columns: repeat(3, 1fr); } }
+  .inputs > div { background: var(--raised); padding: 1.25rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  .inputs .shape { font: 600 1.375rem/1 "IBM Plex Mono", monospace; color: var(--dirt); font-variant-numeric: tabular-nums; }
+  .inputs p { font-size: 0.9375rem; color: var(--ink-soft); margin: 0; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 0.9375rem; }
+  caption { text-align: left; font: 600 0.75rem/1 "IBM Plex Mono", monospace; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); padding-bottom: 0.75rem; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem 0.5rem 0; border-bottom: 1px solid var(--edge); }
+  th { font: 600 0.6875rem/1.2 "IBM Plex Mono", monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+  td.n, th.n { text-align: right; font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; padding-right: 0; }
+  tbody tr:last-child td { border-bottom: none; }
+  tfoot td { border-top: 2px solid var(--ink); border-bottom: none; font-weight: 600; padding-top: 0.6rem; }
+  .table-wrap { overflow-x: auto; }
+  .bar { display: block; height: 4px; background: var(--dirt); border-radius: 2px; }
+  .bar.quiet { background: var(--rock); opacity: 0.55; }
+
+  .two { display: grid; gap: clamp(1.5rem, 4vw, 2.5rem); }
+  @media (min-width: 760px) { .two { grid-template-columns: 1fr 1fr; } }
+
+  .note {
+    border-left: 3px solid var(--dirt);
+    padding: 0.125rem 0 0.125rem 1.125rem;
+    color: var(--ink-soft);
+  }
+  .note strong { color: var(--ink); font-weight: 600; }
+
+  dl.terms { display: grid; gap: 0.875rem; margin: 0; }
+  dl.terms > div { display: grid; gap: 0.2rem; }
+  dl.terms dt { font: 600 0.9375rem/1.3 Archivo, system-ui, sans-serif; }
+  dl.terms dd { margin: 0; font-size: 0.9375rem; color: var(--ink-soft); }
+
+  footer { border-top: 1px solid var(--edge); padding-top: 1.25rem; font-size: 0.875rem; color: var(--ink-soft); }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <header>
+    <div class="eyebrow">Deep reinforcement learning · PPO · self-play</div>
+    <h1>How the worm decides</h1>
+    <p>Sixty times a second the game moves. Fifteen times a second a network looks at it and presses keys. This is everything that network sees, everything it computes, and everything it says — with the real shapes at every step.</p>
+  </header>
+
+  <section>
+    <h2>What to call it</h2>
+    <div class="two">
+      <div>
+        <p>It is <strong>deep reinforcement learning</strong>. Nobody labels the right answer; the worm acts, the game pays or charges it, and the network is nudged toward whatever earned more.</p>
+        <p>The particular method is <strong>PPO</strong> — proximal policy optimisation — an actor-critic scheme. The <em>actor</em> picks keys. The <em>critic</em> guesses how the round is going to go, which is what turns a reward that arrives late into a signal about the move that caused it.</p>
+      </div>
+      <dl class="terms">
+        <div>
+          <dt>Self-play</dt>
+          <dd>All three worms in a match are the same network. Whatever one of them learns, it immediately has to face.</dd>
+        </div>
+        <div>
+          <dt>Behavioural cloning</dt>
+          <dd>Recorded human play, folded into the same updates. Reward alone never stumbles onto the rope.</dd>
+        </div>
+        <div>
+          <dt>Frameskip 4</dt>
+          <dd>One decision covers four game ticks, so the network runs at 15 Hz while the world runs at 60.</dd>
+        </div>
+      </dl>
+    </div>
+  </section>
+
+  <section>
+    <h2>What it sees</h2>
+    <p>Three tensors, rebuilt every decision. Two are pictures and go through convolutions; one is a list of numbers and goes through a dense layer.</p>
+    <div class="inputs">
+      <div>
+        <h3>The vector</h3>
+        <span class="shape">144</span>
+        <p>Floats. Health, ammo, aim, sixteen rangefinder rays, where the other worms are and what they are holding.</p>
+      </div>
+      <div>
+        <h3>The patch</h3>
+        <span class="shape">4 × 32 × 32</span>
+        <p>The 64 × 64 pixels around the worm, two pixels per cell: rock, dirt, open air, and any shot in flight.</p>
+      </div>
+      <div>
+        <h3>The map</h3>
+        <span class="shape">4 × 32 × 32</span>
+        <p>The whole 504 × 350 level squeezed onto a grid, as fractions — plus a channel marking where everybody is.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="figure-wrap">
+      <figure>
+        <svg viewBox="0 0 700 838" role="img" aria-label="Three inputs — a 144-number vector, a 4 by 32 by 32 close terrain patch, and a 4 by 32 by 32 whole-map picture — pass through a dense layer and two convolution towers, join into 3264 numbers, go through two 256-wide layers, and split into seven action heads and one value output.">
+          <defs>
+            <marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+            </marker>
+          </defs>
+
+          <g fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5" marker-end="url(#tip)">
+            <line x1="118" y1="96" x2="118" y2="140"></line>
+            <line x1="350" y1="96" x2="350" y2="140"></line>
+            <line x1="582" y1="96" x2="582" y2="140"></line>
+            <line x1="350" y1="196" x2="350" y2="240"></line>
+            <line x1="582" y1="196" x2="582" y2="240"></line>
+            <path d="M 118 196 L 118 330 L 330 330"></path>
+            <path d="M 350 296 L 350 330"></path>
+            <path d="M 582 296 L 582 330 L 370 330"></path>
+            <line x1="350" y1="358" x2="350" y2="400"></line>
+            <line x1="350" y1="456" x2="350" y2="498"></line>
+            <path d="M 350 554 L 350 588 L 190 588 L 190 620"></path>
+            <path d="M 350 554 L 350 588 L 520 588 L 520 620"></path>
+          </g>
+
+          <g font-family="'IBM Plex Mono', monospace" font-size="11" fill="currentColor" opacity="0.72" text-anchor="middle">
+            <text x="146" y="122">144</text>
+            <text x="382" y="122">4×32×32</text>
+            <text x="614" y="122">4×32×32</text>
+            <text x="382" y="222">16×15×15</text>
+            <text x="614" y="222">16×15×15</text>
+            <text x="162" y="322">128</text>
+            <text x="350" y="322">1568</text>
+            <text x="566" y="322">1568</text>
+            <text x="380" y="382">3264</text>
+            <text x="380" y="482">256</text>
+            <text x="380" y="578">256</text>
+          </g>
+
+          <!-- inputs -->
+          <g>
+            <rect x="24" y="24" width="188" height="72" rx="3" fill="none" stroke="var(--dirt)" stroke-width="2"></rect>
+            <rect x="256" y="24" width="188" height="72" rx="3" fill="none" stroke="var(--dirt)" stroke-width="2"></rect>
+            <rect x="488" y="24" width="188" height="72" rx="3" fill="none" stroke="var(--dirt)" stroke-width="2"></rect>
+            <g font-family="Archivo, system-ui, sans-serif" font-size="14" font-weight="700" fill="currentColor" text-anchor="middle">
+              <text x="118" y="56">the vector</text>
+              <text x="350" y="56">the patch</text>
+              <text x="582" y="56">the map</text>
+            </g>
+            <g font-family="'IBM Plex Mono', monospace" font-size="11" fill="currentColor" opacity="0.7" text-anchor="middle">
+              <text x="118" y="76">health, ammo, rays, foes</text>
+              <text x="350" y="76">64 × 64 px around it</text>
+              <text x="582" y="76">the whole level</text>
+            </g>
+          </g>
+
+          <!-- first transform row -->
+          <g fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="24" y="140" width="188" height="56" rx="3"></rect>
+            <rect x="256" y="140" width="188" height="56" rx="3"></rect>
+            <rect x="488" y="140" width="188" height="56" rx="3"></rect>
+            <rect x="256" y="240" width="188" height="56" rx="3"></rect>
+            <rect x="488" y="240" width="188" height="56" rx="3"></rect>
+          </g>
+          <g font-family="'IBM Plex Mono', monospace" font-size="12" fill="currentColor" text-anchor="middle">
+            <text x="118" y="166">dense 144 → 128</text>
+            <text x="350" y="166">conv 4 → 16</text>
+            <text x="582" y="166">conv 4 → 16</text>
+            <text x="350" y="266">conv 16 → 32</text>
+            <text x="582" y="266">conv 16 → 32</text>
+          </g>
+          <g font-family="'IBM Plex Mono', monospace" font-size="10" fill="currentColor" opacity="0.6" text-anchor="middle">
+            <text x="118" y="184">ReLU</text>
+            <text x="350" y="184">4 × 4, stride 2</text>
+            <text x="582" y="184">4 × 4, stride 2</text>
+            <text x="350" y="284">3 × 3, stride 2</text>
+            <text x="582" y="284">3 × 3, stride 2</text>
+          </g>
+
+          <!-- join -->
+          <line x1="118" y1="330" x2="582" y2="330" stroke="currentColor" stroke-width="1.5" opacity="0.5"></line>
+          <text x="350" y="350" font-family="Archivo, system-ui, sans-serif" font-size="12" font-weight="700" fill="currentColor" text-anchor="middle" letter-spacing="0.08em">JOINED</text>
+
+          <!-- trunk -->
+          <g fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="180" y="400" width="340" height="56" rx="3"></rect>
+            <rect x="180" y="498" width="340" height="56" rx="3"></rect>
+          </g>
+          <g font-family="'IBM Plex Mono', monospace" font-size="12" fill="currentColor" text-anchor="middle">
+            <text x="350" y="426">dense 3264 → 256</text>
+            <text x="350" y="524">dense 256 → 256</text>
+          </g>
+          <g font-family="'IBM Plex Mono', monospace" font-size="10" fill="currentColor" opacity="0.6" text-anchor="middle">
+            <text x="350" y="444">ReLU — 89% of every weight in the network</text>
+            <text x="350" y="542">ReLU</text>
+          </g>
+
+          <!-- outputs -->
+          <rect x="60" y="620" width="260" height="88" rx="3" fill="none" stroke="var(--dirt)" stroke-width="2"></rect>
+          <rect x="390" y="620" width="260" height="88" rx="3" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.55"></rect>
+          <g font-family="Archivo, system-ui, sans-serif" font-size="14" font-weight="700" fill="currentColor" text-anchor="middle">
+            <text x="190" y="648">the actor</text>
+            <text x="520" y="648">the critic</text>
+          </g>
+          <g font-family="'IBM Plex Mono', monospace" font-size="11" fill="currentColor" opacity="0.72" text-anchor="middle">
+            <text x="190" y="670">7 heads, 18 logits</text>
+            <text x="190" y="688">one key choice each</text>
+            <text x="520" y="670">1 number</text>
+            <text x="520" y="688">how this round is going</text>
+          </g>
+
+          <!-- the seven heads -->
+          <g font-family="'IBM Plex Mono', monospace" font-size="10" fill="currentColor" text-anchor="middle">
+            <g fill="none" stroke="var(--dirt)" stroke-width="1.5" opacity="0.8">
+              <rect x="24" y="744" width="84" height="40" rx="3"></rect>
+              <rect x="118" y="744" width="84" height="40" rx="3"></rect>
+              <rect x="212" y="744" width="70" height="40" rx="3"></rect>
+              <rect x="292" y="744" width="70" height="40" rx="3"></rect>
+              <rect x="372" y="744" width="70" height="40" rx="3"></rect>
+              <rect x="452" y="744" width="84" height="40" rx="3"></rect>
+              <rect x="546" y="744" width="98" height="40" rx="3"></rect>
+            </g>
+            <g font-weight="600">
+              <text x="66" y="764">move</text>
+              <text x="160" y="764">aim</text>
+              <text x="247" y="764">fire</text>
+              <text x="327" y="764">jump</text>
+              <text x="407" y="764">dig</text>
+              <text x="494" y="764">rope</text>
+              <text x="595" y="764">weapon</text>
+            </g>
+            <g opacity="0.65">
+              <text x="66" y="778">–  ←  →</text>
+              <text x="160" y="778">–  ↑  ↓</text>
+              <text x="247" y="778">no / yes</text>
+              <text x="327" y="778">no / yes</text>
+              <text x="407" y="778">no / yes</text>
+              <text x="494" y="778">– throw drop</text>
+              <text x="595" y="778">–  next  prev</text>
+            </g>
+            <line x1="190" y1="708" x2="190" y2="732" stroke="currentColor" stroke-width="1.5" opacity="0.5" marker-end="url(#tip)"></line>
+            <text x="350" y="812" font-size="11" fill="currentColor" opacity="0.7">648 possible actions, described by 18 numbers</text>
+          </g>
+        </svg>
+        <figcaption>Each edge carries the shape that actually moves along it. The two convolution towers are identical in shape and different in what they look at: one sees nine worm-heights of ground, the other sees the entire level.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>Inside the 144</h2>
+    <p>The vector is not a learned embedding — every slot is a measurement with a name, written by hand and checked by a test. This is the whole list.</p>
+    <div class="table-wrap">
+      <table>
+        <caption>the vector, field by field</caption>
+        <thead>
+          <tr><th class="n">at</th><th class="n">size</th><th>field</th><th>what it is</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="n">0</td><td class="n">16</td><td><code>rays</code></td><td>Distance to the first solid pixel, sixteen directions, clockwise from due right</td></tr>
+          <tr><td class="n">16</td><td class="n">1</td><td><code>health</code></td><td>Out of 100</td></tr>
+          <tr><td class="n">17</td><td class="n">2</td><td><code>velocity</code></td><td>Pixels per tick, x and y</td></tr>
+          <tr><td class="n">19</td><td class="n">2</td><td><code>aim</code></td><td>Cosine and sine, so the wrap at π is not a cliff</td></tr>
+          <tr><td class="n">21</td><td class="n">1</td><td><code>facing</code></td><td>−1 left, +1 right</td></tr>
+          <tr><td class="n">22</td><td class="n">5</td><td><code>contacts</code></td><td>The engine's own probe counts on four sides, and whether it is being lifted over a bump</td></tr>
+          <tr><td class="n">27</td><td class="n">8</td><td><code>walk</code></td><td>One step left and right: clear, a ledge, dirt, or rock</td></tr>
+          <tr><td class="n">35</td><td class="n">15</td><td><code>weapons</code></td><td>Five slots — ammo left, ready to fire, selected</td></tr>
+          <tr><td class="n">50</td><td class="n">5</td><td><code>weaponsReload</code></td><td>How far through reloading each slot is</td></tr>
+          <tr><td class="n">55</td><td class="n">10</td><td><code>weapon</code></td><td>What the held weapon does — speed, drop, range, spread, damage near and far, what it does to you</td></tr>
+          <tr><td class="n">65</td><td class="n">5</td><td><code>rope</code></td><td>Out, attached, where it is, how long</td></tr>
+          <tr><td class="n">70</td><td class="n">38</td><td><code>foes</code></td><td>Two worms × nineteen: alive, where, how far, which way, health, speed — and what each is holding</td></tr>
+          <tr><td class="n">108</td><td class="n">24</td><td><code>projectiles</code></td><td>Three nearest shots × eight: where, where to, and how much each is going to hurt</td></tr>
+          <tr><td class="n">132</td><td class="n">12</td><td><code>pickups</code></td><td>Three nearest crates: where, and whether it is health or a weapon</td></tr>
+        </tbody>
+        <tfoot><tr><td class="n">—</td><td class="n">144</td><td colspan="2">and the size follows the player count: 125 in a duel, 182 in a five-way</td></tr></tfoot>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where the weights are</h2>
+    <div class="two">
+      <div>
+        <p>936,435 parameters, and nearly nine in ten of them sit in a single layer — the one that takes 3,264 joined numbers down to 256. Everything else is rounding.</p>
+        <p class="note"><strong>Why it matters.</strong> If this network ever runs out of capacity, that layer is where to spend more. The convolutions are tiny by comparison, and making them wider would barely change the total.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <caption>parameter budget</caption>
+          <thead><tr><th>layer</th><th class="n">weights</th><th class="n">share</th></tr></thead>
+          <tbody>
+            <tr><td><code>dense 3264 → 256</code><span class="bar" style="width:100%"></span></td><td class="n">835,840</td><td class="n">89.3%</td></tr>
+            <tr><td><code>dense 256 → 256</code><span class="bar quiet" style="width:7.9%"></span></td><td class="n">65,792</td><td class="n">7.0%</td></tr>
+            <tr><td><code>dense 144 → 128</code><span class="bar quiet" style="width:2.2%"></span></td><td class="n">18,560</td><td class="n">2.0%</td></tr>
+            <tr><td><code>conv 16 → 32</code> ×2<span class="bar quiet" style="width:1.1%"></span></td><td class="n">9,280</td><td class="n">1.0%</td></tr>
+            <tr><td><code>action heads</code><span class="bar quiet" style="width:0.6%"></span></td><td class="n">4,626</td><td class="n">0.5%</td></tr>
+            <tr><td><code>conv 4 → 16</code> ×2<span class="bar quiet" style="width:0.2%"></span></td><td class="n">2,080</td><td class="n">0.2%</td></tr>
+            <tr><td><code>value head</code><span class="bar quiet" style="width:0.1%"></span></td><td class="n">257</td><td class="n">0.03%</td></tr>
+          </tbody>
+          <tfoot><tr><td>total</td><td class="n">936,435</td><td class="n">100%</td></tr></tfoot>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Why seven heads and not one</h2>
+    <p>The seven choices multiply out to 648 actions. A single output over all 648 would have to learn walking right and firing as 648 separate facts; seven small choices learn them once each and combine them. It is eighteen numbers instead of 648, and a policy that has learned to walk keeps that while it learns to shoot.</p>
+    <p>Two of the choices are three-way rather than pairs of bits, and that is not tidiness. Holding left and right together is how the engine digs — the same bit the dig key sets. A move head that could ask for both would be asking for something else entirely, so it cannot.</p>
+  </section>
+
+  <section>
+    <h2>What is missing</h2>
+    <p>There is no memory. The network sees the current frame and nothing before it, so it can learn to back off when hurt and to line up a shot, but it cannot hold a plan across seconds, or remember which direction it was shot from, or that somebody went behind that rock a moment ago.</p>
+    <p>That is a property of the shape above, not of how long it trains. Reactive fighting is reachable as drawn; planning is not, and would need recurrence or a stack of recent frames added to the input.</p>
+    <p class="note">The value head currently explains about <strong>65%</strong> of the variance in how rounds turn out. A critic that could not see what mattered would sit near zero — so what is drawn above is carrying most of what decides a match.</p>
+  </section>
+
+  <footer>
+    Wormy II · the same official game bundle the browser runs, checksum <code>b3c7b33c</code>, driven headless at a few thousand times real time.
+  </footer>
+</div>
+
+</body>
+</html>
