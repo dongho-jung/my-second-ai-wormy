@@ -77,8 +77,12 @@ if (values.help) {
 
 const log = createLogger({ scope: "record" });
 const excluded = new Set(
-  values.exclude
-    .split(",")
+  [
+    // Whatever this tab is called. It is here to watch, and a recording of the
+    // watcher is a recording of somebody sitting still in the spectator seat.
+    values.nickname,
+    ...values.exclude.split(","),
+  ]
     .map((name) => name.trim())
     .filter(Boolean),
 );

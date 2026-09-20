@@ -11,6 +11,8 @@ import { CLIENT_SHA256 } from "../src/adapter-v20.js";
 import {
   ASSETS,
   DEFAULT_ENGINE_DIR,
+  DEFAULT_MOD,
+  MODS_DIR,
   loadEngine,
   respawnWorm,
 } from "../src/env/engine.js";
@@ -39,7 +41,9 @@ const absent = Object.values(ASSETS).filter(
 );
 const skip = absent.length
   ? `no engine kit in ${DEFAULT_ENGINE_DIR.pathname}: missing ${absent.join(", ")} — run artifacts/headless-sim/fetch-assets.sh`
-  : false;
+  : !existsSync(new URL(`${DEFAULT_MOD}/mod.json5`, MODS_DIR))
+    ? `no ${DEFAULT_MOD} in ${MODS_DIR.pathname} — run: npm run mods`
+    : false;
 
 const LOADOUT = [0, 2, 3, 5, 10];
 
@@ -104,10 +108,10 @@ test("the headless engine is the same file the live adapter reads", { skip }, as
     CLIENT_SHA256,
     "the physics only transfer while this is the very same bundle",
   );
-  // The mod the rooms are set to. Not the stock one, and not the same weapons:
-  // a policy is trained on whichever game it will actually be played in.
-  assert.equal(engine.settings.name, "Promode ReRevisited");
-  assert.equal(engine.weaponNames.length, 30);
+  // The mod the watched room is set to. Not the stock one, and not the same
+  // weapons: a policy is trained on whichever game it will actually meet.
+  assert.equal(engine.settings.name, "csliero rewormed v0.37");
+  assert.equal(engine.weaponNames.length, 129);
   assert.equal(engine.materialFlags.length, 256);
 });
 
@@ -420,22 +424,30 @@ test("the reward goes to whoever earned it, with a third worm watching", { skip 
 test("weapons are drawn fresh, from the pool the run asked for", { skip }, async () => {
   const engine = await loadEngine();
   const explodes = (id) => engine.settings.O[id].be?.Bd === 0;
-  // Half of the forty do their damage by exploding, and a policy that cannot
-  // aim yet fires those at its own feet. The default pool has none of them.
-  assert.ok(directFire(engine).every((id) => !explodes(id)), "the direct-fire pool must not explode");
+  const guns = directFire(engine);
+  // Plenty of weapons do their damage by exploding, and a policy that cannot
+  // aim yet fires those at its own feet. Where the guns can be named, the
+  // default pool has none of the rest.
+  assert.ok(guns.every((id) => !explodes(id)), "the direct-fire pool must not explode");
   assert.ok(
     engine.settings.O.some((_, id) => explodes(id)),
     "and the mod must have some that do, or this test proves nothing",
   );
 
   const env = new WormEnv(engine, { agents: 3, episodeTicks: 120, seed: 2 });
+  // A community mod names its weapons after real guns and matches none of the
+  // list, and then the honest pool is every weapon rather than an empty one.
+  const named = guns.length >= 5;
+  assert.equal(env.weaponPool === null, !named, "an unnameable pool falls back to all of them");
   const seen = new Set();
   for (let episode = 0; episode < 6; episode++) {
     env.reset();
     for (const loadout of env.loadouts) {
       assert.equal(new Set(loadout).size, 5, "five different weapons");
       for (const id of loadout) {
-        assert.ok(directFire(engine).includes(id), `${engine.weaponNames[id]} is not direct fire`);
+        if (named) {
+          assert.ok(guns.includes(id), `${engine.weaponNames[id]} is not direct fire`);
+        }
         seen.add(id);
       }
     }

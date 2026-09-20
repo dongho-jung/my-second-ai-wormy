@@ -308,15 +308,18 @@ export function respawnWorm(world, worm, loadout) {
  * be the first one's classes.
  */
 /**
- * The mod to train and play under.
+ * The mod to train and play under: the one the watched room is set to.
  *
- * Not the stock one. A room set to Promode ReRevisited is a different game —
- * forty-one weapons against forty, and rebalanced — and a policy trained on
- * Liero 1.33 arrives there having learned the wrong weapons. The whole point of
- * running the official bundle headless is that the two sides match, and the mod
- * is part of what has to match.
+ * Not the stock one, and not one res.dat carries. CS Rewormed has a hundred and
+ * twenty-nine weapons where Liero 1.33 has forty, under its own constants, and
+ * a policy trained on the stock game arrives in that room having learned a
+ * different game entirely. The point of running the official bundle headless is
+ * that both sides are the same simulation; the mod is half of what that means.
+ *
+ * It lives on disk rather than in res.dat, so it has to be fetched first —
+ * `npm run mods` — the same as the level pool.
  */
-export const DEFAULT_MOD = "nkpromode";
+export const DEFAULT_MOD = "cs_rewormed";
 
 export function loadEngine({ dir = DEFAULT_ENGINE_DIR, mod = DEFAULT_MOD } = {}) {
   if (loading) return loading;
@@ -418,8 +421,17 @@ function modOnDisk(mod) {
   return existsSync(new URL("mod.json5", at)) ? at : null;
 }
 
+/** The mods res.dat carries, for telling a typo apart from a missing download. */
+const BUNDLED_MODS = ["csliero", "liero133", "nkpromode", "promode", "sorliero", "webliero"];
+
 function loadMod(classes, zip, mod) {
   const onDisk = modOnDisk(mod);
+  if (!onDisk && !BUNDLED_MODS.includes(mod)) {
+    throw new Error(
+      `no mod called ${mod}: it is not in res.dat and not in ` +
+        `${new URL(`${mod}/`, MODS_DIR).pathname} — run: npm run mods`,
+    );
+  }
   if (onDisk) {
     const settings = classes.Mod.dj(readFileSync(new URL("mod.json5", onDisk), "utf8"));
     const art = existsSync(new URL("sprites.wlsprt", onDisk))
