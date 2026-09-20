@@ -90,7 +90,14 @@ def stock_levels(args):
     """The .lev files to mix in, so training sees the maps a room actually picks."""
     if args.stock_levels <= 0:
         return []
-    found = sorted(Path(args.levels_dir).glob("*.lev"))[: args.stock_levels]
+    # The pool spells them both ways — BATTLEGR.LEV next to SMB.lev — and a
+    # case-sensitive glob quietly drops six of the fifty-two.
+    directory = Path(args.levels_dir)
+    found = sorted(
+        path
+        for path in directory.glob("*")
+        if path.suffix.lower() == ".lev" and path.is_file()
+    )[: args.stock_levels]
     if not found:
         print(f"no .lev files in {args.levels_dir}: training on generated maps alone", flush=True)
     return [str(path) for path in found]
