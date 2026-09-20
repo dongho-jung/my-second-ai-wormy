@@ -188,8 +188,20 @@ const server = createServer((request, response) => {
   json(404, { error: "Not found" });
 });
 await new Promise((resolve, reject) => {
-  server.once("error", reject);
-  server.listen(port, "127.0.0.1", resolve);
+  const bind = (on, then) => {
+    server.removeAllListeners("error");
+    server.once("error", then);
+    server.listen(on, "127.0.0.1", resolve);
+  };
+  // A viewer left behind by a monitor that has since restarted still holds the
+  // port, and the new one cannot see it to stop it. Rather than fail, take any
+  // free port and say which — the address is printed below, and the monitor
+  // reads it from there instead of assuming.
+  bind(port, (error) => {
+    if (error.code !== "EADDRINUSE") return reject(error);
+    process.stderr.write(`port ${port} is taken; using another\n`);
+    bind(0, reject);
+  });
 });
 origin = `http://127.0.0.1:${server.address().port}`;
 process.stderr.write(`viewer ${origin}\n`);

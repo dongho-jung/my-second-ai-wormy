@@ -69,14 +69,21 @@ export async function createMonitorServer({
         if (watching) watching.settled = true;
         resolve(body);
       };
-      watching = { id, child, settled: false, reply: { url: `http://127.0.0.1:${WATCH_PORT}`, run: id } };
+      // The address is whatever the viewer actually bound, not what it was
+      // asked for: it takes another port when the one it wanted is held by a
+      // viewer this monitor did not start and cannot see.
+      watching = { id, child, settled: false, reply: { url: null, run: id } };
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
       const listen = (chunk) => {
         said += chunk;
         // The viewer prints its own address once it is listening; waiting for
         // it means the button never opens a tab onto nothing.
-        if (/viewer http:\/\/\S+/.test(said)) settle(watching.reply);
+        const found = said.match(/viewer (http:\/\/\S+)/);
+        if (found) {
+          if (watching) watching.reply = { ...watching.reply, url: found[1] };
+          settle(watching.reply);
+        }
       };
       child.stdout.on("data", listen);
       child.stderr.on("data", listen);
@@ -223,7 +230,7 @@ export async function createMonitorServer({
         const live = watching && watching.child.exitCode === null;
         return json(200, {
           watching: live ? watching.id : null,
-          url: live ? `http://127.0.0.1:${WATCH_PORT}` : null,
+          url: live ? watching.reply.url : null,
         });
       }
       // What the room watcher is seeing. It is a separate process writing a
