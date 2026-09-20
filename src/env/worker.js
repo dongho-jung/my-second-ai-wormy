@@ -15,6 +15,17 @@ import { EPISODE_STATS, HEADS, VecWormEnv } from "./vec.js";
 
 const config = JSON.parse(process.argv[2] ?? "{}");
 
+// stdout is the frame channel, and nothing else may touch it. `createLogger`
+// writes info lines with console.log, so one log in a helper puts plain text in
+// the middle of a binary stream and the reader waits forever on a frame length
+// that was really the letters "[bi". Everything chatty goes to stderr instead.
+const toStderr = (...parts) =>
+  process.stderr.write(`${parts.map(String).join(" ")}\n`);
+console.log = toStderr;
+console.info = toStderr;
+console.debug = toStderr;
+
+
 function writeFrame(...parts) {
   let bytes = 0;
   for (const part of parts) bytes += part.byteLength;

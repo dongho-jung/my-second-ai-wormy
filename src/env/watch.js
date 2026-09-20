@@ -22,6 +22,17 @@ import { PATCH_CELLS } from "./observation.js";
 const HEADS = ACTION_HEADS.length;
 const MAX_CLIENTS = 8;
 
+// stdout is the frame channel, and nothing else may touch it. `createLogger`
+// writes info lines with console.log, so one log in a helper puts plain text in
+// the middle of a binary stream and the reader waits forever on a frame length
+// that was really the letters "[bi". Everything chatty goes to stderr instead.
+const toStderr = (...parts) =>
+  process.stderr.write(`${parts.map(String).join(" ")}\n`);
+console.log = toStderr;
+console.info = toStderr;
+console.debug = toStderr;
+
+
 const config = JSON.parse(process.argv[2] ?? "{}");
 const port = config.port ?? 8769;
 const speed = config.speed ?? 1;

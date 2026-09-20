@@ -18,11 +18,13 @@ import { createLogger } from "../log.js";
 import {
   DEFAULT_PROFILE,
   attach,
+  findGamePages,
   launchDetached,
-  openWindow,
+  openPage,
   prepareProfile,
 } from "../browser.js";
 import {
+  SPECTATING,
   captchaVisible,
   createRoom,
   dismissHowToPlay,
@@ -39,6 +41,28 @@ import { Controls } from "./controls.js";
 
 const HEADS = ACTION_HEADS.length;
 const LOBBY = "https://www.webliero.com/";
+
+// stdout is the frame channel, and nothing else may touch it. `createLogger`
+// writes info lines with console.log, so one log in a helper puts plain text in
+// the middle of a binary stream and the reader waits forever on a frame length
+// that was really the letters "[bi". Everything chatty goes to stderr instead.
+const toStderr = (...parts) =>
+  process.stderr.write(`${parts.map(String).join(" ")}\n`);
+console.log = toStderr;
+console.info = toStderr;
+console.debug = toStderr;
+
+
+// A dropped CDP call or a dialog that closed itself should cost one decision,
+// not the match. Setup failures still stop, loudly, before any of this matters.
+let playing = false;
+process.on("unhandledRejection", (error) => {
+  if (!playing) {
+    process.stderr.write(`\n${error?.stack ?? error}\n`);
+    process.exit(1);
+  }
+  process.stderr.write(`recovered: ${error?.message ?? error}\n`);
+});
 
 const config = JSON.parse(process.argv[2] ?? "{}");
 const players = config.players ?? 3;
@@ -65,26 +89,56 @@ function writeFrame(...parts) {
 /* --- the windows -------------------------------------------------------- */
 
 const profile = config.profile ?? DEFAULT_PROFILE;
-await prepareProfile(profile);
-let browser = await attach(config.cdpPort ?? 9334).catch(() => null);
-if (!browser) {
+const port = config.cdpPort ?? 9334;
+// Attaching to the Chromium the last run left behind keeps the room, and the
+// CAPTCHA already solved for it, across restarts. Both of these hand back a
+// wrapper; the browser is inside it.
+let opened = await attach(port, { timeoutMs: 2000 }).catch(() => null);
+if (!opened) {
+  await prepareProfile(profile);
   say("starting Chromium");
-  await launchDetached({
-    port: config.cdpPort ?? 9334,
+  opened = await launchDetached({
+    port,
     profilePath: profile,
     executablePath: config.browserPath,
     headless: false,
   });
-  browser = await attach(config.cdpPort ?? 9334, { timeoutMs: 30_000 });
 }
+const browser = opened.browser;
+
+/**
+ * The game asks "are you sure you want to leave the room?" on its way out of
+ * one, and anything else a page decides to pop up arrives the same way. Without
+ * a handler Playwright dismisses them itself and races its own dismissal, which
+ * raises a protocol error from nowhere and takes the process with it. Accepting
+ * them here is both what a player does and what keeps a match alive.
+ */
+function handleDialogs(page) {
+  page.on("dialog", (dialog) => void dialog.accept().catch(() => {}));
+}
+
+// Tabs already sitting in a room are taken over rather than abandoned. A run
+// that ends leaves its players seated, and WebLiero asks for a CAPTCHA to make
+// a room — so opening three more tabs beside them would cost a seat each and a
+// CAPTCHA, for nothing.
+const existing = (await findGamePages(browser)).filter((found) => found.inGame);
+const reused = config.fresh ? [] : existing.slice(0, players);
+if (reused.length) say(`taking over ${reused.length} tab(s) already in a room`);
 
 const seats = [];
 for (let index = 0; index < players; index++) {
-  const page = await openWindow(browser, LOBBY);
+  // Tabs rather than windows: three of these are easier to keep track of in one
+  // window, and nothing here needs them side by side.
+  const page = reused[index]?.page ?? (await openPage(browser));
+  handleDialogs(page);
   const nickname = `${config.nickname ?? "Wormy"} ${String.fromCharCode(65 + index)}`;
-  await setNickname(page, nickname).catch(() => {});
+  if (!reused[index]) {
+    await page.goto(LOBBY, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await setNickname(page, nickname).catch(() => {});
+  }
   seats.push({ index, page, nickname, controls: null, observer: null, terrain: null, terrainAt: 0 });
 }
+const seated = reused.length >= players;
 
 /** Wait out anything only a person can clear, saying so once. */
 async function waitForHuman(page, what) {
@@ -100,7 +154,13 @@ async function waitForHuman(page, what) {
 }
 
 let url = config.roomUrl ?? null;
-if (!url) {
+if (seated) {
+  // Everyone is already where they need to be. Creating a room does not change
+  // the address bar, so a taken-over tab shows the lobby; the link comes from
+  // the game's own dialog, and is worth having to hand for a person to join.
+  url = await roomUrl(seats[0].page).catch(() => seats[0].page.url());
+  say(`room ${url}`);
+} else if (!url) {
   say(`creating a room for ${players}`);
   await createRoom(seats[0].page, {
     name: config.roomName ?? "wormy",
@@ -117,8 +177,20 @@ if (!url) {
   await joinRoom(seats[0].page, url, { nickname: seats[0].nickname });
   await joinTeam(seats[0].page);
 }
+if (seated) {
+  // A taken-over tab may be spectating rather than playing — but most are
+  // already in, and waiting thirty seconds for a spectating panel that will
+  // never appear costs a minute and a half of startup for nothing.
+  for (const seat of seats) {
+    const spectating = await seat.page
+      .locator(SPECTATING)
+      .isVisible()
+      .catch(() => false);
+    if (spectating) await joinTeam(seat.page, "any", { timeoutMs: 5000 }).catch(() => {});
+  }
+}
 
-for (const seat of seats.slice(1)) {
+for (const seat of seated ? [] : seats.slice(1)) {
   await joinRoom(seat.page, url, { nickname: seat.nickname });
   await waitForHuman(seat.page, `${seat.nickname} is being asked to prove it is human`);
   await joinTeam(seat.page);
@@ -203,6 +275,7 @@ async function sample() {
   writeFrame(vectors, patches);
 }
 
+playing = true;
 await sample();
 
 let dueAt = Date.now();
