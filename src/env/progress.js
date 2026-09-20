@@ -1,0 +1,148 @@
+// Whether a worm is actually getting anywhere.
+//
+// Health and kills say nothing about a worm that has dug itself into a hole, or
+// one that walks the same twenty pixels back and forth for a minute. Both look
+// exactly like a worm that is fine and simply not fighting yet. These are the
+// measurements that tell them apart, kept per worm and per episode.
+//
+// Two different failures, two different measurements, because one number cannot
+// catch both. Standing still is a displacement across a window of time. Going in
+// circles is covering ground and arriving nowhere, which only a memory of where
+// it has already been can see.
+
+export const PROGRESS_DEFAULTS = {
+  // The grid the visit memory is kept on. A worm is about 7 px tall, so 16 px
+  // is a stride or two: coarse enough that dodging in place is not "new ground".
+  cellPx: 16,
+  // How far back the displacement is measured. 60 decisions is four seconds of
+  // game time at the default frameskip, and a worm that walks for four seconds
+  // covers about a hundred pixels.
+  window: 60,
+  stuckPx: 14,
+  // How long a cell stays remembered. Coming back after this long is a return,
+  // not a circle.
+  revisitMemory: 150,
+  goalRadiusPx: 24,
+  // A jump further than this in one step is a respawn, not walking.
+  teleportPx: 60,
+};
+
+export class Progress {
+  constructor(options = {}) {
+    this.options = { ...PROGRESS_DEFAULTS, ...options };
+    this.trail = new Float64Array(this.options.window * 2);
+    this.visited = new Map();
+    this.reset();
+  }
+
+  /** A new episode: forget the trail, the visits and the goal. */
+  reset({ goal = null } = {}) {
+    this.trail.fill(0);
+    this.filled = 0;
+    this.at = 0;
+    this.visited.clear();
+    this.step = 0;
+    this.stuckSteps = 0;
+    this.goal = goal;
+    this.goalDistance = null;
+    this.cell = -1;
+    return this;
+  }
+
+  /** A worm that respawned is somewhere else entirely; none of the trail holds. */
+  restart() {
+    this.filled = 0;
+    this.at = 0;
+    this.stuckSteps = 0;
+    this.cell = -1;
+    this.goalDistance = null;
+  }
+
+  /**
+   * One decision's worth of movement. `alive` false holds everything where it
+   * is: a worm waiting to respawn is not stuck, it is dead.
+   */
+  update(position, alive = true) {
+    const { window, stuckPx, cellPx, revisitMemory, goalRadiusPx, teleportPx } =
+      this.options;
+    if (!alive) {
+      this.restart();
+      return this.facts(0, false, 0, 0, 0, false);
+    }
+    this.step++;
+
+    // A respawn moves a worm across the map between one step and the next, and
+    // nothing before it says anything about where it is now.
+    const previous = this.filled > 0 ? this.recent(0) : null;
+    if (previous && Math.hypot(position.x - previous[0], position.y - previous[1]) > teleportPx) {
+      this.restart();
+    }
+
+    const oldest = this.filled >= window ? this.recent(window - 1) : null;
+    const movedPx = oldest
+      ? Math.hypot(position.x - oldest[0], position.y - oldest[1])
+      : Infinity;
+    const stuck = movedPx < stuckPx;
+    this.stuckSteps = stuck ? this.stuckSteps + 1 : 0;
+
+    this.push(position);
+
+    // Where it is, on the coarse grid. Only crossing into another cell counts:
+    // holding a position is what the displacement measurement is for.
+    const cell =
+      Math.floor(position.y / cellPx) * 0x10000 + Math.floor(position.x / cellPx);
+    let novel = 0;
+    let revisit = 0;
+    if (cell !== this.cell) {
+      const seen = this.visited.get(cell);
+      if (seen === undefined) novel = 1;
+      else if (this.step - seen <= revisitMemory) revisit = 1;
+      this.visited.set(cell, this.step);
+      this.cell = cell;
+    }
+
+    let goalDelta = 0;
+    let reachedGoal = false;
+    if (this.goal) {
+      const distance = Math.hypot(position.x - this.goal.x, position.y - this.goal.y);
+      goalDelta = this.goalDistance === null ? 0 : this.goalDistance - distance;
+      this.goalDistance = distance;
+      if (distance <= goalRadiusPx) {
+        // Arriving is paid once. Leaving it set would pay a worm to sit on the
+        // spot for the rest of the episode.
+        reachedGoal = true;
+        this.goal = null;
+        this.goalDistance = null;
+      }
+    }
+    return this.facts(movedPx, stuck, novel, revisit, goalDelta, reachedGoal);
+  }
+
+  facts(movedPx, stuck, novel, revisit, goalDelta, reachedGoal) {
+    return {
+      movedPx: Number.isFinite(movedPx) ? movedPx : null,
+      stuck,
+      stuckSteps: this.stuckSteps,
+      novel,
+      revisit,
+      goalDelta,
+      reachedGoal,
+      goalDistance: this.goalDistance,
+      cellsVisited: this.visited.size,
+    };
+  }
+
+  /** The position `back` steps ago, as a two-element view of the ring. */
+  recent(back) {
+    const { window } = this.options;
+    const index = (this.at - 1 - back + window * 2) % window;
+    return [this.trail[index * 2], this.trail[index * 2 + 1]];
+  }
+
+  push(position) {
+    this.trail[this.at * 2] = position.x;
+    this.trail[this.at * 2 + 1] = position.y;
+    this.at = (this.at + 1) % this.options.window;
+    if (this.filled < this.options.window) this.filled++;
+  }
+}

@@ -38,32 +38,60 @@ const HEALTH_MAX = 100;
 const WEAPON_SLOTS = 5;
 /** Only the closest few shots go in the vector; the patch carries the rest. */
 export const PROJECTILE_SLOTS = 3;
+/**
+ * How many other worms the vector describes, by default. Two, because a
+ * free-for-all is not a duel: the one shooting at you and the one you are
+ * shooting at are often not the same worm, and a policy that can only see one
+ * of them cannot choose.
+ *
+ * It is a setting, not a constant, because the table is not always three. A
+ * vector built for four foes and used in a duel simply leaves three of them
+ * zeroed — which is how one policy can play 1v1 and a five-way without being
+ * retrained, at the cost of a few dozen numbers it will learn to ignore.
+ */
+export const DEFAULT_FOE_SLOTS = 2;
+const FOE_FIELDS = 9;
 
 /**
  * The vector, field by field. Exported because a layout you cannot print is a
  * layout you cannot debug: `VECTOR_OFFSETS.foe` is where the other worm starts.
  */
-export const VECTOR_LAYOUT = [
-  ["rays", RAY_COUNT], //   distance to the first solid pixel, 1 = clear to the limit
-  ["health", 1],
-  ["velocity", 2], //       px per tick, already around 1
-  ["aim", 2], //            cos and sin, so the wrap at PI is not a cliff
-  ["facing", 1], //         -1 left, +1 right
-  ["contacts", 4], //       the engine's own up/right/down/left probe counts
-  ["stepping", 1], //       the engine is lifting the worm over a bump
-  ["walkLeft", WALK.length], //   one-hot clear/step/dirt/rock
-  ["walkRight", WALK.length],
-  ["weapons", WEAPON_SLOTS * 3], // per slot: ammo left, ready to fire, selected
-  ["rope", 5], //           out, attached, where it is, how long
-  ["foe", 9], //            alive, where, how far, which way, health, speed
-  ["projectiles", PROJECTILE_SLOTS * 4], // the nearest shots: where and where to
-];
+/**
+ * The shape of one vector: what is in it, in order, and where each field starts.
+ * Exported because a layout you cannot print is a layout you cannot debug —
+ * `spec.offsets.foes` is where the other worms start.
+ */
+export function observationSpec({
+  foeSlots = DEFAULT_FOE_SLOTS,
+  projectileSlots = PROJECTILE_SLOTS,
+} = {}) {
+  const layout = [
+    ["rays", RAY_COUNT], //   distance to the first solid pixel, 1 = clear to the limit
+    ["health", 1],
+    ["velocity", 2], //       px per tick, already around 1
+    ["aim", 2], //            cos and sin, so the wrap at PI is not a cliff
+    ["facing", 1], //         -1 left, +1 right
+    ["contacts", 4], //       the engine's own up/right/down/left probe counts
+    ["stepping", 1], //       the engine is lifting the worm over a bump
+    ["walkLeft", WALK.length], //   one-hot clear/step/dirt/rock
+    ["walkRight", WALK.length],
+    ["weapons", WEAPON_SLOTS * 3], // per slot: ammo left, ready to fire, selected
+    ["rope", 5], //           out, attached, where it is, how long
+    ["foes", foeSlots * FOE_FIELDS], // each: alive, where, how far, which way, health, speed
+    ["projectiles", projectileSlots * 4], // the nearest shots: where and where to
+  ];
+  const offsets = {};
+  const vectorSize = layout.reduce((at, [name, size]) => {
+    offsets[name] = at;
+    return at + size;
+  }, 0);
+  return { foeSlots, projectileSlots, layout, offsets, vectorSize };
+}
 
-export const VECTOR_OFFSETS = {};
-export const VECTOR_SIZE = VECTOR_LAYOUT.reduce((at, [name, size]) => {
-  VECTOR_OFFSETS[name] = at;
-  return at + size;
-}, 0);
+export const DEFAULT_SPEC = observationSpec();
+export const VECTOR_LAYOUT = DEFAULT_SPEC.layout;
+export const VECTOR_OFFSETS = DEFAULT_SPEC.offsets;
+export const VECTOR_SIZE = DEFAULT_SPEC.vectorSize;
 
 /** The patch: a small square of terrain centred on the worm. */
 export const PATCH = {
@@ -76,7 +104,8 @@ export const PATCH = {
   // range footwork happens in. The rays cover the rest.
   scalePx: 2,
 };
-export const PATCH_SIZE = PATCH.channels.length * PATCH.cells * PATCH.cells;
+export const PATCH_CELLS = PATCH.cells * PATCH.cells;
+export const PATCH_SIZE = PATCH.channels.length * PATCH_CELLS;
 
 const clamp = (value, low, high) => (value < low ? low : value > high ? high : value);
 
@@ -88,16 +117,18 @@ export const OBSERVATIONS = ["vector", "patch"];
  * the vector, so a task that does not turn on the terrain — walking to a point,
  * a first pipeline check — should ask for `["vector"]` and get the speed back.
  */
-export function observe(view, into = {}, kinds = OBSERVATIONS) {
+export function observe(view, into = {}, kinds = OBSERVATIONS, spec = DEFAULT_SPEC) {
   const out = {};
-  if (kinds.includes("vector")) out.vector = encodeVector(view, into.vector);
+  if (kinds.includes("vector")) out.vector = encodeVector(view, into.vector, spec);
   if (kinds.includes("patch")) out.patch = encodePatch(view, into.patch);
+  if (kinds.includes("patchBytes")) out.patchBytes = encodePatchBytes(view, into.patchBytes);
   return out;
 }
 
 const contacts = {};
 
-export function encodeVector(view, into = new Float32Array(VECTOR_SIZE)) {
+export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
+  into ??= new Float32Array(spec.vectorSize);
   into.fill(0);
   const { self, terrain } = view;
   if (!self.alive) return into; // a dead worm sees nothing until it respawns
@@ -156,8 +187,13 @@ export function encodeVector(view, into = new Float32Array(VECTOR_SIZE)) {
     at += 5;
   }
 
-  const foe = nearestFoe(view);
-  if (foe) {
+  const foes = nearestFoes(view, spec.foeSlots);
+  for (let slot = 0; slot < spec.foeSlots; slot++) {
+    const foe = foes[slot];
+    if (!foe) {
+      at += FOE_FIELDS;
+      continue;
+    }
     const dx = foe.position.x - x;
     const dy = foe.position.y - y;
     const distance = Math.hypot(dx, dy) || 1;
@@ -171,13 +207,11 @@ export function encodeVector(view, into = new Float32Array(VECTOR_SIZE)) {
     into[at++] = foe.health / HEALTH_MAX;
     into[at++] = foe.velocity.x;
     into[at++] = foe.velocity.y;
-  } else {
-    at += 9;
   }
 
   // Own shots are in here too: a worm's own explosion is most of the damage it
   // ever takes, so there is nothing to gain by hiding them.
-  for (const shot of nearestProjectiles(view)) {
+  for (const shot of nearestProjectiles(view, spec.projectileSlots)) {
     into[at++] = clamp((shot.position.x - x) / REACH_PX, -1, 1);
     into[at++] = clamp((shot.position.y - y) / REACH_PX, -1, 1);
     into[at++] = shot.velocity.x;
@@ -209,18 +243,30 @@ export function patchCellOf(origin, x, y) {
 // that fall off the map.
 const PIXEL_ROWS = new Int32Array(PATCH.cells * PATCH.scalePx);
 const PIXEL_COLUMNS = new Int32Array(PATCH.cells * PATCH.scalePx);
-// The channel order is the hardness order, so the lowest code wins and is also
-// the channel it is written to.
+// The first three channels are the hardness order, so the lowest code wins and
+// is also the channel it expands to.
 const ROCK = 0;
 const DIRT = 1;
 const FREE = 2;
+/** Bit set on a cell that has a shot in it, alongside the terrain code. */
+export const PATCH_PROJECTILE = 4;
+export const PATCH_KIND = 3;
 
-export function encodePatch(view, into = new Float32Array(PATCH_SIZE)) {
+const patchScratch = new Uint8Array(PATCH_CELLS);
+
+/**
+ * The patch as one byte per cell — the form it is stored and sent in.
+ *
+ * Bits 0-1 are the terrain (0 rock, 1 dirt, 2 free) and bit 2 says a shot is in
+ * the cell. A quarter of the size of the one-hot form and the same information:
+ * a trainer expands it on the GPU, where the expansion is free, and a run that
+ * ships a million of these across a pipe ships a quarter of the bytes.
+ */
+export function encodePatchBytes(view, into = new Uint8Array(PATCH_CELLS)) {
   into.fill(0);
   const { self, terrain } = view;
   if (!self.alive) return into;
   const { cells, scalePx } = PATCH;
-  const plane = cells * cells;
   const { data, width, height, materialFlags } = terrain;
   const origin = patchOriginOf(view);
   // The bounds arithmetic is done once for the whole patch rather than once per
@@ -256,51 +302,71 @@ export function encodePatch(view, into = new Float32Array(PATCH_SIZE)) {
           if (hardest === ROCK) break;
         }
       }
-      into[hardest * plane + row * cells + column] = 1;
+      into[row * cells + column] = hardest;
     }
   }
-  // Shots go in a channel of their own, so a policy handles ten of them and one
-  // of them with the same weights.
-  const shots = 3 * plane;
+  // Shots get a bit of their own, so a policy handles ten of them and one of
+  // them with the same weights.
   for (const shot of view.projectiles) {
     const at = patchCellOf(origin, shot.position.x, shot.position.y);
-    if (at) into[shots + at.cell] = 1;
+    if (at) into[at.cell] |= PATCH_PROJECTILE;
   }
   return into;
 }
 
-/** The living foe a policy should be looking at: the closest one. */
-export function nearestFoe(view) {
+/** The same patch as one-hot float planes, for a consumer that wants them. */
+export function encodePatch(view, into = new Float32Array(PATCH_SIZE)) {
+  into.fill(0);
+  if (!view.self.alive) return into;
+  const bytes = encodePatchBytes(view, patchScratch);
+  const plane = PATCH_CELLS;
+  for (let cell = 0; cell < plane; cell++) {
+    const byte = bytes[cell];
+    into[(byte & PATCH_KIND) * plane + cell] = 1;
+    if (byte & PATCH_PROJECTILE) into[3 * plane + cell] = 1;
+  }
+  return into;
+}
+
+const closest = [];
+
+/** The living foes a policy should be looking at, closest first. */
+export function nearestFoes(view, count = DEFAULT_FOE_SLOTS) {
+  closest.length = 0;
   const { self } = view;
-  if (!self.alive) return null;
-  let best = null;
-  let bestDistance = Infinity;
+  if (!self.alive) return closest;
   for (const foe of view.foes) {
     if (!foe.alive) continue;
     const distance =
       (foe.position.x - self.position.x) ** 2 +
       (foe.position.y - self.position.y) ** 2;
-    if (distance < bestDistance) {
-      best = foe;
-      bestDistance = distance;
-    }
+    let at = closest.length;
+    while (at > 0 && closest[at - 1].distance > distance) at--;
+    if (at >= count) continue;
+    closest.splice(at, 0, { foe, distance });
+    if (closest.length > count) closest.pop();
   }
-  return best;
+  return closest.map((entry) => entry.foe);
+}
+
+/** The single closest living foe, or null. */
+export function nearestFoe(view) {
+  return nearestFoes(view, 1)[0] ?? null;
 }
 
 const nearest = [];
 
-/** The `PROJECTILE_SLOTS` closest shots, closest first. */
-export function nearestProjectiles(view) {
+/** The closest shots, closest first. */
+export function nearestProjectiles(view, count = PROJECTILE_SLOTS) {
   nearest.length = 0;
   const { x, y } = view.self.position;
   for (const shot of view.projectiles) {
     const distance = (shot.position.x - x) ** 2 + (shot.position.y - y) ** 2;
     let at = nearest.length;
     while (at > 0 && nearest[at - 1].distance > distance) at--;
-    if (at >= PROJECTILE_SLOTS) continue;
+    if (at >= count) continue;
     nearest.splice(at, 0, { shot, distance });
-    if (nearest.length > PROJECTILE_SLOTS) nearest.pop();
+    if (nearest.length > count) nearest.pop();
   }
   return nearest.map((entry) => entry.shot);
 }

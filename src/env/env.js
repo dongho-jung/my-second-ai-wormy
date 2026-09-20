@@ -1,22 +1,39 @@
 // The environment: worlds in, actions in, observations and rewards out.
 //
-// One instance is one match at a time. `reset` starts a new one, `step` hands
-// every agent its action and advances the world `frameskip` ticks. Everything
-// that could make two runs of one seed differ goes through a single seeded
-// generator, so a rollout is reproducible and a policy's bad episode can be
-// replayed exactly.
+// One instance is one match at a time — by default three worms in a free-for-all,
+// which is a different game from a duel: the worm shooting at you is often not
+// the one you are shooting at, and the third one is deciding which of you is
+// worth interrupting. Everything that could make two runs of one seed differ
+// goes through a single seeded generator, so a rollout is reproducible and a
+// policy's bad episode can be replayed exactly.
 import { applyNormalizedAction, normalizeAction } from "./actions.js";
-import { makeRng, respawnWorm } from "./engine.js";
-import { OBSERVATIONS, observe } from "./observation.js";
-import { addEvents, combatReward, DEFAULT_WEIGHTS, scoreOf } from "./reward.js";
+import { makeRng, respawnWorm, watchDamage } from "./engine.js";
+import { OBSERVATIONS, observationSpec, observe } from "./observation.js";
+import { Progress } from "./progress.js";
+import {
+  addEvents,
+  combatReward,
+  DEFAULT_WEIGHTS,
+  emptyEvents,
+  tallyDamage,
+} from "./reward.js";
 import { viewFromWorld } from "./view.js";
 
 // Stock Liero weapons that give a worm something to do at every range: shotgun,
-// rifle, bazooka, mine, crackler.
+// rifle, bazooka, mine, crackler. Pass "random" instead to draw five of the
+// mod's forty per worm per episode, which is what teaches the game rather than
+// the shotgun.
 export const DEFAULT_LOADOUT = [0, 2, 3, 5, 10];
 
 export const DEFAULTS = {
-  agents: 2,
+  // Three is a free-for-all, which is the interesting case; two is a duel and
+  // more is a brawl. Nothing here is written for three in particular — the
+  // observation, the attribution and the rewards are all built from this number.
+  agents: 3,
+  // How many other worms the vector describes. By default every one of them.
+  // Pin it higher than `agents` and the same policy can play a duel and a
+  // five-way without being retrained: the empty slots read as zeros.
+  observationFoes: null,
   // Four ticks is a policy deciding at 15 Hz: about as often as a person
   // changes their mind, and four times less network to run.
   frameskip: 4,
@@ -29,7 +46,7 @@ export const DEFAULTS = {
   // that has only ever played at zero latency learns timing that does not
   // survive the move, so train across a range and it stops mattering.
   inputLatencyTicks: 0,
-  loadout: DEFAULT_LOADOUT,
+  loadout: "random",
   // Both pictures by default. The terrain patch is about ten times the cost of
   // the vector, so a task that does not need it — walking somewhere, a first
   // check that the pipeline learns anything at all — should pass ["vector"].
@@ -38,6 +55,10 @@ export const DEFAULTS = {
   // where a medkit happened to fall. Off is the cleaner thing to learn in.
   rules: { bonusDrops: 0 },
   weights: DEFAULT_WEIGHTS,
+  progress: {},
+  // A place each worm is paid to reach, as (env, agent) => ({x, y}) or null.
+  // Off for a fight; on for the walking task that checks the pipeline learns.
+  goals: null,
 };
 
 const NO_ACTION = { keys: 0, rope: 0, weapon: 0, fresh: false };
@@ -47,18 +68,23 @@ const range = (setting) => (Array.isArray(setting) ? setting : [setting, setting
 export class WormEnv {
   constructor(engine, options = {}) {
     const settings = { ...DEFAULTS, ...options };
+    if (!Number.isInteger(settings.agents) || settings.agents < 1) {
+      throw new Error(`agents must be a whole number of at least 1, got ${settings.agents}`);
+    }
     this.engine = engine;
     this.agents = settings.agents;
+    this.spec = observationSpec({
+      foeSlots: settings.observationFoes ?? this.agents - 1,
+    });
     this.frameskip = settings.frameskip;
     this.episodeTicks = settings.episodeTicks;
     this.respawn = settings.respawn;
     this.terminateOnKill = settings.terminateOnKill;
     this.inputLatencyTicks = range(settings.inputLatencyTicks);
-    this.loadouts =
-      settings.loadouts ??
-      Array.from({ length: this.agents }, () => settings.loadout);
+    this.loadout = settings.loadouts ?? settings.loadout;
     this.weights = settings.weights;
     this.observationKinds = settings.observations;
+    this.makeGoal = settings.goals;
     this.reward = settings.reward ?? combatReward;
     // A fresh level per episode by default: one map teaches one map.
     this.makeLevel =
@@ -68,12 +94,20 @@ export class WormEnv {
           ? () => settings.level
           : (engineIn, seed) => engineIn.randomLevel(seed, settings.levelOptions);
     this.world = engine.createWorld({ rules: settings.rules });
+    // The engine knows who hit whom; this is where it says so.
+    this.watch = watchDamage(this.world);
     this.seed = settings.seed ?? 1;
     this.worms = [];
+    this.loadouts = [];
     this.views = [];
     this.observations = [];
-    this.scores = [];
     this.totals = [];
+    this.events = emptyEvents(this.agents);
+    this.progress = Array.from(
+      { length: this.agents },
+      () => new Progress(settings.progress),
+    );
+    this.alive = new Array(this.agents).fill(false);
     this.queues = [];
     this.latency = [];
     this.episode = 0;
@@ -98,12 +132,21 @@ export class WormEnv {
     // of objects and an episode is over in milliseconds.
     this.world.reset(episodeSeed);
     this.world.level.Of(this.makeLevel(this.engine, episodeSeed));
+    this.watch.clear();
 
-    this.worms = Array.from({ length: this.agents }, (_, agent) =>
+    this.loadouts = Array.from({ length: this.agents }, (_, agent) =>
+      this.loadout === "random"
+        ? this.engine.randomLoadout(this.rng)
+        : Array.isArray(this.loadout[0])
+          ? this.loadout[agent]
+          : this.loadout,
+    );
+    this.worms = this.loadouts.map((loadout, agent) =>
       this.engine.spawnWorm(this.world, {
-        color: agent,
+        // The mod ships a fixed set of worm colours; past the end they repeat.
+        color: agent % this.engine.wormColours,
         playerId: agent,
-        loadout: this.loadouts[agent],
+        loadout,
       }),
     );
     const [low, high] = this.inputLatencyTicks;
@@ -115,11 +158,14 @@ export class WormEnv {
     this.queues = this.latency.map((ticks) =>
       Array.from({ length: ticks }, () => NO_ACTION),
     );
+    this.progress.forEach((progress, agent) =>
+      progress.reset({ goal: this.makeGoal?.(this, agent) ?? null }),
+    );
+    this.alive = this.worms.map((worm) => Boolean(worm.u));
     this.totals = this.worms.map(() => ({}));
     this.episodeStartTick = this.world.qb;
     this.done = false;
     this.refreshViews();
-    this.scores = this.views.map(scoreOf);
     this.encodeObservations();
     return { observations: this.observations, info: this.info() };
   }
@@ -142,6 +188,7 @@ export class WormEnv {
       for (let tick = 1; tick < this.frameskip; tick++) queue.push(normalized);
     }
 
+    this.watch.clear();
     for (let tick = 0; tick < this.frameskip; tick++) {
       for (let agent = 0; agent < this.agents; agent++) {
         const worm = this.worms[agent];
@@ -156,39 +203,54 @@ export class WormEnv {
       this.world.update();
     }
 
-    // Read the reward before anyone respawns, or a death looks like a worm that
-    // healed back to full.
+    // Everything is read before anyone respawns, or a death would look like a
+    // worm that healed back to full and moved across the map.
     this.refreshViews();
-    const outcomes = this.views.map((view, agent) =>
-      this.reward(this.scores[agent], scoreOf(view), this.weights),
-    );
-    for (const [agent, outcome] of outcomes.entries()) {
-      addEvents(this.totals[agent], outcome.events);
+    tallyDamage(this.watch, this.agents, this.events);
+    const rewards = [];
+    const parts = [];
+    for (let agent = 0; agent < this.agents; agent++) {
+      const worm = this.worms[agent];
+      const events = this.events[agent];
+      events.died = this.alive[agent] && !worm.u ? 1 : 0;
+      this.alive[agent] = Boolean(worm.u);
+      const moved = this.progress[agent].update(
+        worm.u ? worm : this.views[agent].self.position ?? worm,
+        Boolean(worm.u),
+      );
+      const outcome = this.reward(events, moved, this.weights);
+      rewards.push(outcome.reward);
+      parts.push(outcome.parts);
+      addEvents(this.totals[agent], events);
+      addEvents(this.totals[agent], outcome.parts);
+      this.totals[agent].reward = (this.totals[agent].reward ?? 0) + outcome.reward;
+      this.totals[agent].stuckSteps =
+        (this.totals[agent].stuckSteps ?? 0) + (moved.stuck ? 1 : 0);
+      this.totals[agent].cellsVisited = moved.cellsVisited;
     }
-    const killed = outcomes.some((outcome) => outcome.events.killed > 0);
+    const killed = this.events.some((events) => events.killed > 0);
 
     let respawned = false;
     if (this.respawn) {
       for (const [agent, worm] of this.worms.entries()) {
         if (worm.u) continue;
         respawnWorm(this.world, worm, this.loadouts[agent]);
+        // It is somewhere else entirely now; nothing about where it was holds.
+        this.progress[agent].restart();
+        this.alive[agent] = true;
         respawned = true;
       }
       if (respawned) this.refreshViews();
     }
-    this.scores = this.views.map(scoreOf);
     this.encodeObservations();
     this.done =
       this.world.qb - this.episodeStartTick >= this.episodeTicks ||
       (this.terminateOnKill && killed);
     return {
       observations: this.observations,
-      rewards: outcomes.map((outcome) => outcome.reward),
+      rewards,
       done: this.done,
-      info: {
-        ...this.info(),
-        events: outcomes.map((outcome) => outcome.events),
-      },
+      info: { ...this.info(), events: this.events, parts },
     };
   }
 
@@ -207,7 +269,7 @@ export class WormEnv {
   /** The expensive half, so it runs once per step and not once per view. */
   encodeObservations() {
     this.observations = this.views.map((view, agent) =>
-      observe(view, this.observations[agent] ?? {}, this.observationKinds),
+      observe(view, this.observations[agent] ?? {}, this.observationKinds, this.spec),
     );
     return this.observations;
   }
@@ -219,7 +281,9 @@ export class WormEnv {
       tick: this.world.qb,
       elapsedTicks: this.world.qb - this.episodeStartTick,
       map: this.world.level.name,
+      agents: this.agents,
       observations: this.observationKinds,
+      vectorSize: this.spec.vectorSize,
       inputLatencyTicks: this.latency,
       totals: this.totals,
     };

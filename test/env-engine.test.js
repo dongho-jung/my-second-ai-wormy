@@ -25,7 +25,12 @@ import {
   unpackKeys,
 } from "../src/env/actions.js";
 import { WormEnv } from "../src/env/env.js";
-import { PATCH, VECTOR_OFFSETS, encodePatch, encodeVector } from "../src/env/observation.js";
+import {
+  PATCH,
+  VECTOR_OFFSETS,
+  encodePatch,
+  encodeVector,
+} from "../src/env/observation.js";
 import { viewFromWorld } from "../src/env/view.js";
 import { diggableAt } from "../src/env/terrain.js";
 
@@ -289,7 +294,7 @@ test("an observation off a real map measures the real ground", { skip }, async (
   const vector = encodeVector(view);
   const patch = encodePatch(view);
   assert.equal(vector[VECTOR_OFFSETS.health], 1, "unhurt");
-  assert.equal(vector[VECTOR_OFFSETS.foe], 1, "the other worm is alive");
+  assert.equal(vector[VECTOR_OFFSETS.foes], 1, "the other worm is alive");
   const down = vector[VECTOR_OFFSETS.rays + 4];
   assert.ok(down > 0 && down < 1, `the ground is within ray range, got ${down}`);
   const plane = PATCH.cells * PATCH.cells;
@@ -303,7 +308,7 @@ test("an observation off a real map measures the real ground", { skip }, async (
 test("two rollouts of one seed are the same rollout", { skip }, async () => {
   const engine = await loadEngine();
   const rollout = (seed) => {
-    const env = new WormEnv(engine, { episodeTicks: 400, seed });
+    const env = new WormEnv(engine, { agents: 3, episodeTicks: 400, seed });
     env.reset({ seed });
     let rng = 12345;
     const random = () => (rng = (Math.imul(1664525, rng) + 1013904223) >>> 0) / 2 ** 32;
@@ -315,7 +320,7 @@ test("two rollouts of one seed are the same rollout", { skip }, async () => {
         (random() < 0.4 ? KEYS.aimUp : 0) |
         (random() < 0.3 ? KEYS.fire : 0) |
         (random() < 0.1 ? KEYS.jump : 0);
-      const step = env.step([action(), action()]);
+      const step = env.step([action(), action(), action()]);
       done = step.done;
       trace.push(step.rewards.join(","));
     }
@@ -339,7 +344,12 @@ test("two rollouts of one seed are the same rollout", { skip }, async () => {
 test("a step is exactly frameskip ticks, and latency delays the worm", { skip }, async () => {
   const engine = await loadEngine();
   const walk = (inputLatencyTicks) => {
-    const env = new WormEnv(engine, { frameskip: 4, inputLatencyTicks, seed: 5 });
+    const env = new WormEnv(engine, {
+      agents: 2,
+      frameskip: 4,
+      inputLatencyTicks,
+      seed: 5,
+    });
     env.reset({ seed: 5 });
     assert.deepEqual(env.info().inputLatencyTicks, [inputLatencyTicks, inputLatencyTicks]);
     // Stand still first, so the comparison is about walking and not falling.
@@ -356,33 +366,78 @@ test("a step is exactly frameskip ticks, and latency delays the worm", { skip },
   assert.equal(delayed.moved, 0, "a whole step of latency means it has not moved yet");
 });
 
-test("the reward follows the fight, for both sides at once", { skip }, async () => {
+test("the reward goes to whoever earned it, with a third worm watching", { skip }, async () => {
   const engine = await loadEngine();
-  const env = new WormEnv(engine, { seed: 8, episodeTicks: 6000 });
+  const env = new WormEnv(engine, {
+    agents: 3,
+    seed: 8,
+    episodeTicks: 6000,
+    // A shotgun each, so the test is not at the mercy of a random loadout.
+    loadout: [0, 0, 0, 0, 0],
+  });
   env.reset({ seed: 8 });
-  for (let step = 0; step < 20; step++) env.step([0, 0]);
-  // Stand the two worms next to each other and let one of them fire.
-  const [shooter, target] = env.worms;
+  for (let step = 0; step < 20; step++) env.step([0, 0, 0]);
+  // Stand two of them nose to nose and leave the third where it is.
+  const [shooter, target, bystander] = env.worms;
   target.x = shooter.x + 12;
   target.y = shooter.y;
   shooter.direction = 1;
   shooter.Oa = 0;
   shooter.Ka = 0;
   let dealt = 0;
-  let taken = 0;
+  let bystanderReward = 0;
   for (let step = 0; step < 12; step++) {
-    const out = env.step([KEYS.fire, 0]);
+    const out = env.step([KEYS.fire, 0, 0]);
     dealt += out.info.events[0].damageDealt;
-    taken += out.info.events[0].damageTaken;
+    bystanderReward += out.rewards[2];
   }
   assert.ok(dealt > 0, `the shooter is paid for the damage, got ${dealt}`);
   const totals = env.info().totals;
+  const sum = (field) => totals.reduce((all, one) => all + (one[field] ?? 0), 0);
+  // Every point of health leaves one worm and is charged to exactly one worm,
+  // and a hit on yourself is taken without being dealt. A shotgun spreads, so
+  // some of it lands on the worm that was only watching — which is the whole
+  // reason the engine's own attribution is worth reading instead of guessing
+  // from who lost health.
   assert.equal(
-    totals[1].damageTaken,
-    totals[0].damageDealt,
-    "one worm's damage dealt is the other's damage taken",
+    +(sum("damageTaken") - sum("selfDamage")).toFixed(6),
+    +sum("damageDealt").toFixed(6),
   );
-  assert.ok(taken <= dealt, "and being shot at point blank costs the target more");
+  assert.ok(
+    totals[1].damageTaken - totals[1].selfDamage > 0,
+    "the worm in front of the barrel took most of it",
+  );
+  assert.equal(totals[2].damageDealt, 0, "the third worm hit nobody");
+  assert.ok(
+    bystanderReward <= 0.5,
+    `and is paid nothing for the fight it watched, got ${bystanderReward}`,
+  );
+  assert.ok(bystander.Xa > 0);
+});
+
+test("any number of worms, from a solo run to a brawl", { skip }, async () => {
+  const engine = await loadEngine();
+  for (const agents of [1, 2, 5]) {
+    const env = new WormEnv(engine, { agents, episodeTicks: 240, seed: 3 });
+    const { observations } = env.reset({ seed: 3 });
+    // The vector describes every other worm, so its length follows the count.
+    assert.equal(env.spec.foeSlots, agents - 1);
+    assert.equal(observations.length, agents);
+    assert.equal(observations[0].vector.length, env.spec.vectorSize);
+    assert.equal(env.worms.length, agents);
+    let done = false;
+    while (!done) done = env.step(new Array(agents).fill(KEYS.right)).done;
+    assert.equal(env.info().totals.length, agents);
+    assert.throws(() => env.reset() && env.step(new Array(agents + 1).fill(0)), /expected/);
+  }
+  // Sizing the vector for more foes than are playing lets one policy do both:
+  // the empty slots are zeros, not a different shape.
+  const duel = new WormEnv(engine, { agents: 2, observationFoes: 4, episodeTicks: 120 });
+  const brawl = new WormEnv(engine, { agents: 5, observationFoes: 4, episodeTicks: 120 });
+  assert.equal(duel.spec.vectorSize, brawl.spec.vectorSize);
+  duel.reset({ seed: 1 });
+  assert.equal(duel.observations[0].vector.length, brawl.spec.vectorSize);
+  assert.throws(() => new WormEnv(engine, { agents: 0 }), /at least 1/);
 });
 
 test("an episode ends on its tick budget and reset starts a clean one", { skip }, async () => {
@@ -391,16 +446,17 @@ test("an episode ends on its tick budget and reset starts a clean one", { skip }
   env.reset({ seed: 3 });
   let steps = 0;
   let done = false;
+  const idle = new Array(env.agents).fill(0);
   while (!done) {
-    done = env.step([0, 0]).done;
+    done = env.step(idle).done;
     steps++;
   }
   assert.equal(steps, 10, "40 ticks at 4 ticks a step");
-  assert.throws(() => env.step([0, 0]), /episode is over/);
+  assert.throws(() => env.step(idle), /episode is over/);
   const { info } = env.reset();
   assert.equal(info.episode, 2);
   assert.equal(info.elapsedTicks, 0);
   assert.notEqual(info.seed, 3, "an unseeded reset moves on to the next episode");
-  assert.equal(env.worms.length, 2);
+  assert.equal(env.worms.length, env.agents);
   assert.equal(env.worms[0].Xa, 100);
 });

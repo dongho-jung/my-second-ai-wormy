@@ -210,6 +210,60 @@ function withSeededMathRandom(seed, body) {
 }
 
 /**
+ * Who hurt whom.
+ *
+ * With three worms loose in one world, "the other one lost health" is not a
+ * reward signal: two of them can be fighting each other while the third does
+ * nothing. The engine knows the answer — every hit goes through
+ * `worm.ud(world, amount, attackerPlayerId, weaponId)` — but it tells nobody,
+ * so this wraps that one method to write down what it applied. It changes no
+ * behaviour: the original runs untouched and the wrapper only reads the health
+ * either side of it.
+ *
+ * Kills need no wrapper; `world.$p` is a hook the engine already calls.
+ */
+function instrumentDamage(Worm) {
+  if (Worm.prototype.ud.wormyInstrumented) return;
+  const original = Worm.prototype.ud;
+  function ud(world, amount, attacker, weapon) {
+    const sink = world[DAMAGE_SINK];
+    if (sink === undefined) return original.call(this, world, amount, attacker, weapon);
+    const before = this.Xa;
+    original.call(this, world, amount, attacker, weapon);
+    // Flat triples, not objects: this runs inside the tick loop.
+    const applied = before - this.Xa;
+    if (applied > 0) sink.push(this.H, attacker, applied);
+  }
+  ud.wormyInstrumented = true;
+  Worm.prototype.ud = ud;
+}
+
+const DAMAGE_SINK = "__wormyDamage";
+
+/**
+ * Start recording hits and kills in one world. `damage` is (victim, attacker,
+ * health) triples and `kills` is (victim, killer) pairs, both flat and both
+ * cleared by the caller once a step has read them.
+ *
+ * A worm can be its own attacker: falling damage and its own explosions arrive
+ * with its own id, which is exactly the accounting we want.
+ */
+export function watchDamage(world) {
+  const damage = [];
+  const kills = [];
+  world[DAMAGE_SINK] = damage;
+  world.$p = (victim, killer) => kills.push(victim, killer);
+  return {
+    damage,
+    kills,
+    clear() {
+      damage.length = 0;
+      kills.length = 0;
+    },
+  };
+}
+
+/**
  * A dead worm is dropped from `world.za` by the tick that kills it, and
  * `worm.nx()` places a worm without putting it back, so a respawn that only
  * calls `nx` leaves a worm that is never simulated again.
@@ -268,6 +322,7 @@ export function loadEngine({ dir = DEFAULT_ENGINE_DIR, mod = "liero133" } = {}) 
       new Uint8Array(readFileSync(assetPath(dir, ASSETS.resources))),
     );
     const settings = loadMod(classes, zip, mod);
+    instrumentDamage(classes.Worm);
     return new Engine({ classes, settings, sha256, dir, mod });
   })();
   return loading;
@@ -310,6 +365,11 @@ export class Engine {
   /** bit 3 background, bits 0-1 diggable dirt, bit 2 rock — one byte per index. */
   get materialFlags() {
     return this.settings.Da;
+  }
+
+  /** How many worm colours the mod has before they start repeating. */
+  get wormColours() {
+    return this.settings.Li?.length || 1;
   }
 
   /**
@@ -370,5 +430,19 @@ export class Engine {
   /** One worm, owned by `playerId`, carrying five weapons by id. */
   spawnWorm(world, { color = 0, playerId = 0, loadout }) {
     return world.ox(color, playerId, loadout);
+  }
+
+  /**
+   * Five different weapons drawn from the mod's forty. Variety is the point: a
+   * policy that has only ever held a shotgun has learned the shotgun, not the
+   * game.
+   */
+  randomLoadout(random, slots = 5) {
+    const ids = this.settings.O.map((_, id) => id);
+    for (let index = 0; index < slots; index++) {
+      const pick = index + Math.floor(random() * (ids.length - index));
+      [ids[index], ids[pick]] = [ids[pick], ids[index]];
+    }
+    return ids.slice(0, slots);
   }
 }

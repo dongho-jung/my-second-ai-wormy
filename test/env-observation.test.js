@@ -3,11 +3,16 @@ import assert from "node:assert/strict";
 import { snapshotV20 } from "../src/adapter-v20.js";
 import { fixture, LEVEL } from "./fixture.js";
 import {
+  DEFAULT_SPEC,
   PATCH,
+  PATCH_CELLS,
+  PATCH_KIND,
+  PATCH_PROJECTILE,
   PATCH_SIZE,
   VECTOR_OFFSETS,
   VECTOR_SIZE,
   encodePatch,
+  encodePatchBytes,
   encodeVector,
   nearestProjectiles,
   observe,
@@ -72,34 +77,24 @@ test("the vector puts every field where the layout says", () => {
   assert.equal(at("facing"), 1, "+1 right");
 
   // The engine's own contact counts: three probes on the ground, none else.
-  assert.deepEqual(Array.from(vector.subarray(22, 26)), [0, 0, f32(3 / 7), 0]);
+  const span = (name, size) =>
+    Array.from(vector.subarray(VECTOR_OFFSETS[name], VECTOR_OFFSETS[name] + size));
+  assert.deepEqual(span("contacts", 4), [0, 0, f32(3 / 7), 0]);
   assert.equal(at("stepping"), 0);
-  assert.deepEqual(
-    Array.from(vector.subarray(VECTOR_OFFSETS.walkLeft, VECTOR_OFFSETS.walkLeft + 4)),
-    [1, 0, 0, 0],
-    "clear to the left",
-  );
-  assert.deepEqual(
-    Array.from(vector.subarray(VECTOR_OFFSETS.walkRight, VECTOR_OFFSETS.walkRight + 4)),
-    [0, 0, 0, 1],
-    "rock to the right",
-  );
+  assert.deepEqual(span("walkLeft", 4), [1, 0, 0, 0], "clear to the left");
+  assert.deepEqual(span("walkRight", 4), [0, 0, 0, 1], "rock to the right");
 
   // The one weapon is out of ammo and selected, so it is not ready to fire.
-  assert.deepEqual(Array.from(vector.subarray(35, 38)), [0, 0, 1]);
+  assert.deepEqual(span("weapons", 15).slice(0, 3), [0, 0, 1]);
   assert.deepEqual(
-    Array.from(vector.subarray(38, 50)),
+    span("weapons", 15).slice(3),
     new Array(12).fill(0),
     "the four empty slots read as nothing, not as ready",
   );
+  assert.deepEqual(span("rope", 5), [0, 0, 0, 0, 0], "no rope out");
   assert.deepEqual(
-    Array.from(vector.subarray(VECTOR_OFFSETS.rope, VECTOR_OFFSETS.rope + 5)),
-    [0, 0, 0, 0, 0],
-    "no rope out",
-  );
-  assert.deepEqual(
-    Array.from(vector.subarray(VECTOR_OFFSETS.foe, VECTOR_OFFSETS.foe + 9)),
-    new Array(9).fill(0),
+    span("foes", DEFAULT_SPEC.foeSlots * 9),
+    new Array(DEFAULT_SPEC.foeSlots * 9).fill(0),
     "a dead foe is all zeros, starting with the alive flag",
   );
   // One shot, ten pixels left and two below, and two empty slots after it.
@@ -107,28 +102,50 @@ test("the vector puts every field where the layout says", () => {
   assert.equal(Math.round(at("projectiles", 1) * 300), 2);
   assert.equal(at("projectiles", 2), 2);
   assert.equal(at("projectiles", 3), -3);
-  assert.deepEqual(Array.from(vector.subarray(68, 76)), new Array(8).fill(0));
+  assert.deepEqual(
+    span("projectiles", 12).slice(4),
+    new Array(8).fill(0),
+    "the two empty shot slots stay empty",
+  );
 });
 
-test("the foe and its distance appear once it is alive", () => {
+test("both foes appear, nearest first, in a free-for-all", () => {
   const view = liveView();
-  view.foes[0] = {
+  const worm = (x, y, health) => ({
     alive: true,
-    position: { x: 32 + 30, y: 26 - 40 },
+    position: { x, y },
     velocity: { x: 1, y: -2 },
-    health: 50,
-  };
+    health,
+  });
+  // The far one is listed first, to prove the ordering is by distance.
+  view.foes = [worm(32 + 400, 26, 90), worm(32 + 30, 26 - 40, 50)];
   const vector = encodeVector(view);
-  const foe = vector.subarray(VECTOR_OFFSETS.foe, VECTOR_OFFSETS.foe + 9);
-  assert.equal(foe[0], 1);
-  assert.equal(Math.round(foe[1] * 300), 30);
-  assert.equal(Math.round(foe[2] * 300), -40);
-  assert.equal(Math.round(foe[3] * 300), 50, "50 pixels away");
-  assert.equal(+foe[4].toFixed(4), 0.6, "unit direction, so clipping cannot hide it");
-  assert.equal(+foe[5].toFixed(4), -0.8);
-  assert.equal(foe[6], 0.5);
-  assert.equal(foe[3] < 1, true, "50 of 300 pixels is well inside the clip");
-  assert.deepEqual([foe[7], foe[8]], [1, -2]);
+  const slot = (index) =>
+    vector.subarray(VECTOR_OFFSETS.foes + index * 9, VECTOR_OFFSETS.foes + (index + 1) * 9);
+  const near = slot(0);
+  assert.equal(near[0], 1);
+  assert.equal(Math.round(near[1] * 300), 30);
+  assert.equal(Math.round(near[2] * 300), -40);
+  assert.equal(Math.round(near[3] * 300), 50, "50 pixels away");
+  assert.equal(+near[4].toFixed(4), 0.6, "unit direction, so clipping cannot hide it");
+  assert.equal(+near[5].toFixed(4), -0.8);
+  assert.equal(near[6], 0.5);
+  assert.ok(near[3] < 1, "50 of 300 pixels is well inside the clip");
+  assert.deepEqual([near[7], near[8]], [1, -2]);
+  const far = slot(1);
+  assert.equal(far[0], 1);
+  assert.equal(far[6], Math.fround(0.9), "the second slot is the other worm");
+  // 400 pixels is past the 300 the vector measures against, so the distance and
+  // the offset both clip — and the unit direction underneath still points at it.
+  assert.equal(far[1], 1);
+  assert.equal(far[3], 1);
+  assert.equal(far[4], 1, "still due right");
+
+  // One foe left alive fills the first slot and leaves the second empty.
+  view.foes[0].alive = false;
+  const alone = encodeVector(view);
+  assert.equal(alone[VECTOR_OFFSETS.foes], 1);
+  assert.equal(alone[VECTOR_OFFSETS.foes + 9], 0);
 });
 
 test("a dead worm sees nothing at all", () => {
@@ -168,6 +185,37 @@ test("the patch is one hot channel per cell, with shots on their own", () => {
     shots.reduce((sum, value) => sum + value, 0),
     1,
   );
+});
+
+test("the byte patch and the one-hot patch are the same picture", () => {
+  const view = liveView();
+  const bytes = encodePatchBytes(view);
+  const floats = encodePatch(view);
+  assert.equal(bytes.length, PATCH_CELLS);
+  assert.equal(floats.length, PATCH_SIZE);
+  // A quarter of the bytes, because one cell is one byte and not four floats.
+  assert.equal(bytes.byteLength * 4, floats.byteLength / 4);
+  for (let cell = 0; cell < PATCH_CELLS; cell++) {
+    const kind = bytes[cell] & PATCH_KIND;
+    assert.ok(kind <= 2, `cell ${cell} has a terrain code of ${kind}`);
+    for (let channel = 0; channel < 3; channel++) {
+      assert.equal(
+        floats[channel * PATCH_CELLS + cell],
+        channel === kind ? 1 : 0,
+        `cell ${cell} channel ${channel}`,
+      );
+    }
+    assert.equal(
+      floats[3 * PATCH_CELLS + cell],
+      bytes[cell] & PATCH_PROJECTILE ? 1 : 0,
+    );
+  }
+  const shots = bytes.reduce((sum, byte) => sum + (byte & PATCH_PROJECTILE ? 1 : 0), 0);
+  assert.equal(shots, 1, "the one live shot");
+  // A dead worm writes zeros, and zero is rock — which is why the alive flag in
+  // the vector is what says the patch means anything.
+  const dead = encodePatchBytes({ ...view, self: { alive: false } });
+  assert.deepEqual(Array.from(dead), new Array(PATCH_CELLS).fill(0));
 });
 
 test("only the nearest few shots reach the vector, nearest first", () => {
@@ -210,8 +258,8 @@ test("encoding into a reused buffer clears what was there before", () => {
     health: 10,
   };
   observe(view, into);
-  assert.equal(into.vector[VECTOR_OFFSETS.foe], 1);
+  assert.equal(into.vector[VECTOR_OFFSETS.foes], 1);
   view.foes[0] = { alive: false };
   observe(view, into);
-  assert.equal(into.vector[VECTOR_OFFSETS.foe], 0, "the stale foe is gone");
+  assert.equal(into.vector[VECTOR_OFFSETS.foes], 0, "the stale foe is gone");
 });
