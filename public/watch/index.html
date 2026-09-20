@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Wormy II — watch</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <h1>Wormy II · watch</h1>
+      <div class="status">
+        <span class="chip" id="status">connecting</span>
+        <span class="dim" id="heading">—</span>
+      </div>
+    </header>
+
+    <p class="alert" id="alert" hidden></p>
+
+    <main class="stage">
+      <div class="canvas-wrap">
+        <canvas id="arena"></canvas>
+      </div>
+    </main>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Worms</h2>
+        <span class="dim" id="episode">—</span>
+      </div>
+      <ul class="worms" id="worms"></ul>
+    </section>
+
+    <p class="footnote">
+      The same engine the live game runs, played by the trained policy at normal
+      speed. This is not a room on webliero.com — putting a policy into one needs
+      the key-input path this repository does not have yet.
+    </p>
+  </body>
+</html>

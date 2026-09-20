@@ -8,41 +8,60 @@
 const element = (id) => document.getElementById(id);
 
 const SERIES = {
-  episodeReward: { label: "에피소드 보상", good: "up" },
-  reward: { label: "스텝당 보상", good: "up" },
-  damageDealt: { label: "준 피해", good: "up" },
-  damageTaken: { label: "받은 피해", good: "down" },
-  damageRatio: { label: "피해 비 (준/받은)", good: "up" },
-  kills: { label: "킬", good: "up" },
-  deaths: { label: "데스", good: "down" },
-  episodeSteps: { label: "에피소드 길이 (스텝)" },
-  stepsPerSecond: { label: "초당 에이전트 스텝" },
-  ticksPerSecond: { label: "초당 월드 틱" },
-  // The learner is not written yet; these are what it will report when it is.
-  policyLoss: { label: "정책 손실", good: "down" },
-  valueLoss: { label: "가치 손실", good: "down" },
-  entropy: { label: "엔트로피" },
-  explainedVariance: { label: "설명된 분산", good: "up" },
+  episodeReward: { label: "reward per episode", good: "up" },
+  bestReward: { label: "best reward kept", good: "up" },
+  kills: { label: "kills", good: "up" },
+  deaths: { label: "deaths", good: "down" },
+  damageDealt: { label: "damage dealt", good: "up" },
+  damageTaken: { label: "damage taken", good: "down" },
+  selfDamage: { label: "damage to itself", good: "down" },
+  damageRatio: { label: "damage dealt per taken", good: "up" },
+  stuckSteps: { label: "steps stuck", good: "down" },
+  cellsVisited: { label: "ground covered", good: "up" },
+  entropy: { label: "entropy: how undecided it still is" },
+  policyLoss: { label: "policy loss", good: "down" },
+  valueLoss: { label: "value loss", good: "down" },
+  explainedVariance: { label: "explained variance", good: "up" },
+  approxKL: { label: "KL per update", good: "down" },
+  clipFraction: { label: "clipped fraction" },
+  fromDamageDealt: { label: "reward from: damage dealt", good: "up" },
+  fromDamageTaken: { label: "reward from: damage taken", good: "up" },
+  fromKill: { label: "reward from: kills", good: "up" },
+  fromDeath: { label: "reward from: deaths", good: "up" },
+  fromExplore: { label: "reward from: new ground", good: "up" },
+  fromRevisit: { label: "reward from: doubling back", good: "up" },
+  fromStuck: { label: "reward from: being stuck", good: "up" },
+  fromGoal: { label: "reward from: the goal", good: "up" },
+  reward: { label: "reward per step", good: "up" },
+  meanReward: { label: "reward per rollout", good: "up" },
+  episodeSteps: { label: "episode length in steps" },
+  episodes: { label: "episodes finished" },
+  stepsPerSecond: { label: "training steps per second" },
+  ticksPerSecond: { label: "world ticks per second" },
+  envShare: { label: "share of an update spent waiting on worlds", good: "down" },
+  rolloutShare: { label: "share of an update spent collecting", good: "down" },
 };
 
 // Not charts: the x axis itself, and the things that are one value per record
 // rather than a curve.
-const NOT_A_SERIES = new Set(["step", "episode", "seed", "elapsedSeconds"]);
+const NOT_A_SERIES = new Set(["step", "episode", "seed", "elapsedSeconds", "update"]);
 
 const FIGURES = [
-  ["step", "스텝", (value) => count(value)],
-  ["episode", "에피소드", (value) => count(value)],
-  ["stepsPerSecond", "스텝/초", (value) => count(Math.round(value))],
-  ["episodeReward", "최근 보상", (value) => value.toFixed(3)],
-  ["damageDealt", "최근 준 피해", (value) => value.toFixed(1)],
-  ["damageTaken", "최근 받은 피해", (value) => value.toFixed(1)],
+  ["step", "steps", (value) => count(value)],
+  ["stepsPerSecond", "steps/s", (value) => count(Math.round(value))],
+  ["episodeReward", "reward", (value) => value.toFixed(2)],
+  ["bestReward", "best", (value) => value.toFixed(2)],
+  ["kills", "kills", (value) => value.toFixed(2)],
+  ["deaths", "deaths", (value) => value.toFixed(2)],
+  ["selfDamage", "self damage", (value) => value.toFixed(0)],
+  ["stuckSteps", "stuck", (value) => value.toFixed(0)],
 ];
 
 const STATUS = {
-  running: ["돌고 있음", "true"],
-  done: ["끝남", null],
-  failed: ["실패", "bad"],
-  stopped: ["중단", "waiting"],
+  running: ["running", "true"],
+  done: ["finished", null],
+  failed: ["failed", "bad"],
+  stopped: ["stopped", "waiting"],
 };
 
 const count = (value) => {
@@ -57,10 +76,10 @@ const duration = (seconds) => {
   const whole = Math.floor(seconds);
   const parts = [Math.floor(whole / 3600), Math.floor((whole % 3600) / 60), whole % 60];
   return parts[0] > 0
-    ? `${parts[0]}시간 ${parts[1]}분`
+    ? `${parts[0]}h ${parts[1]}m`
     : parts[1] > 0
-      ? `${parts[1]}분 ${parts[2]}초`
-      : `${parts[2]}초`;
+      ? `${parts[1]}m ${parts[2]}s`
+      : `${parts[2]}s`;
 };
 
 let runs = [];
@@ -92,21 +111,21 @@ function subscribe() {
     render();
   });
   stream.addEventListener("open", () => setStatus());
-  stream.addEventListener("error", () => setStatus("모니터에 연결할 수 없음"));
+  stream.addEventListener("error", () => setStatus("Cannot reach the monitor."));
 }
 
 function setStatus(problem) {
   const chip = element("status");
   const alert = element("alert");
   if (problem) {
-    chip.textContent = "연결 끊김";
+    chip.textContent = "disconnected";
     chip.dataset.tone = "bad";
     alert.textContent = problem;
     alert.hidden = false;
     return;
   }
   alert.hidden = true;
-  const [label, tone] = STATUS[run?.status] ?? ["대기", "waiting"];
+  const [label, tone] = STATUS[run?.status] ?? ["waiting", "waiting"];
   chip.textContent = label;
   if (tone) chip.dataset.tone = tone;
   else delete chip.dataset.tone;
@@ -147,7 +166,7 @@ function latest(key, numeric = true) {
 
 function renderHeading() {
   if (!run) {
-    element("heading").textContent = "아직 기록된 실행이 없습니다.";
+    element("heading").textContent = "No runs recorded yet.";
     return;
   }
   const started = new Date(run.startedAt);
@@ -155,7 +174,7 @@ function renderHeading() {
   const parts = [
     started.toLocaleTimeString(),
     duration(latest("elapsedSeconds") ?? (until - started) / 1000),
-    `${records.length}개 기록`,
+    `${records.length} records`,
   ];
   const map = latest("map", false);
   if (map) parts.push(map);
@@ -219,7 +238,7 @@ function renderCharts() {
   const names = seriesNames();
   const board = element("charts");
   if (!names.length) {
-    board.replaceChildren(empty(run ? "기록이 들어오면 여기에 그려집니다." : ""));
+    board.replaceChildren(empty(run ? "Charts appear as records arrive." : ""));
     return;
   }
   board.replaceChildren(...names.map((name) => chartFor(name).panel));
@@ -316,7 +335,7 @@ function drawChart(name) {
   context.fillText(round(high), left - 5, plot.y + 8);
   context.fillText(round(low), left - 5, plot.y + plot.height);
   context.textAlign = "left";
-  context.fillText(`스텝 ${count(shown[0][0])}`, plot.x + 2, height - 6);
+  context.fillText(`step ${count(shown[0][0])}`, plot.x + 2, height - 6);
   context.textAlign = "right";
   context.fillText(`${count(shown.at(-1)[0])}`, plot.x + plot.width, height - 6);
 
@@ -383,15 +402,57 @@ function renderMeta() {
   );
 }
 
+/**
+ * Puts the best policy of the selected run on a map and opens it.
+ *
+ * A page of curves says whether the numbers are improving. It does not say
+ * whether the thing has learned to play, and the only way to know that is to
+ * watch it.
+ */
+async function watchSelected() {
+  const button = element("watch");
+  const wanted = selected;
+  button.disabled = true;
+  button.textContent = "starting…";
+  try {
+    const response = await fetch(`/runs/${encodeURIComponent(wanted)}/watch`, {
+      method: "POST",
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error ?? "the viewer did not start");
+    window.open(body.url, "wormy-watch");
+    button.textContent = "Watch";
+  } catch (error) {
+    const alert = element("alert");
+    alert.textContent = `Could not start the viewer: ${error.message}`;
+    alert.hidden = false;
+    button.textContent = "Watch";
+  } finally {
+    renderWatchButton();
+  }
+}
+
+function renderWatchButton() {
+  const button = element("watch");
+  const checkpoint = run?.checkpoint;
+  button.disabled = !checkpoint;
+  button.title = checkpoint
+    ? `Play ${checkpoint === "best.pt" ? "the best policy" : "the latest policy"} of this run and watch it`
+    : "This run has no saved policy to watch";
+}
+
 function render() {
   setStatus();
   renderRunList();
+  renderWatchButton();
   renderHeading();
   renderFigures();
   renderCharts();
   renderNotes();
   renderMeta();
 }
+
+element("watch").addEventListener("click", () => void watchSelected());
 
 element("runs").addEventListener("change", (event) => {
   selected = event.target.value;

@@ -9,7 +9,9 @@
 // It only reads the run directory. Nothing here can start, stop or change a run,
 // which is what makes it safe to leave open.
 import { createServer } from "node:http";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import {
   DEFAULT_RUNS_DIR,
   describeRun,
@@ -18,6 +20,8 @@ import {
 } from "./recorder.js";
 
 const MAX_CLIENTS = 16;
+const WATCH_PORT = 8769;
+const WATCHER = fileURLToPath(new URL("../../scripts/watch.js", import.meta.url));
 const BLOCKED_CLIENT_MS = 15_000;
 const POLL_MS = 500;
 // Charts do not need more than this, and a run left going overnight should not
@@ -44,6 +48,49 @@ export async function createMonitorServer({
     ),
   );
   const clients = new Set();
+  // The one thing on this server that is not a read. A page of numbers cannot
+  // tell you whether a policy looks like someone playing, so there is a button
+  // that puts the best one on a map and shows it.
+  let watching = null;
+  const startWatching = (id) =>
+    new Promise((resolve) => {
+      if (watching && watching.id === id && watching.child.exitCode === null) {
+        return resolve({ ...watching.reply, alreadyRunning: true });
+      }
+      stopWatching();
+      const child = spawn(
+        process.execPath,
+        [WATCHER, "--run", id, "--port", String(WATCH_PORT)],
+        { cwd: fileURLToPath(new URL("../../", import.meta.url)), stdio: ["ignore", "pipe", "pipe"] },
+      );
+      let said = "";
+      const settle = (body) => {
+        if (watching?.settled) return;
+        if (watching) watching.settled = true;
+        resolve(body);
+      };
+      watching = { id, child, settled: false, reply: { url: `http://127.0.0.1:${WATCH_PORT}`, run: id } };
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      const listen = (chunk) => {
+        said += chunk;
+        // The viewer prints its own address once it is listening; waiting for
+        // it means the button never opens a tab onto nothing.
+        if (/viewer http:\/\/\S+/.test(said)) settle(watching.reply);
+      };
+      child.stdout.on("data", listen);
+      child.stderr.on("data", listen);
+      child.on("exit", (code) => {
+        settle({ error: said.trim().split("\n").slice(-4).join(" ") || `watcher exited with ${code}` });
+        if (watching?.child === child) watching = null;
+      });
+      setTimeout(() => settle(watching?.reply ?? { error: "the watcher did not start" }), 20_000);
+    });
+  const stopWatching = () => {
+    if (!watching) return;
+    watching.child.kill("SIGTERM");
+    watching = null;
+  };
   // One follower per run, shared by every client watching it, so a long run is
   // read from disk once per poll and not once per browser tab.
   const followers = new Map();
@@ -146,11 +193,22 @@ export async function createMonitorServer({
     ) {
       return json(403, { error: "Use the local monitor origin" });
     }
-    if (request.method !== "GET") {
-      response.setHeader("Allow", "GET");
-      return json(405, { error: "Read-only monitor: GET is required" });
-    }
     const url = new URL(request.url, origin);
+    if (request.method === "POST") {
+      const watch = url.pathname.match(/^\/runs\/([A-Za-z0-9_.-]+)\/watch$/);
+      if (watch) {
+        const started = await startWatching(watch[1]);
+        return started.error ? json(500, started) : json(200, started);
+      }
+      if (url.pathname === "/watch/stop") {
+        stopWatching();
+        return json(200, { stopped: true });
+      }
+    }
+    if (request.method !== "GET") {
+      response.setHeader("Allow", "GET, POST");
+      return json(405, { error: "Only GET, and POST to start or stop a viewer" });
+    }
     try {
       if (url.pathname === "/health") {
         const runs = await listRuns(dir);
@@ -159,6 +217,13 @@ export async function createMonitorServer({
           runs: runs.length,
           running: runs.filter((run) => run.status === "running").length,
           clients: clients.size,
+        });
+      }
+      if (url.pathname === "/watch") {
+        const live = watching && watching.child.exitCode === null;
+        return json(200, {
+          watching: live ? watching.id : null,
+          url: live ? `http://127.0.0.1:${WATCH_PORT}` : null,
         });
       }
       if (url.pathname === "/runs") return json(200, { runs: await listRuns(dir) });
@@ -248,6 +313,7 @@ export async function createMonitorServer({
     },
     async close() {
       closing = true;
+      stopWatching();
       clearInterval(timer);
       for (const client of clients) client.response.end();
       const closed = new Promise((resolve) => server.close(resolve));

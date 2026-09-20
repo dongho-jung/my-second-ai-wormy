@@ -133,6 +133,7 @@ test("the monitor serves runs and follows a live one, read-only", { timeout: 10_
     const one = await (await fetch(`${server.origin}/runs/${run.id}`)).json();
     assert.equal(one.records.length, 1);
     assert.equal(one.run.meta.policy, "random");
+    assert.equal(one.run.checkpoint, null, "a run with no saved policy cannot be watched");
 
     // A live run: connect, take what is already there, then watch it arrive.
     const stream = frames(await fetch(`${server.origin}/events`));
@@ -153,10 +154,15 @@ test("the monitor serves runs and follows a live one, read-only", { timeout: 10_
     );
     await stream.cancel();
 
-    // Nothing here can change a run.
+    // The only thing it will do besides read is start a viewer, and that only
+    // on the one route.
     const post = await fetch(`${server.origin}/runs`, { method: "POST" });
     assert.equal(post.status, 405);
-    assert.equal(post.headers.get("allow"), "GET");
+    assert.equal(post.headers.get("allow"), "GET, POST");
+    const remove = await fetch(`${server.origin}/runs/${run.id}/watch`, {
+      method: "DELETE",
+    });
+    assert.equal(remove.status, 405);
     assert.equal((await fetch(`${server.origin}/nope`)).status, 404);
     assert.equal((await fetch(`${server.origin}/runs/missing`)).status, 404);
     // A run id becomes a path segment, so it is refused rather than cleaned up.

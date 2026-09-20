@@ -1,18 +1,19 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Wormy II — 학습 진행</title>
+    <title>Wormy II — training</title>
     <link rel="stylesheet" href="/style.css" />
     <script src="/app.js" defer></script>
   </head>
   <body>
     <header class="masthead">
-      <h1>Wormy II · 학습</h1>
+      <h1>Wormy II · training</h1>
       <div class="status">
-        <span class="chip" id="status">연결 중</span>
-        <select id="runs" aria-label="실행 선택"></select>
+        <span class="chip" id="status">connecting</span>
+        <select id="runs" aria-label="Run"></select>
+        <button id="watch" type="button" disabled>Watch</button>
       </div>
       <div class="dim" id="heading">—</div>
     </header>
@@ -24,14 +25,14 @@
     <main class="charts" id="charts"></main>
 
     <section class="panel" id="notes-panel" hidden>
-      <div class="panel-head"><h2>기록</h2></div>
+      <div class="panel-head"><h2>Log</h2></div>
       <ul class="notes" id="notes"></ul>
     </section>
 
     <section class="panel">
       <div class="panel-head">
-        <h2>설정</h2>
-        <span class="dim" id="meta-scale">이 실행이 시작될 때 정해진 것</span>
+        <h2>Settings</h2>
+        <span class="dim">decided when this run started</span>
       </div>
       <ul class="facts" id="meta"></ul>
     </section>

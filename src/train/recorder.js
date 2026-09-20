@@ -9,7 +9,7 @@
 // The records are deliberately free-form: anything numeric becomes a chart, so
 // a trainer that starts logging a new quantity needs no change here or in the
 // page.
-import { mkdir, appendFile, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, appendFile, access, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 
 // Under artifacts/, which is gitignored: a run is a measurement of this machine,
@@ -100,14 +100,28 @@ export async function listRuns(dir = DEFAULT_RUNS_DIR) {
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
 }
 
+/** Checkpoints a run has saved, best first. A run with none cannot be watched. */
+export const CHECKPOINTS = ["best.pt", "policy.pt"];
+
 /** A run's own description, plus how much it has written so far. */
 export async function describeRun(dir, id) {
   const path = runDir(dir, id);
   try {
     const run = JSON.parse(await readFile(new URL(RUN_FILE, path), "utf8"));
     const metrics = await stat(new URL(METRICS_FILE, path)).catch(() => null);
+    let checkpoint = null;
+    for (const name of CHECKPOINTS) {
+      try {
+        await access(new URL(name, path));
+        checkpoint = name;
+        break;
+      } catch {
+        // Not saved yet, or not saved at all: a rollout has no policy to keep.
+      }
+    }
     return {
       ...run,
+      checkpoint,
       bytes: metrics?.size ?? 0,
       updatedAt: (metrics?.mtime ?? new Date(run.startedAt)).toISOString(),
     };
