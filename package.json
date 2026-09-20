@@ -16,7 +16,8 @@
     "train": "node scripts/train.js",
     "watch": "node scripts/watch.js",
     "levels": "node scripts/fetch-levels.js",
-    "play": "node scripts/play.js"
+    "play": "node scripts/play.js",
+    "weapons": "node scripts/profile-weapons.js"
   },
   "dependencies": {
     "playwright": "1.63.0"
