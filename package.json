@@ -11,6 +11,7 @@
     "start": "node src/cli.js",
     "test": "node --test test/*.test.js",
     "preview": "node scripts/preview.js",
+    "rollout": "node scripts/rollout.js",
     "monitor": "node scripts/monitor.js"
   },
   "dependencies": {
