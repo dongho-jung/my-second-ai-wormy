@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node src/cli.js",
     "test": "node --test test/*.test.js",
-    "preview": "node scripts/preview.js"
+    "preview": "node scripts/preview.js",
+    "monitor": "node scripts/monitor.js"
   },
   "dependencies": {
     "playwright": "1.63.0"

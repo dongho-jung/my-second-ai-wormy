@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Wormy II — 학습 진행</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <h1>Wormy II · 학습</h1>
+      <div class="status">
+        <span class="chip" id="status">연결 중</span>
+        <select id="runs" aria-label="실행 선택"></select>
+      </div>
+      <div class="dim" id="heading">—</div>
+    </header>
+
+    <p class="alert" id="alert" hidden></p>
+
+    <section class="figures" id="figures"></section>
+
+    <main class="charts" id="charts"></main>
+
+    <section class="panel" id="notes-panel" hidden>
+      <div class="panel-head"><h2>기록</h2></div>
+      <ul class="notes" id="notes"></ul>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>설정</h2>
+        <span class="dim" id="meta-scale">이 실행이 시작될 때 정해진 것</span>
+      </div>
+      <ul class="facts" id="meta"></ul>
+    </section>
+  </body>
+</html>
