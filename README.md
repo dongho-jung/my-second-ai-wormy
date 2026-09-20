@@ -1,134 +1,256 @@
 # my-second-ai-wormy
 
-[WebLiero](https://www.webliero.com/) 게임 상태와 지형을 실시간으로 읽어 로컬 대시보드에 그립니다.
+Reads [WebLiero](https://www.webliero.com/) state and terrain live and draws it
+on a local dashboard — and runs the same game engine headless, thousands of
+times faster than real time, to train a policy to play it.
 
-`../my-first-ai-wormy`에서 **상태 수집 · 지형 추출 · 그리기**만 뽑아낸 것입니다. Jev(모델 호출), 반사 루프, 키 입력/조작, 텔레메트리, 자가대전, 코드 자가개선은 전부 들어있지 않습니다. **실행 중인 게임에 대해서는 보기만 하고, 조작 API 자체가 없습니다.**
+The watching half is **state collection, terrain extraction and drawing**, taken
+out of `../my-first-ai-wormy`. The model calls, the reflex loop, key input and
+control APIs, telemetry, self-play and the self-improvement loop from that
+repository are all deliberately absent here: **against a running game this tool
+only looks, and has no control surface at all.**
 
-여기에 더해, 같은 게임 엔진을 브라우저 없이 돌리는 **오프라인 학습 환경**(`src/env/`)과 그 진행 상황을 보는 **별도 페이지**가 있습니다. 실게임을 건드리지 않고 수천 배속으로 자가대전을 돌리기 위한 것입니다.
+The learning half never touches a running game. It loads the same official
+bundle into plain Node, plays matches at a few thousand times real time, and
+trains on them.
 
-## 실행
+## Running
 
 ```bash
 npm start
 ```
 
-게임 창과 대시보드 창이 **각각 독립된 창으로, 화면을 정확히 반씩** 차지하도록 배치됩니다(왼쪽 게임, 오른쪽 대시보드). **게임 창에서 방에 들어가면** 그때부터 상태와 지형이 그려집니다. CAPTCHA가 뜨면 게임 창에서 직접 풀어야 합니다. Ctrl+C 또는 게임 창을 닫으면 멈춥니다.
+The game window and the dashboard open as **two separate windows, each taking
+exactly half the screen** (game on the left, dashboard on the right). State and
+terrain start being drawn **once you join a room in the game window**. A CAPTCHA,
+if one is asked for, has to be solved there. Ctrl+C, or closing the game window,
+stops.
 
-Node **26**이 필요하며 버전은 `.nvmrc`에 고정되어 있습니다.
+Node **26** is required and the version is pinned in `.nvmrc`.
 
 ```bash
-npm start -- --help   # 옵션 전체
-npm test              # 어댑터 · 서버 · 환경 테스트 (게임 없이 실행)
-npm run preview       # 게임 없이 픽스처 데이터로 대시보드만 띄우기
-npm run rollout       # 헤드리스 환경에서 에피소드 돌리기
-npm run monitor       # 학습 진행 페이지 (8768)
+npm start -- --help   # every option
+npm test              # adapter, server, environment and monitor tests, no game needed
+npm run preview       # the dashboard alone, drawn from the test fixture
+npm run rollout       # episodes in the headless environment, random policy
+npm run train         # self-play PPO
+npm run watch         # watch a trained policy play
+npm run monitor       # the training page (8768)
 ```
 
-### 브라우저와 프로필
+### Browser and profile
 
-- Chromium은 디버깅 포트(기본 9334)에 남겨두고, 다음 실행은 거기에 **붙습니다**. 방과 이미 푼 CAPTCHA가 재시작을 넘어 유지됩니다. `--own-browser`를 주면 프로세스와 함께 종료합니다.
-- 프로필은 `~/.cache/wormy-ii/chrome-profile` **한 곳을 계속 재사용**합니다. 닉네임, 키 설정 등 게임 설정이 브라우저를 껐다 켜도 남습니다. `--profile PATH`로 바꾸거나 여러 개를 둘 수 있습니다.
-- 대신 **탭 복원 데이터(`Default/Sessions`)는 실행할 때마다 지웁니다.** 이게 없으면 지난 실행의 탭이 매번 되살아나 한 창에 탭이 쌓입니다. 설정·쿠키·localStorage는 건드리지 않습니다.
-- 실행할 때마다 지난 실행이 남긴 탭(빈 탭, 죽은 대시보드, 중복 게임 탭)을 정리해 **창 2개 · 탭 2개**로 맞춥니다.
-- 기본 포트는 대시보드 8766, 디버깅 9334입니다. `../my-first-ai-wormy`(8765 / 9333)와 겹치지 않으므로 둘을 동시에 돌려도 서로를 건드리지 않습니다.
+- Chromium is left on its debugging port (9334 by default) and the next run
+  **attaches** to it, so the room and an already-solved CAPTCHA survive a
+  restart. `--own-browser` makes it exit with the process instead.
+- One profile at `~/.cache/wormy-ii/chrome-profile` is **reused every time**, so
+  nickname, key bindings and the rest of the game's settings survive a browser
+  restart. `--profile PATH` moves it or keeps more than one.
+- **Tab restore data (`Default/Sessions`) is deleted on every launch.** Without
+  that, the previous run's tabs come back and pile up in one window. Settings,
+  cookies and localStorage are untouched.
+- Every launch clears out what the last one left behind — blank tabs, dead
+  dashboards, duplicate game tabs — back to **two windows, two tabs**.
+- Ports: dashboard 8766, debugging 9334, fixture preview 8767, training monitor
+  8768, match viewer 8769. None of them collide with `../my-first-ai-wormy`
+  (8765 / 9333), so both can run at once without touching each other.
 
-## 무엇을 뽑는가
+## What is extracted
 
-`src/adapter-v20.js`의 `snapshotV20`은 CDP로 페이지 안에서 실행되며 세 가지 중 하나를 돌려줍니다.
+`snapshotV20` in `src/adapter-v20.js` runs inside the page over CDP and returns
+one of three things.
 
-| 요청                     | 내용                                                                                |
-| ------------------------ | ----------------------------------------------------------------------------------- |
-| (기본)                   | 틱, 방/경기, 맵 이름과 크기, 플레이어와 웜(좌표·속도·체력·입력 비트마스크·조준·무기·로프), 투사체, 보급품, 깃발 |
-| `{ terrain: true }`      | 레벨 전체 픽셀 (팔레트 인덱스 1바이트/픽셀) + 팔레트 768바이트 + 재질 플래그 256바이트 |
-| `{ terrainPatch: true }` | 웜 주변 **426x240 창**을 1바이트/픽셀로, 그리고 접촉·걷기·천장/바닥/벽 거리           |
+| Request                  | Contents                                                                                                        |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| (default)                | tick, room and match, map name and size, players and worms (position, velocity, health, input bitmask, aim, weapons, rope), projectiles, pickups, flag |
+| `{ terrain: true }`      | every pixel of the level (one palette-index byte each) plus 768 bytes of palette and 256 material flags          |
+| `{ terrainPatch: true }` | the **426x240 window** around the worm, one byte per pixel, plus contacts, walk probes and ceiling/floor/wall distances |
 
-지형은 **팔레트 인덱스가 아니라 재질 플래그**로 해석합니다. 비트 3은 웜이 있을 수 있는 배경, 비트 0-1은 무기가 파는 흙, 비트 2는 파이지 않는 바위입니다. 레벨마다 색이 다르므로 인덱스 범위로는 아무것도 알 수 없습니다.
+Terrain is read as **material flags, not palette indices**. Bit 3 is the
+background a worm may stand in, bits 0-1 the dirt a weapon digs through, bit 2
+the rock it cannot. Levels each pick their own colours, so an index range says
+nothing.
 
-버전 고정: 공식 `/v/20/game-min.js`의 SHA-256이 맞을 때만 수집을 시작합니다. 번들이 바뀌면 `unsupported_client`를 내보내고 이전 매핑으로 값을 추측하지 않습니다. **체크섬만 갈아끼우지 마세요.**
+Version lock: collection only starts when the SHA-256 of the official
+`/v/20/game-min.js` matches. If the bundle changes it reports
+`unsupported_client` rather than guessing with the old mapping. **Do not just
+swap the checksum.**
 
-## 무엇을 그리는가
+## What is drawn
 
-- **Map** — 레벨 전체를 **1픽셀 = 1픽셀**로. 게임 자신의 팔레트로 그리며, `material` 체크박스로 재질(공기/흙/바위) 보기로 바꿀 수 있습니다. 위에 웜·투사체·보급품·로프를 겹치고, 지금 보고 있는 Near 창의 위치를 점선으로 표시합니다.
-- **Near** — 게임이 웜 주위에 그리는 426x240 창을 역시 **1:1**로. 맵 밖은 따로 칠해 공기와 구분합니다.
-- **Surroundings** — 걷기 가능 여부(clear/step/dirt/rock), 엔진 자신의 접촉 수와 자동 턱오름(stepping), 천장·바닥·좌우 벽까지의 픽셀 거리.
-- **Worm / Players** — 체력, 좌표, 속도, 조준, 무기와 탄약, 로프, 지금 눌려 있는 키, 그리고 방 안 모든 플레이어의 점수와 상태.
+- **Map** — the whole level at **one pixel per pixel**, in the game's own
+  palette, with a `material` checkbox that switches to a material view (air,
+  dirt, rock). Worms, projectiles, pickups and ropes are drawn over it, and the
+  Near window's position is outlined.
+- **Near** — the 426x240 window the game draws around the worm, also **1:1**.
+  Outside the map is shaded so it is not mistaken for air.
+- **Surroundings** — whether a step is possible (clear, step, dirt, rock), the
+  engine's own contact counts and automatic step-up, and the pixel distances to
+  the ceiling, floor and side walls.
+- **Worm / Players** — health, position, velocity, aim, weapons and ammo, rope,
+  the keys currently held, and every player's score and state.
 
-상태는 SSE로 20Hz, 주변 지형은 250ms, 레벨 전체는 3초마다 갱신합니다. 셋은 서로 다른 주기이므로 각 그림에 **언제 읽은 것인지**가 같이 표시됩니다.
+State refreshes at 20 Hz over SSE, the surroundings every 250 ms, the whole
+level every 3 s. Because the three run on different clocks, each picture carries
+**when it was read**.
 
-## 로컬 HTTP (읽기 전용)
+## Local HTTP (read-only)
 
-| 엔드포인트    | 내용                                            |
-| ------------- | ----------------------------------------------- |
-| `GET /state`  | 최신 상태 한 장                                 |
-| `GET /events` | 같은 상태를 SSE로 (최대 32 클라이언트)          |
-| `GET /terrain`| 웜 주변 창과 주변 지형 수치                     |
-| `GET /map`    | 레벨 전체 픽셀·팔레트·재질 플래그               |
-| `GET /health` | 서비스 생존(`ok`)과 게임 상태 확보 여부(`ready`)|
+| Endpoint       | Contents                                             |
+| -------------- | ---------------------------------------------------- |
+| `GET /state`   | the latest state                                     |
+| `GET /events`  | the same state over SSE (32 clients maximum)         |
+| `GET /terrain` | the window around the worm and the measured surroundings |
+| `GET /map`     | every level pixel, the palette and the material flags |
+| `GET /health`  | whether the service is up (`ok`) and has state (`ready`) |
 
-127.0.0.1에만 바인딩하고, 다른 Host/Origin의 요청과 GET 이외의 메서드는 거부합니다. 샘플이 끊기면 `/state`는 `stale`과 `game: null`을 돌려줍니다.
+It binds to 127.0.0.1 only and refuses another Host or Origin, and any method
+but GET. If samples stop arriving, `/state` answers `stale` with `game: null`.
 
-## 헤드리스 학습 환경
+## The headless training environment
 
-`src/env/`는 공식 v20 번들을 **브라우저·서버·렌더링 없이 순수 Node에서** 돌립니다. 강화학습에 쓰려고 만든 것이고, 대시보드 쪽 코드와는 어댑터의 체크섬만 공유합니다.
+`src/env/` runs the official v20 bundle **in plain Node with no browser, no
+server and no rendering**. It exists to train on, and shares nothing with the
+dashboard half but the adapter's checksum.
 
 ```bash
 npm run rollout -- --episodes 40 --level-pool 8
 npm run rollout -- --help
 ```
 
-| 모듈 | 하는 일 |
+The default match is **three worms in a free-for-all**, but the count is one
+setting: solo, a duel and a five-way brawl all run on the same code.
+
+| Module | What it does |
 | --- | --- |
-| `engine.js` | 번들을 메모리에서 패치해 평가하고, SHA-256이 어댑터가 잠근 값과 같은지 확인합니다. 시드로 재현되는 랜덤 레벨 생성도 여기 있습니다. |
-| `actions.js` | 키 비트마스크(`1 좌 … 256 굴착`)와, 비트가 아닌 로프·무기교체 메시지. 실제 방이 입력을 넘기는 방식 그대로입니다. |
-| `view.js` | 헤드리스 월드와 실게임 스냅샷을 **같은 모양 하나**로 만듭니다. 관측 인코더는 이것만 읽습니다. |
-| `observation.js` | 벡터 76개 + 지형 패치 4×32×32. 필요한 쪽만 만들 수 있습니다. |
-| `reward.js` | 준 피해 − 받은 피해, 킬/데스. 자기 폭발도 그대로 마이너스입니다. |
-| `env.js` | `reset()` / `step()`, 프레임스킵, 리스폰, 입력 지연. |
+| `engine.js` | Patches the bundle in memory, evaluates it, and checks its SHA-256 against the one the adapter locked. Also seed-reproducible level generation, random weapon loadouts, and the instrument that records **who hit whom**. |
+| `actions.js` | The key bitmask (`1 left … 256 dig`), the rope and weapon-change messages that are not bits, and the seven heads a policy emits. Exactly how a real room passes input. |
+| `view.js` | Turns a headless world and a live snapshot into **one shape**. The observation encoders read only that. |
+| `observation.js` | The vector (67-130 numbers, depending on how many worms are playing) and the terrain patch. Either can be left out. |
+| `progress.js` | Whether a worm is stuck, going in circles, or closing on a goal. |
+| `reward.js` | Damage dealt minus damage taken, kills and deaths, and the movement terms. Blowing yourself up costs the same as being shot. |
+| `env.js` | `reset()` / `step()`, frameskip, respawn, input latency. |
+| `vec.js`, `worker.js` | Many worlds in one process, and the binary frames the trainer talks over. |
 
-- **번들과 에셋은 저장소에 없습니다**(`artifacts/`는 gitignore). 없으면 환경 테스트는 이유를 적고 건너뜁니다. `artifacts/headless-sim/fetch-assets.sh`로 받습니다.
-- 물리가 실게임과 같다는 보장은 **체크섬 하나**입니다. 번들이 바뀌면 로딩을 거부합니다.
-- 측정(M2 Pro 1코어, 2에이전트): 벡터만 **초당 76,485 스텝(2,549배속)**, 지형 패치까지 **36,509 스텝(1,217배속)**.
-- 같은 시드와 같은 액션이면 같은 에피소드입니다. 좌표·체력 소수점까지 테스트가 대조합니다.
+- **The bundle and its assets are not in the repository** (`artifacts/` is
+  gitignored). Without them the environment tests skip with a reason. Fetch them
+  with `artifacts/headless-sim/fetch-assets.sh`.
+- That the physics match the live game rests on **one checksum**. If the bundle
+  changes, loading refuses.
+- Measured (M2 Pro, one core, two agents): vector only **76,485 steps/s
+  (2,549× real time)**, with the terrain patch **36,509 steps/s (1,217×)**.
+- The same seed and the same actions give the same episode. Tests compare
+  positions and health to six decimals.
 
-설계 근거와 다음 단계는 `docs/local-learning-2026-09-20.md`에 있습니다.
+### What is rewarded
 
-## 학습 진행 모니터
+Damage dealt and kills **add**; damage taken and deaths **subtract**. With three
+or more worms, "the other one lost health" is not a signal — two of them can be
+fighting while the third watches — so the attacker's id is taken **from the
+engine's own damage function** and credited exactly. Damage from your own
+explosion or a fall arrives with your own id, so it is taken without being
+dealt.
 
-게임 대시보드와 **다른 포트의 다른 페이지**입니다. 학습은 몇 시간을 도는데, 그동안 잘 되고 있는지 볼 곳이 필요해서 만들었습니다.
+On top of that, **being stuck or going in circles costs**. Failing to move 14
+pixels in four seconds is stuck; coming back to a cell you were recently in is a
+circle. They are different failures and are measured differently. Set a goal
+position and closing on it pays.
+
+The weights and the reasoning behind them are in
+`docs/local-learning-2026-09-20.md`, section 4-0.
+
+## Training
+
+```bash
+npm run train -- --agents 3 --total-steps 8000000
+npm run train -- --help
+```
+
+- **Every worm shares one policy.** In a free-for-all that is self-play by
+  construction: whatever one of them learns it immediately has to face, and
+  there is no opponent to hand-write.
+- The engine is JavaScript and the training is **PyTorch on Apple MPS**. They
+  meet on a worker process's own stdin and stdout in binary frames — no port to
+  pick, no socket to clean up, and the workers die with the parent.
+- The observation is **mixed**, as designed: state in a vector, terrain and
+  projectiles through a small convolution. 0.52M parameters.
+- Measured (M2 Pro, 4 workers × 8 worlds × 3 worms = 96 worms at once):
+  **6,570 steps/s** with the patch, **11,200** with `--no-patch`. Ten million
+  steps is 25 minutes and 15 minutes respectively.
+- PyTorch lives in `artifacts/.venv` (gitignored). `npm run train` says how to
+  make it if it is not there.
+
+Checkpoints and metrics land together in `artifacts/runs/<id>/`. The best policy
+so far is kept separately from the latest one, because self-play wanders.
+
+## Watching a policy play
+
+```bash
+npm run watch                        # the newest run's best policy
+npm run watch -- --agents 5 --speed 2
+```
+
+There is also a **Watch** button on the training page, which starts this for the
+selected run and opens it.
+
+One match is played at the speed the game actually runs at and drawn in the
+browser on port 8769: the terrain the worms are digging through, where they are
+aiming, what they are holding, and the score.
+
+This is **the headless engine rendered, not a room on webliero.com**. The
+physics are identical — the same bundle, checked by the same checksum — but
+putting a policy into a live online room needs the key-input path this
+repository does not have yet.
+
+## The training monitor
+
+A **separate page on a separate port** from the game dashboard. Training runs
+for hours, and there has to be somewhere to see whether it is going well.
 
 ```bash
 npm run monitor              # http://127.0.0.1:8768
 ```
 
-- 실행 기록은 `artifacts/runs/<id>/`에 `run.json`과 `metrics.jsonl`로 쌓입니다. 덧붙이기만 하는 텍스트라 중간에 멈춰도 그때까지가 남습니다.
-- 모니터는 파일이 커진 만큼만 읽어 페이지에 흘려보냅니다. 학습 쪽은 누가 보고 있는지 알 필요가 없습니다.
-- 기록의 **숫자 필드는 전부 자동으로 차트**가 됩니다. 아는 이름에는 한글 라벨과 좋은 방향이 붙어 오르내림이 초록·빨강으로 갈립니다.
-- 127.0.0.1에만 바인딩하고 GET만 받습니다. **읽기만 하며, 실행을 시작하거나 멈출 수 없습니다.**
+- Runs are written to `artifacts/runs/<id>/` as `run.json` and
+  `metrics.jsonl`. Append-only text, so a run that is killed halfway is still
+  readable.
+- The monitor reads only the bytes that have appeared since it last looked and
+  streams them to the page. The training side does not need to know anyone is
+  watching.
+- **Every numeric field becomes a chart**, in the order the run first mentioned
+  it, so a trainer that starts logging something new needs no change here. Known
+  names get a label and a direction, so rises and falls are green or red.
+- It binds to 127.0.0.1 and serves GET. The one exception to being read-only is
+  the Watch button, which starts a viewer.
 
-## 구조
+## Structure
 
 ```text
-게임 창 (공식 WebLiero, 수정하지 않음)
-  ↓ Chrome DevTools Protocol (읽기 전용)
-observer.js   컨트롤러 탐색 + 번들 체크섬 확인 + 어댑터 호출 (CDP 직렬화)
-  ├─ stream.js    20Hz 상태 샘플링
-  └─ terrain.js   주변 지형 250ms · 레벨 전체 3s
+game window (official WebLiero, unmodified)
+  ↓ Chrome DevTools Protocol (read-only)
+observer.js   finds the controller, checks the bundle checksum, calls the adapter
+  ├─ stream.js    20 Hz state sampling
+  └─ terrain.js   surroundings every 250 ms, whole level every 3 s
        ↓
 server.js  /state · /events · /terrain · /map · /health
        ↓
-public/    대시보드 (맵 1:1, 주변 1:1, 수치)
+public/    dashboard (map 1:1, near 1:1, numbers)
 ```
 
-학습 쪽은 위와 완전히 분리되어 있습니다.
+The learning side is entirely separate from the above.
 
 ```text
-공식 v20 번들 (같은 파일, 같은 체크섬)
-  ↓ node vm, 브라우저 없음
-src/env/     engine · actions · view · observation · reward · env
-  ↓ scripts/rollout.js
-artifacts/runs/<id>/metrics.jsonl
-  ↓ src/train/monitor.js
-public/train/  진행 페이지 (8768)
+official v20 bundle (same file, same checksum)
+  ↓ node vm, no browser
+src/env/     engine · actions · view · observation · progress · reward · env
+  ↓ vec.js (many worlds) → worker.js (binary frames)
+train/       ppo.py · policy.py  (PyTorch, MPS)
+  ↓
+artifacts/runs/<id>/  metrics.jsonl · best.pt · policy.pt
+  ↓ src/train/monitor.js            ↓ src/env/watch.js
+public/train/  training page (8768)   public/watch/  match viewer (8769)
 ```
 
-업스트림 게임 소스·네트워크 응답·키 입력 핸들러는 건드리지 않고, 브라우저에 관측용 전역 변수도 만들지 않습니다. 필드 매핑은 공식 API가 아니므로 업스트림이 바뀌면 어댑터를 다시 확인해야 합니다.
+The upstream game's source, its network responses and its key handlers are never
+touched, and no observation globals are added to the browser. The field mappings
+are not an official API, so an upstream change means checking the adapter again.
