@@ -102,12 +102,16 @@ export const DONE = {
   first: 1,
   /** The last observation of an episode. Value it; do not treat it as an end. */
   last: 2,
+  // The episode was cut short on purpose — the staggered first one every
+  // world plays — so its last observation is still valued like a truncation,
+  // but nothing is filed about it: it was not a whole episode.
+  cut: 3,
 };
 
 export class VecWormEnv {
   constructor(
     engine,
-    { envs = 8, levelPool = 16, levelFiles = [], seed = 1, opponents = 0, ...options } = {},
+    { envs = 8, levelPool = 16, levelFiles = [], seed = 1, stagger = false, opponents = 0, ...options } = {},
   ) {
     if (!Number.isInteger(envs) || envs < 1) {
       throw new Error(`envs must be a whole number of at least 1, got ${envs}`);
@@ -172,6 +176,9 @@ export class VecWormEnv {
     this.dones = new Uint8Array(envs);
     // Per worm, not per match: which ones came back from the dead this step.
     this.restarts = new Uint8Array(slots);
+    // Which worlds are still on their cut-short first episode.
+    this.warming = new Uint8Array(envs);
+    this.stagger = Boolean(stagger);
     this.stats = new Float32Array(envs * EPISODE_STATS.length);
     this.wantsPatch = this.envs[0].observationKinds.includes("patchBytes");
     this.wantsMap = this.envs[0].observationKinds.includes("map");
@@ -214,7 +221,20 @@ export class VecWormEnv {
     this.dones.fill(0);
     this.restarts.fill(0);
     this.stats.fill(0);
-    for (const env of this.envs) env.reset();
+    this.warming.fill(0);
+    this.envs.forEach((env, index) => {
+      env.reset();
+      if (!this.stagger) return;
+      // Start each world's first episode a different way through, spread
+      // evenly, so the matches end at different times from then on. Started
+      // together they would end together, every episode, and the trainer
+      // would see its statistics arrive in one lump every seven updates with
+      // nothing in between. The cut-short episode is not filed as one.
+      const offset = Math.floor((index / this.count) * env.episodeTicks);
+      if (!offset) return; // the first world's first episode is a whole one
+      env.episodeStartTick -= offset;
+      this.warming[index] = 1;
+    });
     return this;
   }
 
@@ -254,6 +274,11 @@ export class VecWormEnv {
         this.restarts[index * this.agents + agent] = out.respawned[agent] ? 1 : 0;
       }
       if (out.truncated) {
+        if (this.warming[index]) {
+          this.warming[index] = 0;
+          this.dones[index] = DONE.cut;
+          continue;
+        }
         // Written while the totals are still this episode's; the reset that
         // clears them does not run until the next call.
         this.writeStats(index, env);

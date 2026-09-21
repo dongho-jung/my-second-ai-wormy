@@ -285,6 +285,9 @@ def main(argv=None):
         episodeTicks=args.episode_ticks,
         frameskip=args.frameskip,
         patchScale=args.patch_scale,
+        # Every world starts its first episode partway through, so the matches
+        # end at different times instead of all together every seven updates.
+        stagger=True,
         inputLatencyTicks=latency if len(latency) > 1 else latency[0],
         levelPool=args.maps,
         levelFiles=stock_levels(args),
