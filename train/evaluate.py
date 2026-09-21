@@ -365,6 +365,13 @@ def main(argv=None):
             f"{label:18s}{lefts.mean():9.2f}{rights.mean():9.2f}{diffs.mean():+15.2f}"
             f"{'[' + f'{low:+.2f}, {high:+.2f}' + ']':>22s}"
         )
+    # Pair by pair, who killed more: the number a person asks for first.
+    lefts = np.asarray(rows["kills"]["left"])
+    rights = np.asarray(rows["kills"]["right"])
+    ahead = int((lefts > rights).sum())
+    behind = int((lefts < rights).sum())
+    level = int(len(lefts) - ahead - behind)
+    result["pairs"] = {"left_ahead": ahead, "right_ahead": behind, "level": level}
     kills = result["metrics"]["kills"]
     low, high = kills["interval"]
     if low > 0:
@@ -375,6 +382,7 @@ def main(argv=None):
         verdict = "no difference on kills that these paired episodes can tell apart"
     result["verdict"] = verdict
     print()
+    print(f"left killed more in {ahead} of {len(lefts)} paired episodes, fewer in {behind}, the same in {level}")
     print(verdict, flush=True)
     if args.json:
         Path(args.json).write_text(json.dumps(result, indent=2) + "\n")
