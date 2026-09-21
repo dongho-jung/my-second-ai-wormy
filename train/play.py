@@ -47,6 +47,12 @@ def parse_args(argv=None):
     parser.add_argument("--public", action="store_true", default=True,
                         help="list the room publicly, so passers-by join and are learned from")
     parser.add_argument("--private", dest="public", action="store_false")
+    parser.add_argument("--greeting", default="",
+                        help="lines to say when somebody joins, separated by |. Empty says "
+                             "nothing, which is the default: a room does not need a bot "
+                             "introducing itself")
+    parser.add_argument("--farewell", default="G G",
+                        help="lines to say when a match ends, separated by |")
     parser.add_argument("--yield-to", type=int, default=0,
                         help="give the seats up once this many people are playing. 0 never "
                              "yields; 2 keeps a quiet room company and leaves a busy one alone")
@@ -159,6 +165,8 @@ def main(argv=None):
         # Play while the room is short of people and spectate once it is not:
         # a seat held by a bot is a seat somebody else cannot have.
         "yieldTo": args.yield_to,
+        "greeting": args.greeting,
+        "farewell": args.farewell,
         "watching": [name.strip() for name in args.watching.split(",") if name.strip()],
         "colours": [
             [int(channel) for channel in triple.split(",")]

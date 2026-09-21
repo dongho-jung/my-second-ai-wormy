@@ -347,8 +347,10 @@ async function sample() {
 // arrow key would otherwise stay held while the text box has focus, and the
 // worm walks into a wall through the whole sentence.
 
-const GREETING = ["H I", "we are bots learning liero from the players here"];
-const FAREWELL = ["G G"];
+// Nothing on arrival. A bot that introduces itself to a room full of people
+// playing is a bot talking about itself, and it was asked to stop.
+const GREETING = (config.greeting ?? "").split("|").map((line) => line.trim()).filter(Boolean);
+const FAREWELL = (config.farewell ?? "G G").split("|").map((line) => line.trim()).filter(Boolean);
 /** Not more than one greeting this often, however many people come and go. */
 const GREET_EVERY_MS = 5 * 60 * 1000;
 
@@ -426,14 +428,15 @@ async function chatter() {
   // The first look sees everybody at once, including our own worms starting
   // up; that is not somebody arriving.
   const now = Date.now();
-  const greet = arrived && !first && now - greetedAt > GREET_EVERY_MS;
+  const greet =
+    GREETING.length > 0 && arrived && !first && now - greetedAt > GREET_EVERY_MS;
   if (!greet && !justEnded) return;
 
   talking = true;
   try {
     // Whichever of ours is alive, so the line does not come from a corpse.
     const speaker = seats.find((seat) => alive[seat.index]) ?? seats[0];
-    if (justEnded) await say_in_chat(speaker, FAREWELL);
+    if (justEnded && FAREWELL.length) await say_in_chat(speaker, FAREWELL);
     if (greet && (await say_in_chat(speaker, GREETING))) greetedAt = now;
   } finally {
     talking = false;
