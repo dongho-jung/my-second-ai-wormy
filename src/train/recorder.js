@@ -103,6 +103,18 @@ export async function listRuns(dir = DEFAULT_RUNS_DIR) {
 /** Checkpoints a run has saved, best first. A run with none cannot be watched. */
 export const CHECKPOINTS = ["best.pt", "policy.pt"];
 
+/**
+ * How long a run may go without writing before it is taken to have stopped.
+ *
+ * A run's own file says "running" from the moment it is created and is only
+ * rewritten by a clean exit, so anything that ends a trainer without letting
+ * it unwind — a SIGKILL, an out-of-memory kill, a node going away — leaves a
+ * file claiming to still be training. The honest answer is when it last
+ * wrote. An update takes about two minutes at the defaults, so this is more
+ * than two missed updates: long enough never to call a live run dead.
+ */
+export const SILENT_FOR_STOPPED_MS = 5 * 60 * 1000;
+
 /** A run's own description, plus how much it has written so far. */
 export async function describeRun(dir, id) {
   const path = runDir(dir, id);
@@ -119,11 +131,15 @@ export async function describeRun(dir, id) {
         // Not saved yet, or not saved at all: a rollout has no policy to keep.
       }
     }
+    const updatedAt = (metrics?.mtime ?? new Date(run.startedAt)).toISOString();
+    const silent = Date.now() - new Date(updatedAt).getTime() > SILENT_FOR_STOPPED_MS;
     return {
       ...run,
+      // Only what it wrote can say it is running; the flag alone cannot.
+      status: run.status === "running" && silent ? "stopped" : run.status,
       checkpoint,
       bytes: metrics?.size ?? 0,
-      updatedAt: (metrics?.mtime ?? new Date(run.startedAt)).toISOString(),
+      updatedAt,
     };
   } catch {
     // A directory that is not a run, or one caught mid-write: skip it rather
