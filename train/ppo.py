@@ -14,6 +14,8 @@ Run it and watch it on the monitor page:
 from __future__ import annotations
 
 import argparse
+import copy
+import random
 import sys
 import time
 from pathlib import Path
@@ -442,6 +444,32 @@ def main(argv=None):
         f"{args.steps * slots:,} steps per update"
     )
 
+    # Which worms are somebody else.
+    #
+    # One policy playing itself cannot tell "I got better" from "we all got
+    # more reckless at the same time": the number that goes up is the average
+    # over the same weights. So some of the worms are driven by copies of what
+    # this policy used to be. They act, and they are acted against, and nothing
+    # is learned from their transitions — their actions did not come from the
+    # policy being updated, so their log-probs are somebody else's.
+    #
+    # Taken from the end of each match's block of worms, so worm 0 of every
+    # match is always the one being trained and a match is never all opponents.
+    per_match = layout.agents
+    frozen_per_match = min(per_match - 1, int(round(per_match * args.opponents)))
+    is_opponent = torch.zeros(slots, dtype=torch.bool, device=device)
+    if frozen_per_match > 0:
+        for seat in range(per_match - frozen_per_match, per_match):
+            is_opponent[seat::per_match] = True
+    learners = (~is_opponent).nonzero(as_tuple=True)[0]
+    opponents = is_opponent.nonzero(as_tuple=True)[0]
+    if frozen_per_match:
+        print(
+            f"{len(opponents)} of {slots} worms are older copies "
+            f"({frozen_per_match} per {per_match}-worm match)",
+            flush=True,
+        )
+
     heads_count = len(layout.head_sizes)
     # What a `dones` byte means. `first` is the opening observation of a new
     # episode — the only place the memory is cleared. `last` is the closing one
@@ -540,9 +568,33 @@ def main(argv=None):
             f"at weight {demo_weight():.4f} of {args.bc_coef}",
             flush=True,
         )
+    # Copies of what this policy used to be, and one spare network to play them
+    # back through. A state dict is 1.6M floats — six of them is under 40MB, so
+    # they are kept in memory rather than reloaded off disk every rollout.
+    frozen = None
+    past = []
+    if frozen_per_match:
+        frozen = copy.deepcopy(policy).to(device)
+        for parameter in frozen.parameters():
+            parameter.requires_grad_(False)
+        frozen.eval()
+        # Seeded with the policy as it starts out. An opponent that presses keys
+        # at random is a low bar, but it is a fixed one, which is the point.
+        past.append({k: v.detach().cpu().clone() for k, v in policy.state_dict().items()})
+
+    def draw_opponent():
+        """One of the past selves, for this rollout."""
+        if not past:
+            return
+        frozen.load_state_dict(past[random.randrange(len(past))])
+
     started = time.perf_counter()
+    # Every worm's observations still flatten together: they feed the running
+    # normaliser, and an older copy's view of the world is a real one. What
+    # narrows is the set of lanes an update reads from.
+    lane_pool = learners
     batch = args.steps * slots
-    lanes_per_batch = max(1, slots // args.minibatches)
+    lanes_per_batch = max(1, len(lane_pool) // args.minibatches)
     span = max(1, min(args.bptt, args.steps))
     # One update reads this many transitions at a time: a slice of the worms,
     # over one chunk of the rollout. The cloning loss draws the same number of
@@ -555,6 +607,7 @@ def main(argv=None):
             # the bonus is a fixed size while the advantages are normalised, so
             # a coefficient that does not come down eventually outweighs
             # whatever the policy has learned and holds it at random.
+            draw_opponent()
             bc_weight = demo_weight()
             progress = min(1.0, max(0.0, (total_steps - resumed_at) / max(1, args.total_steps)))
             entropy_coef = args.entropy + (args.entropy_final - args.entropy) * progress
@@ -568,11 +621,28 @@ def main(argv=None):
                     obs_m[step] = next_m
                 dones[step] = next_done
                 carried[step] = memory
+                restart = (next_done == DONE_FIRST).float()
                 with torch.no_grad():
+                    before = memory
                     head, logp, _, value, memory = policy.act(
                         next_v, next_p, next_m, want_entropy=False,
-                        carried=memory, restart=(next_done == DONE_FIRST).float(),
+                        carried=before, restart=restart,
                     )
+                    if frozen is not None:
+                        # The same observation, through an older set of weights
+                        # and an older memory. Its log-prob and value are the
+                        # learner's and are wrong for these seats, which is why
+                        # nothing is learned from them.
+                        theirs, _, _, _, remembered = frozen.act(
+                            next_v[opponents],
+                            next_p[opponents] if use_patch else None,
+                            next_m[opponents] if use_map else None,
+                            want_entropy=False,
+                            carried=before[opponents],
+                            restart=restart[opponents],
+                        )
+                        head[opponents] = theirs
+                        memory[opponents] = remembered
                 acts[step] = head
                 logps[step] = logp
                 vals[step] = value
@@ -632,8 +702,11 @@ def main(argv=None):
                     running = delta + args.gamma * args.lam * carry_run * running
                     advantages[step] = running
                 returns = advantages + vals
-                # The steps whose action was never applied.
+                # The steps whose action was never applied — and, if some worms
+                # are older copies, everything they did as well.
                 valid = (dones != DONE_LAST).to(rews.dtype)
+                if frozen is not None:
+                    valid = valid * (~is_opponent).to(rews.dtype)
 
             flat_v = obs_v.reshape(batch, -1)
             flat_p = obs_p.reshape(batch, -1) if use_patch else None
@@ -673,8 +746,8 @@ def main(argv=None):
             # in the middle of a match.
             chunks = [(at, min(at + span, args.steps)) for at in range(0, args.steps, span)]
             for _ in range(args.epochs):
-                order = torch.randperm(slots, device=device)
-                for start in range(0, slots, lanes_per_batch):
+                order = lane_pool[torch.randperm(len(lane_pool), device=device)]
+                for start in range(0, len(lane_pool), lanes_per_batch):
                     lanes = order[start : start + lanes_per_batch]
                     for first, stop in chunks:
                         kept = carried[first][lanes]
@@ -776,6 +849,12 @@ def main(argv=None):
                         passes += 1
 
             updates += 1
+            if frozen is not None and updates % args.pool_every == 0:
+                past.append({k: v.detach().cpu().clone() for k, v in policy.state_dict().items()})
+                # Oldest out first, so the pool is a window on the recent past
+                # rather than a museum of the first few minutes.
+                while len(past) > max(1, args.pool_size):
+                    past.pop(0)
             wall = time.perf_counter() - started
             rollout_seconds = time.perf_counter() - rollout_started
             losses = dict(zip(names, (running_losses / passes).tolist()))
@@ -793,8 +872,13 @@ def main(argv=None):
                     learning_rate = min(lr_high, max(lr_low, learning_rate * scale))
                     for group in optimiser.param_groups:
                         group["lr"] = learning_rate
-            variance = float(flat_ret.var())
-            explained = 0.0 if variance == 0 else 1 - float((flat_ret - flat_val).var()) / variance
+            scored_ret = returns[:, lane_pool].reshape(-1)
+            scored_val = vals[:, lane_pool].reshape(-1)
+            variance = float(scored_ret.var())
+            explained = (
+                0.0 if variance == 0
+                else 1 - float((scored_ret - scored_val).var()) / variance
+            )
             episodes = np.array(finished) if finished else None
             finished = []
             line = dict(

@@ -176,9 +176,18 @@ npm run train -- --agents 3 --total-steps 8000000
 npm run train -- --help
 ```
 
-- **Every worm shares one policy.** In a free-for-all that is self-play by
-  construction: whatever one of them learns it immediately has to face, and
-  there is no opponent to hand-write.
+- **Every worm shares one policy**, unless `--opponents` says otherwise. In a
+  free-for-all that is self-play by construction: whatever one of them learns
+  it immediately has to face, and there is no opponent to hand-write. It is also
+  why the average reward going up is not the same as getting better — all three
+  getting more reckless together looks identical. `--opponents 0.34` hands one
+  worm in three to an older copy of the policy and learns from nothing it does,
+  so the number it is scored against stays still while the policy moves.
+- **The ladder can be taken away.** Aiming, closing in and covering ground pay
+  because nothing else would get a policy started, and each is also a way to
+  score without playing well. `--shaping-decay 0.6` fades them over the first
+  three fifths of a run and leaves the rest on damage, kills and deaths. Off by
+  default, because no run has yet been long enough to say what it should be.
 - The engine is JavaScript and the training is **PyTorch on Apple MPS**. They
   meet on a worker process's own stdin and stdout in binary frames — no port to
   pick, no socket to clean up, and the workers die with the parent.
@@ -193,9 +202,12 @@ npm run train -- --help
   the next rollout, after the throw had been learned from and discarded.
 - Matches are played on the **community maps the room runs** (`npm run maps`).
   `--maps 12` mixes the game's own generated dirt back in.
-- Measured (M2 Pro, 4 workers × 8 worlds × 3 worms = 96 worms at once):
-  **6,570 steps/s** with the patch, **11,200** with `--no-patch`. Ten million
-  steps is 25 minutes and 15 minutes respectively.
+- **Measure it before sizing a run.** The last figure recorded here — 6,570
+  steps/s on an M2 Pro — was a 0.52M network on 12-step rollouts with no memory,
+  and none of those is true any more. A container on one core of this machine
+  manages a tenth of that per worm. What a run costs is a property of the node
+  it lands on, so start one, read `stepsPerSecond` off the training page, and
+  divide.
 - PyTorch lives in `artifacts/.venv` (gitignored). `npm run train` says how to
   make it if it is not there.
 
