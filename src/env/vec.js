@@ -44,6 +44,7 @@ export const EPISODE_STATS = [
   "fromOnTarget",
   "fromAimedShot",
   "fromGoal",
+  "shaping",
   "seed",
 ];
 
@@ -249,6 +250,7 @@ export class VecWormEnv {
     const at = index * EPISODE_STATS.length;
     for (const [offset, field] of EPISODE_STATS.entries()) {
       if (field === "steps") this.stats[at + offset] = env.episodeTicks / env.frameskip;
+      else if (field === "shaping") this.stats[at + offset] = env.shaping;
       else if (field === "seed") this.stats[at + offset] = env.episodeSeed;
       else this.stats[at + offset] = mean(STAT_SOURCE[field]);
     }

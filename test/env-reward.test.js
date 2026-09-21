@@ -1,12 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  DEFAULT_WEIGHTS,
-  addEvents,
-  combatReward,
-  emptyEvents,
-  tallyDamage,
-} from "../src/env/reward.js";
+import { DEFAULT_WEIGHTS, LADDER, addEvents, combatReward, emptyEvents, tallyDamage } from "../src/env/reward.js";
 import { Progress } from "../src/env/progress.js";
 
 const still = {
@@ -221,6 +215,31 @@ test("the goal is paid for once, however long it sits on the spot", () => {
   }
   assert.equal(arrivals, 1);
   assert.equal(Math.round(gained), 80, "measured from the second step, when there is a delta");
+});
+
+test("the ladder can be faded without touching what it leads to", () => {
+  const events = { damageDealt: 100, damageTaken: 0, killed: 1, died: 0 };
+  const progress = {
+    cells: 100, novel: 1, revisit: 0, stuck: true, stuckSteps: 1,
+    approach: 10, onTarget: 1, aimedShot: 1, goalDelta: 0, reachedGoal: false,
+  };
+  const full = combatReward(events, progress, DEFAULT_WEIGHTS, 1);
+  const none = combatReward(events, progress, DEFAULT_WEIGHTS, 0);
+
+  // The rungs go to nothing.
+  for (const name of LADDER) {
+    assert.notEqual(full.parts[name], 0, `${name} should pay something at full`);
+    assert.equal(none.parts[name], 0, `${name} should pay nothing at zero`);
+  }
+  // What they were rungs up to does not move, and neither does the penalty for
+  // sitting in a hole: that is not a rung, it is what stops a worm doing it.
+  for (const name of ["fromDamageDealt", "fromDamageTaken", "fromKill", "fromDeath", "fromStuck"]) {
+    assert.equal(none.parts[name], full.parts[name], `${name} is not a rung`);
+  }
+  // Half way down is half way down.
+  const half = combatReward(events, progress, DEFAULT_WEIGHTS, 0.5);
+  assert.equal(half.parts.fromOnTarget, full.parts.fromOnTarget / 2);
+  assert.equal(half.reward, (full.reward + none.reward) / 2);
 });
 
 test("event totals add up across a rollout", () => {

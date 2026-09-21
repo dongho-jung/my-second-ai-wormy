@@ -79,6 +79,23 @@ export const DEFAULT_WEIGHTS = {
   aimedShot: 0.025,
 };
 
+/**
+ * The terms that exist to get a policy started, rather than to say what winning
+ * is.
+ *
+ * Aiming pays nothing in this game; covering ground pays nothing; walking
+ * toward somebody pays nothing. Each of these is a rung up to something that
+ * does pay, and each one is also a way to score without playing well — a worm
+ * that keeps a clear line on somebody and never closes is collecting, and so is
+ * one that tours the map. Useful early, a distraction later, which is what
+ * `shaping` is for: 1 is the whole ladder, 0 is none of it.
+ *
+ * Damage, kills and deaths are not here. Neither are the stuck and doubling-back
+ * penalties: those are not rungs, they are what stops a worm sitting in a hole,
+ * and they should still be true at the end.
+ */
+export const LADDER = ["fromExplore", "fromApproach", "fromOnTarget", "fromAimedShot"];
+
 /** The blank each step's events are read into, one per agent. */
 export function emptyEvents(agents) {
   return Array.from({ length: agents }, () => ({
@@ -130,7 +147,7 @@ export function tallyDamage({ damage, kills }, agents, into = emptyEvents(agents
  * because a single number cannot be tuned: when a run goes wrong the question is
  * always which term was doing the talking.
  */
-export function combatReward(events, progress, weights = DEFAULT_WEIGHTS) {
+export function combatReward(events, progress, weights = DEFAULT_WEIGHTS, shaping = 1) {
   // Named apart from the events they come from: one is health, the other is
   // points, and a running total that adds both under one name is neither.
   const parts = {
@@ -148,9 +165,12 @@ export function combatReward(events, progress, weights = DEFAULT_WEIGHTS) {
       progress.goalDelta * weights.goalProgress +
       (progress.reachedGoal ? weights.reachedGoal : 0),
   };
+  if (shaping !== 1) {
+    for (const name of LADDER) parts[name] *= shaping;
+  }
   let reward = 0;
   for (const value of Object.values(parts)) reward += value;
-  return { reward, parts };
+  return { reward, parts, shaping };
 }
 
 /** Running totals, for reading a rollout back afterwards. */

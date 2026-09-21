@@ -140,6 +140,12 @@ export const DEFAULTS = {
   // where somebody is digging, and four seconds of staleness at this scale is a
   // fraction of one cell.
   mapEvery: 60,
+  // Decisions, per worm, over which the ladder terms fade to `shapingFloor`.
+  // Zero leaves them at full strength for the whole run, which is what every
+  // run has done so far. The trainer works this out from its step budget: it
+  // knows how many worms are playing and this environment does not.
+  shapingFullAt: 0,
+  shapingFloor: 0,
 };
 
 const NO_ACTION = { keys: 0, rope: 0, weapon: 0, fresh: false };
@@ -159,6 +165,12 @@ export class WormEnv {
       weaponFeatures: engine.weaponFeatures,
     });
     this.mapEvery = settings.mapEvery;
+    this.shapingFullAt = Math.max(0, settings.shapingFullAt ?? 0);
+    this.shapingFloor = settings.shapingFloor ?? 0;
+    // How much of the ladder is still being paid. Counted in decisions taken
+    // rather than episodes, because episodes are a clock and this is progress.
+    this.decisions = 0;
+    this.shaping = 1;
     // Shared by every worm in this world: the terrain is the same for all of
     // them, and only where they are differs.
     this.mapTerrain = new Uint8Array(3 * MAP_CELLS);
@@ -467,6 +479,12 @@ export class WormEnv {
       for (let tick = 1; tick < this.frameskip; tick++) queue.push(normalized);
     }
 
+    this.decisions++;
+    if (this.shapingFullAt > 0) {
+      const gone = Math.min(1, this.decisions / this.shapingFullAt);
+      this.shaping = 1 - (1 - this.shapingFloor) * gone;
+    }
+
     this.watch.clear();
     for (let tick = 0; tick < this.frameskip; tick++) {
       for (let agent = 0; agent < this.agents; agent++) {
@@ -497,7 +515,12 @@ export class WormEnv {
         worm.u ? worm : this.views[agent].self.position ?? worm,
         Boolean(worm.u),
       );
-      const outcome = this.reward(events, { ...moved, ...this.#aimAt(agent) }, this.weights);
+      const outcome = this.reward(
+        events,
+        { ...moved, ...this.#aimAt(agent) },
+        this.weights,
+        this.shaping,
+      );
       rewards.push(outcome.reward);
       parts.push(outcome.parts);
       addEvents(this.totals[agent], events);
@@ -582,6 +605,7 @@ export class WormEnv {
       observations: this.observationKinds,
       vectorSize: this.spec.vectorSize,
       inputLatencyTicks: this.latency,
+      shaping: this.shaping,
       totals: this.totals,
     };
   }

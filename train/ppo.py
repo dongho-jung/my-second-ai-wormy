@@ -139,6 +139,32 @@ def parse_args(argv=None):
                        help="how much it is paid to stay undecided, at the start")
     learn.add_argument("--entropy-final", type=float, default=0.00001,
                        help="and at the end")
+    league = parser.add_argument_group("who it plays")
+    league.add_argument("--opponents", type=float, default=0.0,
+                        help="what share of the worms are driven by an older copy of the "
+                             "policy instead of the one being trained. Everybody being the "
+                             "same policy means the average reward goes up when all three "
+                             "get more reckless together, and there is no way to tell that "
+                             "from getting better. 0.34 makes one worm in a three-way an "
+                             "opponent. 0 is self-play as it has been")
+    league.add_argument("--pool-size", type=int, default=6,
+                        help="how many past copies to keep. They are sampled per rollout, so "
+                             "a policy has to stay good against what it used to be rather "
+                             "than against what it is right now")
+    league.add_argument("--pool-every", type=int, default=25,
+                        help="updates between adding the current policy to the pool")
+
+    learn.add_argument("--shaping-decay", type=float, default=0.0,
+                       help="what share of the run to fade the ladder rewards over. The aim, "
+                            "approach and exploration terms exist to get a policy started — "
+                            "aiming pays nothing in this game, and the payoff for it arrives "
+                            "much later as damage — but each is also a way to score without "
+                            "playing well, and none of them comes down on its own. 0.6 fades "
+                            "them out over the first three fifths and leaves the rest of the "
+                            "run on damage, kills and deaths. 0 keeps them, which is what "
+                            "every run so far has done")
+    learn.add_argument("--shaping-floor", type=float, default=0.0,
+                       help="what the ladder is worth once it has faded; 0 is nothing at all")
     learn.add_argument("--value-coef", type=float, default=0.5)
     learn.add_argument("--max-grad-norm", type=float, default=0.5)
     learn.add_argument("--seed", type=int, default=1)
@@ -256,6 +282,12 @@ def main(argv=None):
         levelOptions={"width": args.map_width},
         weaponPool=args.weapons,
         loadout="drill" if args.drill else "random",
+        # The ladder's fade, in decisions one worm takes. The environment counts
+        # its own steps and knows nothing about how many worms are playing or
+        # how long the run is; both of those are here, so the arithmetic is too.
+        # Filled in below, once the worker count is known.
+        shapingFullAt=0,
+        shapingFloor=args.shaping_floor,
         banStart=[name.strip() for name in args.ban_start.split(",") if name.strip()],
         # Read off the room this project watches, rather than assumed: it drops
         # weapon crates only, eight seconds apart, and makes a swapped-to weapon
@@ -275,6 +307,13 @@ def main(argv=None):
     )
     if args.observation_foes is not None:
         config["observationFoes"] = args.observation_foes
+
+    if args.shaping_decay > 0:
+        # `--total-steps` counts every worm's decision; the environment counts
+        # only its own. One worm's share of the run is the whole thing divided
+        # by how many are playing it.
+        worms = max(1, args.workers * args.envs * args.agents)
+        config["shapingFullAt"] = int(args.total_steps * args.shaping_decay / worms)
 
     pool = WorkerPool(args.workers, config)
     layout = pool.layout
