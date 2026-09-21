@@ -227,6 +227,9 @@ export class WormEnv {
     this.alive = new Array(this.agents).fill(false);
     this.queues = [];
     this.latency = [];
+    // Each worm's previous decision, for the observation. Null until it has
+    // made one this match.
+    this.lastActions = [];
     this.episode = 0;
     this.episodeSeed = null;
     this.episodeStartTick = 0;
@@ -455,6 +458,7 @@ export class WormEnv {
     this.queues = this.latency.map((ticks) =>
       Array.from({ length: ticks }, () => NO_ACTION),
     );
+    this.lastActions = this.worms.map(() => null);
     this.progress.forEach((progress, agent) => {
       // A new level every episode, and covering it is paid as a share of it.
       progress.sized(this.world.level);
@@ -500,6 +504,7 @@ export class WormEnv {
         Boolean(loaded) &&
         loaded.ammo > 0 &&
         loaded.cooldownTicksRemaining <= 0;
+      this.lastActions[agent] = normalized;
       const queue = this.queues[agent];
       // Held keys last the whole decision; the rope and weapon messages are
       // sent once, so only the first tick of the decision carries them.
@@ -607,6 +612,7 @@ export class WormEnv {
         worm,
         this.worms.filter((_, other) => other !== agent),
         this.latency[agent] ?? 0,
+        this.lastActions[agent] ?? null,
       ),
     );
     return this.views;

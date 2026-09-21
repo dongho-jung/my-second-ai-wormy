@@ -9,6 +9,7 @@
 //
 // So: state in the vector, shape in the patch. Start a task on the vector alone
 // to prove the pipeline, add the patch when the terrain starts to matter.
+import { KEYS } from "./actions.js";
 import { WEAPON_FEATURE_COUNT } from "./engine.js";
 import {
   BACKGROUND,
@@ -67,6 +68,13 @@ export const PICKUP_SLOTS = 3;
 const PICKUP_FIELDS = 4;
 /** Of a shot's weapon, the part that says how afraid to be. */
 const SHOT_WEAPON_FIELDS = 4;
+/**
+ * The previous decision, as the engine sees it: the nine held keys, in the
+ * order `KEYS` lists them, then the rope message (-1 release, 1 throw) and the
+ * weapon message (-1 previous, 1 next).
+ */
+const LAST_ACTION_KEYS = Object.values(KEYS);
+export const LAST_ACTION_FIELDS = LAST_ACTION_KEYS.length + 2;
 
 /**
  * The vector, field by field. Exported because a layout you cannot print is a
@@ -161,6 +169,13 @@ export function observationSpec({
     // The nearest shots: where, where to, and how much they are going to hurt.
     ["projectiles", projectileSlots * (4 + SHOT_WEAPON_FIELDS)],
     ["pickups", pickupSlots * PICKUP_FIELDS], // health and weapon crates nearby
+    // What it chose last decision. Nothing in the world says whether jump or
+    // dig was already held — both fire on the press and go dead while held —
+    // or what is still in the input-delay queue on its way to the worm, and a
+    // memory built only from observations cannot recover a choice it never
+    // saw. Written as the engine's own keys and messages, so a person's
+    // recorded play fills it the same way.
+    ["lastAction", LAST_ACTION_FIELDS],
     // How far behind this worm is playing, as a share of the longest delay the
     // environment will hand out. A worm that has to lead its shots by twenty
     // ticks is playing a different game from one that acts immediately, and
@@ -411,6 +426,15 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
     into[at++] = clamp((crate.position.y - y) / REACH_PX, -1, 1);
     into[at++] = crate.kind === "health" ? 1 : 0;
     into[at++] = crate.kind === "health" ? 0 : 1;
+  }
+
+  const last = view.lastAction;
+  if (last) {
+    for (const bit of LAST_ACTION_KEYS) into[at++] = last.keys & bit ? 1 : 0;
+    into[at++] = last.rope ?? 0;
+    into[at++] = last.weapon ?? 0;
+  } else {
+    at += LAST_ACTION_FIELDS;
   }
 
   // Which weapon, as an index for the network to embed rather than a number to

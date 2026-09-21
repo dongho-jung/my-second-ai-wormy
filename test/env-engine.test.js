@@ -509,3 +509,19 @@ test("an episode ends on its tick budget and reset starts a clean one", { skip }
   assert.equal(env.worms.length, env.agents);
   assert.equal(env.worms[0].Xa, 100);
 });
+
+test("the observation carries the decision that came before it", { skip }, async () => {
+  const engine = await loadEngine();
+  const env = new WormEnv(engine, { agents: 2, episodeTicks: 400, seed: 5 });
+  const { observations } = env.reset({ seed: 5 });
+  const at = env.spec.offsets.lastAction;
+  const width = env.spec.offsets.latency - at;
+  const block = (observation) => Array.from(observation.vector.subarray(at, at + width));
+  assert.deepEqual(block(observations[0]), new Array(width).fill(0), "nothing chosen yet");
+  const step = env.step([{ keys: KEYS.right | KEYS.fire, rope: 1, weapon: -1 }, KEYS.left]);
+  assert.deepEqual(block(step.observations[0]), [0, 1, 0, 0, 1, 0, 0, 0, 0, 1, -1]);
+  assert.deepEqual(block(step.observations[1]), [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  // The next match starts with nothing chosen again.
+  env.reset({ seed: 6 });
+  assert.deepEqual(block(env.observations[0]), new Array(width).fill(0));
+});

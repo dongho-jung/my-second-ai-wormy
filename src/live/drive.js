@@ -347,7 +347,7 @@ async function look(seat, now) {
     }
   }
   if (!seat.terrain) return null;
-  return viewFromSnapshot(read.game, seat.terrain);
+  return viewFromSnapshot(read.game, seat.terrain, { lastAction: seat.lastAction ?? null });
 }
 
 writeFrame(
@@ -639,6 +639,9 @@ async function act(heads) {
     seats.map(async (seat) => {
       if (!alive[seat.index]) return;
       const action = actionFromHeads(heads, seat.index * HEADS);
+      // Remembered before it is applied: it is the decision the policy sees
+      // next time, whether or not the keyboard took it.
+      seat.lastAction = action;
       await seat.controls.apply(action).catch((error) => {
         log.warn("apply_failed", { seat: seat.index, message: error.message });
       });

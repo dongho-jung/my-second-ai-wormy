@@ -330,6 +330,10 @@ const scratch = {
 };
 const record = Buffer.alloc(RECORD_BYTES);
 const previous = new Map();
+// What each player held and sent at their previous kept sample, for the
+// observation's last-action block — the same thing the environment tells a
+// driven worm about its own previous decision.
+const lastActions = new Map();
 const counts = new Map();
 let terrain = null;
 let terrainAt = 0;
@@ -455,11 +459,16 @@ async function sample() {
     const still = keys === 0 ? (idleFor.get(player.id) ?? 0) + 1 : 0;
     idleFor.set(player.id, still);
     if (still > idleRun) continue;
-    const view = viewFromSnapshot(read.game, terrain, { playerId: player.id });
+    const view = viewFromSnapshot(read.game, terrain, {
+      playerId: player.id,
+      lastAction: lastActions.get(player.id) ?? null,
+    });
     if (!mapTerrain) mapTerrain = encodeMapTerrain(view.terrain);
     observe(view, scratch, ["vector", "patchBytes", "map"], spec, mapTerrain);
     encodeMap(view, mapTerrain, scratch.map);
-    const heads = headsFromKeys(player.worm.keys, messages(player, player.worm));
+    const sent = messages(player, player.worm);
+    const heads = headsFromKeys(player.worm.keys, sent);
+    lastActions.set(player.id, { keys: player.worm.keys, rope: sent.rope, weapon: sent.weapon });
     let at = 0;
     for (let index = 0; index < spec.vectorSize; index++) {
       record.writeFloatLE(scratch.vector[index], at);

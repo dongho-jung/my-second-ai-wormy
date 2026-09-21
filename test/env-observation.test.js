@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { snapshotV20 } from "../src/adapter-v20.js";
+import { KEYS } from "../src/env/actions.js";
 import { fixture, LEVEL } from "./fixture.js";
 import {
   DEFAULT_SPEC,
@@ -323,4 +324,22 @@ test("encoding into a reused buffer clears what was there before", () => {
   view.foes[0] = { alive: false };
   observe(view, into);
   assert.equal(into.vector[VECTOR_OFFSETS.foes], 0, "the stale foe is gone");
+});
+
+test("the previous decision is written as the engine's own keys and messages", () => {
+  const controller = fixture();
+  const state = snapshotV20.call(controller);
+  const terrain = snapshotV20.call(controller, { terrain: true });
+  const blank = encodeVector(viewFromSnapshot(state, terrain));
+  const width = VECTOR_OFFSETS.latency - VECTOR_OFFSETS.lastAction;
+  assert.equal(width, 11, "nine keys, the rope message and the weapon message");
+  assert.deepEqual(
+    Array.from(blank.subarray(VECTOR_OFFSETS.lastAction, VECTOR_OFFSETS.latency)),
+    new Array(width).fill(0),
+    "nothing decided yet",
+  );
+  const lastAction = { keys: KEYS.right | KEYS.fire | KEYS.dig, rope: 1, weapon: -1 };
+  const vector = encodeVector(viewFromSnapshot(state, terrain, { lastAction }));
+  const block = Array.from(vector.subarray(VECTOR_OFFSETS.lastAction, VECTOR_OFFSETS.latency));
+  assert.deepEqual(block, [0, 1, 0, 0, 1, 0, 0, 0, 1, 1, -1]);
 });

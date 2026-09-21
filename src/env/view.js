@@ -32,10 +32,13 @@ function decodeTerrainBytes(data) {
  * read from `world.za`, because a worm that died this tick has already been
  * dropped from there and an agent still has to see that it is gone.
  */
-export function viewFromWorld(world, self, foes = [], inputLatencyTicks = 0) {
+export function viewFromWorld(world, self, foes = [], inputLatencyTicks = 0, lastAction = null) {
   const level = world.level;
   return {
     tick: world.qb,
+    // The decision that was made last time, `{ keys, rope, weapon }`, or null
+    // at the start of a match. The environment knows; the world does not.
+    lastAction,
     // How late this worm's keys land. Drawn once per episode by the
     // environment and passed in, because the world does not know: the delay is
     // the connection's, not the game's.
@@ -156,7 +159,7 @@ export function viewFromSnapshot(
   // The live game has a real delay and no way to ask it what it is, so it is
   // told: eighteen ticks is the 300ms the watched room measures. Left at the
   // default, a policy plays as though the room behaved the way it usually does.
-  { playerId = null, inputLatencyTicks = LIVE_LATENCY_TICKS } = {},
+  { playerId = null, inputLatencyTicks = LIVE_LATENCY_TICKS, lastAction = null } = {},
 ) {
   // Any player, not only the one at this keyboard: the game replicates
   // everybody's state, so a person's match can be watched and learned from
@@ -173,6 +176,9 @@ export function viewFromSnapshot(
   return {
     tick: state.tick,
     inputLatencyTicks,
+    // For a driven worm, what the driver pressed last decision; for a person
+    // being recorded, what they held at the previous sample.
+    lastAction,
     map: state.map,
     terrain: terrainOf({
       data: decodeTerrainBytes(terrain.data),
