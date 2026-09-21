@@ -41,6 +41,11 @@ def parse_args(argv=None):
                        help="size the vector for this many other worms, so one policy can play any count")
     world.add_argument("--episode-ticks", type=int, default=3600)
     world.add_argument("--frameskip", type=int, default=4)
+    world.add_argument("--patch-scale", type=int, default=2,
+                       help="pixels per patch cell. The patch shows the same ground at any "
+                            "scale: 2 is 213x121 cells, 4 is 107x61 and a quarter of the "
+                            "convolution, which is most of what an update costs. Baked into "
+                            "the checkpoint, so the viewer plays back at the trained scale")
     world.add_argument("--input-latency", type=str, default="6-21",
                        help="ticks between deciding and acting. The room this plays in runs about "
                             "300ms behind, which is eighteen ticks; training at the old 0-3 taught "
@@ -279,6 +284,7 @@ def main(argv=None):
         agents=args.agents,
         episodeTicks=args.episode_ticks,
         frameskip=args.frameskip,
+        patchScale=args.patch_scale,
         inputLatencyTicks=latency if len(latency) > 1 else latency[0],
         levelPool=args.maps,
         levelFiles=stock_levels(args),

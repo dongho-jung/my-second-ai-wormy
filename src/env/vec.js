@@ -12,7 +12,7 @@
 // told where the boundary was.
 import { readFileSync } from "node:fs";
 import { actionFromHeads, ACTION_HEADS } from "./actions.js";
-import { MAP_SIZE, PATCH_CELLS, PATCH_SHAPE, WEAPON_SLOTS } from "./observation.js";
+import { MAP_SIZE, WEAPON_SLOTS } from "./observation.js";
 import { WormEnv } from "./env.js";
 
 /**
@@ -166,7 +166,7 @@ export class VecWormEnv {
     this.spec = this.envs[0].spec;
     const slots = envs * this.agents;
     this.vectors = new Float32Array(slots * this.spec.vectorSize);
-    this.patches = new Uint8Array(slots * PATCH_CELLS);
+    this.patches = new Uint8Array(slots * this.spec.patch.cells);
     this.maps = new Uint8Array(slots * MAP_SIZE);
     this.rewards = new Float32Array(slots);
     this.dones = new Uint8Array(envs);
@@ -188,8 +188,8 @@ export class VecWormEnv {
         };
         if (this.wantsPatch) {
           into.patchBytes = this.patches.subarray(
-            slot * PATCH_CELLS,
-            (slot + 1) * PATCH_CELLS,
+            slot * this.spec.patch.cells,
+            (slot + 1) * this.spec.patch.cells,
           );
         }
         if (this.wantsMap) {
@@ -300,8 +300,9 @@ export class VecWormEnv {
       weaponIdsAt: this.spec.offsets.weaponIds,
       weaponIdsCount: WEAPON_SLOTS + this.spec.foeSlots,
       weaponCount: this.engine.settings.O.length,
-      patchCells: this.wantsPatch ? PATCH_CELLS : 0,
-      patchShape: this.wantsPatch ? PATCH_SHAPE : null,
+      patchCells: this.wantsPatch ? this.spec.patch.cells : 0,
+      patchShape: this.wantsPatch ? this.spec.patch.shape : null,
+      patchScale: this.spec.patch.scalePx,
       mapCells: this.wantsMap ? MAP_SIZE : 0,
       mapShape: this.wantsMap ? [4, 32, 32] : null,
       statFields: EPISODE_STATS,

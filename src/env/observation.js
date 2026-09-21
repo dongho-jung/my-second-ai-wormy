@@ -72,6 +72,58 @@ const SHOT_WEAPON_FIELDS = 4;
  * The vector, field by field. Exported because a layout you cannot print is a
  * layout you cannot debug: `VECTOR_OFFSETS.foe` is where the other worm starts.
  */
+/** Pixels per patch cell unless a run says otherwise. */
+const DEFAULT_PATCH_SCALE = 2;
+/** What a patch is made of, one plane per kind. */
+const PATCH_CHANNELS = ["rock", "dirt", "free", "projectile", "foe", "self"];
+/**
+ * How much ground a patch shows, in pixels: 426 wide and 242 high around the
+ * worm, which on a 504 x 350 map is most of it. Every scale sees this much;
+ * what changes is how many cells it takes to say so.
+ */
+const PATCH_PX = { width: 426, height: 242 };
+
+/**
+ * The patch's cells for a given number of pixels per cell.
+ *
+ * At 2 it is the 213 x 121 this project has always used, the resolution
+ * footwork happens at. At 4 it is 107 x 61, the same picture in a quarter of
+ * the cells — and the convolution over those cells is most of what an update
+ * costs, so this is the dial for trading detail against samples per hour.
+ * A cell still answers for the hardest of its pixels, so a wall one pixel
+ * thick does not vanish at any scale.
+ */
+export function patchGeometry(scalePx = DEFAULT_PATCH_SCALE) {
+  if (!Number.isInteger(scalePx) || scalePx < 1) {
+    throw new Error(`patch scale must be a whole number of pixels, got ${scalePx}`);
+  }
+  const columns = Math.ceil(PATCH_PX.width / scalePx);
+  const rows = Math.ceil(PATCH_PX.height / scalePx);
+  const cells = columns * rows;
+  return {
+    channels: PATCH_CHANNELS,
+    columns,
+    rows,
+    scalePx,
+    cells,
+    size: PATCH_CHANNELS.length * cells,
+    /** The shape a convolution reads it as: channels, rows, columns. */
+    shape: [PATCH_CHANNELS.length, rows, columns],
+  };
+}
+
+  // Free space gets a channel of its own instead of being the absence of the
+  // other two, so "solid" and "nothing measured" never look alike. Past the
+  // edge of the map reads as rock, which is exactly how it behaves.
+  // Worms among the terrain, not only as coordinates in the vector. Without
+  // these the policy sees the ground in front of it and is told where the enemy
+  // is in two numbers it has to reconcile with that picture itself; "he is
+  // behind that wall" is something it should be able to look at.
+export const PATCH = patchGeometry(DEFAULT_PATCH_SCALE);
+export const PATCH_CELLS = PATCH.cells;
+export const PATCH_SIZE = PATCH.size;
+export const PATCH_SHAPE = PATCH.shape;
+
 /**
  * The shape of one vector: what is in it, in order, and where each field starts.
  * Exported because a layout you cannot print is a layout you cannot debug —
@@ -82,6 +134,7 @@ export function observationSpec({
   projectileSlots = PROJECTILE_SLOTS,
   pickupSlots = PICKUP_SLOTS,
   weaponFeatures = null,
+  patchScale = DEFAULT_PATCH_SCALE,
 } = {}) {
   const layout = [
     ["rays", RAY_COUNT], //   distance to the first solid pixel, 1 = clear to the limit
@@ -135,6 +188,7 @@ export function observationSpec({
     projectileSlots,
     pickupSlots,
     weaponFeatures,
+    patch: patchGeometry(patchScale),
     layout,
     offsets,
     vectorSize,
@@ -160,25 +214,6 @@ export const VECTOR_SIZE = DEFAULT_SPEC.vectorSize;
  * four. 121 rows spans 242 px against the true 240 — two pixels of margin is
  * worth more than an off-centre worm.
  */
-export const PATCH = {
-  // Free space gets a channel of its own instead of being the absence of the
-  // other two, so "solid" and "nothing measured" never look alike. Past the
-  // edge of the map reads as rock, which is exactly how it behaves.
-  // Worms among the terrain, not only as coordinates in the vector. Without
-  // these the policy sees the ground in front of it and is told where the enemy
-  // is in two numbers it has to reconcile with that picture itself; "he is
-  // behind that wall" is something it should be able to look at.
-  channels: ["rock", "dirt", "free", "projectile", "foe", "self"],
-  columns: 213,
-  rows: 121,
-  // Two pixels per cell, the resolution footwork happens at.
-  scalePx: 2,
-};
-export const PATCH_CELLS = PATCH.columns * PATCH.rows;
-export const PATCH_SIZE = PATCH.channels.length * PATCH_CELLS;
-/** The shape a convolution reads it as: channels, rows, columns. */
-export const PATCH_SHAPE = [PATCH.channels.length, PATCH.rows, PATCH.columns];
-
 /**
  * The whole level, small.
  *
@@ -223,8 +258,10 @@ export function observe(
 ) {
   const out = {};
   if (kinds.includes("vector")) out.vector = encodeVector(view, into.vector, spec);
-  if (kinds.includes("patch")) out.patch = encodePatch(view, into.patch);
-  if (kinds.includes("patchBytes")) out.patchBytes = encodePatchBytes(view, into.patchBytes);
+  if (kinds.includes("patch")) out.patch = encodePatch(view, into.patch, spec.patch);
+  if (kinds.includes("patchBytes")) {
+    out.patchBytes = encodePatchBytes(view, into.patchBytes, spec.patch);
+  }
   if (kinds.includes("map")) {
     out.map = mapTerrain
       ? encodeMap(view, mapTerrain, into.map)
@@ -485,8 +522,8 @@ export function encodeMap(view, terrainBytes, into = new Uint8Array(MAP_SIZE)) {
 }
 
 /** The top-left pixel of the patch, which every cell is counted from. */
-export function patchOriginOf(view) {
-  const { columns, rows, scalePx } = PATCH;
+export function patchOriginOf(view, geometry = PATCH) {
+  const { columns, rows, scalePx } = geometry;
   const half = scalePx >> 1;
   return {
     x: Math.round(view.self.position.x) - ((columns >> 1) * scalePx + half),
@@ -495,19 +532,32 @@ export function patchOriginOf(view) {
 }
 
 /** Which cell a pixel falls in, or `null` when it is outside the patch. */
-export function patchCellOf(origin, x, y) {
-  const column = Math.floor((x - origin.x) / PATCH.scalePx);
-  const row = Math.floor((y - origin.y) / PATCH.scalePx);
-  if (column < 0 || row < 0 || column >= PATCH.columns || row >= PATCH.rows)
+export function patchCellOf(origin, x, y, geometry = PATCH) {
+  const column = Math.floor((x - origin.x) / geometry.scalePx);
+  const row = Math.floor((y - origin.y) / geometry.scalePx);
+  if (column < 0 || row < 0 || column >= geometry.columns || row >= geometry.rows)
     return null;
-  return { column, row, cell: row * PATCH.columns + column };
+  return { column, row, cell: row * geometry.columns + column };
 }
 
 // Scratch, reused between calls. The level row each of the patch's pixel rows
 // lands on, and the level x of each of its pixel columns, with -1 for the ones
 // that fall off the map.
-const PIXEL_ROWS = new Int32Array(PATCH.rows * PATCH.scalePx);
-const PIXEL_COLUMNS = new Int32Array(PATCH.columns * PATCH.scalePx);
+// Scratch for the encoder, one set per geometry in use: the pixel-to-row and
+// pixel-to-column tables, and a byte patch for the one-hot form to expand from.
+const scratchFor = new Map();
+function scratch(geometry) {
+  let found = scratchFor.get(geometry.scalePx);
+  if (!found) {
+    found = {
+      pixelRows: new Int32Array(geometry.rows * geometry.scalePx),
+      pixelColumns: new Int32Array(geometry.columns * geometry.scalePx),
+      bytes: new Uint8Array(geometry.cells),
+    };
+    scratchFor.set(geometry.scalePx, found);
+  }
+  return found;
+}
 // The first three channels are the hardness order, so the lowest code wins and
 // is also the channel it expands to.
 const ROCK = 0;
@@ -519,8 +569,6 @@ export const PATCH_FOE = 8;
 export const PATCH_SELF = 16;
 export const PATCH_KIND = 3;
 
-const patchScratch = new Uint8Array(PATCH_CELLS);
-
 /**
  * The patch as one byte per cell — the form it is stored and sent in.
  *
@@ -529,13 +577,15 @@ const patchScratch = new Uint8Array(PATCH_CELLS);
  * a trainer expands it on the GPU, where the expansion is free, and a run that
  * ships a million of these across a pipe ships a quarter of the bytes.
  */
-export function encodePatchBytes(view, into = new Uint8Array(PATCH_CELLS)) {
+export function encodePatchBytes(view, into, geometry = PATCH) {
+  into ??= new Uint8Array(geometry.cells);
   into.fill(0);
   const { self, terrain } = view;
   if (!self.alive) return into;
-  const { columns, rows, scalePx } = PATCH;
+  const { columns, rows, scalePx } = geometry;
+  const { pixelRows: PIXEL_ROWS, pixelColumns: PIXEL_COLUMNS } = scratch(geometry);
   const { data, width, height, materialFlags } = terrain;
-  const origin = patchOriginOf(view);
+  const origin = patchOriginOf(view, geometry);
   // The bounds arithmetic is done once for the whole patch rather than once per
   // pixel: 242 rows and 426 columns against 25,773 cells.
   for (let pixel = 0; pixel < rows * scalePx; pixel++) {
@@ -577,7 +627,7 @@ export function encodePatchBytes(view, into = new Uint8Array(PATCH_CELLS)) {
   // Shots get a bit of their own, so a policy handles ten of them and one of
   // them with the same weights.
   for (const shot of view.projectiles) {
-    const at = patchCellOf(origin, shot.position.x, shot.position.y);
+    const at = patchCellOf(origin, shot.position.x, shot.position.y, geometry);
     if (at) into[at.cell] |= PATCH_PROJECTILE;
   }
   // And the worms, in the same picture as the ground they stand on. The vector
@@ -585,20 +635,21 @@ export function encodePatchBytes(view, into = new Uint8Array(PATCH_CELLS)) {
   // is, beside the wall that is or is not between them.
   for (const foe of view.foes ?? []) {
     if (!foe.alive) continue;
-    const at = patchCellOf(origin, foe.position.x, foe.position.y);
+    const at = patchCellOf(origin, foe.position.x, foe.position.y, geometry);
     if (at) into[at.cell] |= PATCH_FOE;
   }
-  const here = patchCellOf(origin, self.position.x, self.position.y);
+  const here = patchCellOf(origin, self.position.x, self.position.y, geometry);
   if (here) into[here.cell] |= PATCH_SELF;
   return into;
 }
 
 /** The same patch as one-hot float planes, for a consumer that wants them. */
-export function encodePatch(view, into = new Float32Array(PATCH_SIZE)) {
+export function encodePatch(view, into, geometry = PATCH) {
+  into ??= new Float32Array(geometry.size);
   into.fill(0);
   if (!view.self.alive) return into;
-  const bytes = encodePatchBytes(view, patchScratch);
-  const plane = PATCH_CELLS;
+  const bytes = encodePatchBytes(view, scratch(geometry).bytes, geometry);
+  const plane = geometry.cells;
   for (let cell = 0; cell < plane; cell++) {
     const byte = bytes[cell];
     into[(byte & PATCH_KIND) * plane + cell] = 1;

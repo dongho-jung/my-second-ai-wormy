@@ -18,7 +18,7 @@ import { actionFromHeads, ACTION_HEADS } from "./actions.js";
 import { loadEngine } from "./engine.js";
 import { readFileSync } from "node:fs";
 import { WormEnv } from "./env.js";
-import { MAP_SIZE, PATCH_CELLS, PATCH_SHAPE } from "./observation.js";
+import { MAP_SIZE } from "./observation.js";
 import { gzipSync } from "node:zlib";
 
 const HEADS = ACTION_HEADS.length;
@@ -70,6 +70,9 @@ const env = new WormEnv(engine, {
   frameskip: config.frameskip ?? 4,
   inputLatencyTicks: config.inputLatencyTicks ?? 0,
   observationFoes: config.observationFoes,
+  // The scale the policy was trained at rides in its checkpoint; a policy
+  // that learned on a coarse patch has to be shown a coarse patch.
+  patchScale: config.patchScale,
   observations: ["vector", "patchBytes", "map"],
   loadout: config.loadout ?? "random",
   weaponPool: config.weaponPool ?? "all",
@@ -330,12 +333,12 @@ function writeFrame(...parts) {
 }
 
 const vectors = new Float32Array(agents * env.spec.vectorSize);
-const patches = new Uint8Array(agents * PATCH_CELLS);
+const patches = new Uint8Array(agents * env.spec.patch.cells);
 const maps = new Uint8Array(agents * MAP_SIZE);
 const gather = () => {
   for (let agent = 0; agent < agents; agent++) {
     vectors.set(env.observations[agent].vector, agent * env.spec.vectorSize);
-    patches.set(env.observations[agent].patchBytes, agent * PATCH_CELLS);
+    patches.set(env.observations[agent].patchBytes, agent * env.spec.patch.cells);
     maps.set(env.observations[agent].map, agent * MAP_SIZE);
   }
 };
@@ -346,8 +349,8 @@ writeFrame(
       envs: 1,
       agents,
       vectorSize: env.spec.vectorSize,
-      patchCells: PATCH_CELLS,
-      patchShape: PATCH_SHAPE,
+      patchCells: env.spec.patch.cells,
+      patchShape: env.spec.patch.shape,
       mapCells: MAP_SIZE,
       mapShape: [4, 32, 32],
       heads: ACTION_HEADS.map(([name, choices]) => ({ name, choices: choices.length })),

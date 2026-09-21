@@ -106,6 +106,10 @@ export const DEFAULTS = {
   // Pin it higher than `agents` and the same policy can play a duel and a
   // five-way without being retrained: the empty slots read as zeros.
   observationFoes: null,
+  // Pixels per patch cell. The patch shows the same ground at any scale; a
+  // larger number is fewer cells for the network to look at. See
+  // `patchGeometry` for what each value comes to.
+  patchScale: 2,
   // Four ticks is a policy deciding at 15 Hz: about as often as a person
   // changes their mind, and four times less network to run.
   frameskip: 4,
@@ -163,6 +167,7 @@ export class WormEnv {
     this.spec = observationSpec({
       foeSlots: settings.observationFoes ?? this.agents - 1,
       weaponFeatures: engine.weaponFeatures,
+      patchScale: settings.patchScale,
     });
     this.mapEvery = settings.mapEvery;
     this.shapingFullAt = Math.max(0, settings.shapingFullAt ?? 0);
