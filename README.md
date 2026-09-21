@@ -124,12 +124,12 @@ setting: solo, a duel and a five-way brawl all run on the same code.
 | Module | What it does |
 | --- | --- |
 | `engine.js` | Patches the bundle in memory, evaluates it, and checks its SHA-256 against the one the adapter locked. Also seed-reproducible level generation, random weapon loadouts, and the instrument that records **who hit whom**. |
-| `actions.js` | The key bitmask (`1 left … 256 dig`), the rope and weapon-change messages that are not bits, and the seven heads a policy emits. Exactly how a real room passes input. |
+| `actions.js` | The key bitmask (`1 left … 256 dig`), the rope and weapon-change messages that are not bits, and the eight heads a policy emits. Exactly how a real room passes input. |
 | `view.js` | Turns a headless world and a live snapshot into **one shape**. The observation encoders read only that. |
-| `observation.js` | The vector (127-187 numbers, depending on how many worms are playing), the worm's own 213x121 view of the terrain, and the whole level on a 32x32 grid. Any of them can be left out. |
+| `observation.js` | The vector (132-192 numbers, depending on how many worms are playing), the worm's own 213x121 view of the terrain, and the whole level on a 32x32 grid. Any of them can be left out. |
 | `progress.js` | Whether a worm is stuck, going in circles, or closing on a goal. |
 | `reward.js` | Damage dealt minus damage taken, kills and deaths, the movement terms, and the ladder up to aiming. Blowing yourself up costs the same as being shot. |
-| `env.js` | `reset()` / `step()`, frameskip, respawn, input latency. |
+| `env.js` | `reset()` / `step()`, frameskip, respawn, input latency. An episode ends on a clock, so its last observation is handed over to be valued rather than thrown away. |
 | `vec.js`, `worker.js` | Many worlds in one process, and the binary frames the trainer talks over. |
 
 - **The bundle and its assets are not in the repository** (`artifacts/` is
@@ -186,6 +186,13 @@ npm run train -- --help
   through two convolutions — the worm's own view, and the whole level small —
   and a **GRU** on top of the joined features, because a decision that takes
   longer than one frame has to be carried. 1.59M parameters.
+- **A rollout is 128 decisions and the gradient runs through 32 of them.** The
+  two are not the same knob. How far a reward can be from the action that
+  earned it and still reach it is the first; how far back the memory learns is
+  the second. Both were 12 — eight tenths of a second — and a mine went off in
+  the next rollout, after the throw had been learned from and discarded.
+- Matches are played on the **community maps the room runs** (`npm run maps`).
+  `--maps 12` mixes the game's own generated dirt back in.
 - Measured (M2 Pro, 4 workers × 8 worlds × 3 worms = 96 worms at once):
   **6,570 steps/s** with the patch, **11,200** with `--no-patch`. Ten million
   steps is 25 minutes and 15 minutes respectively.
