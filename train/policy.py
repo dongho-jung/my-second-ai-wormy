@@ -21,7 +21,11 @@ from torch.distributions import Categorical
 # What one byte of the patch means, matching src/env/observation.js.
 PATCH_KIND = 3
 PATCH_PROJECTILE = 4
+PATCH_FOE = 8
+PATCH_SELF = 16
 TERRAIN_CHANNELS = 3
+# rock, dirt, free, a shot, a foe, itself
+PATCH_CHANNELS = TERRAIN_CHANNELS + 3
 
 
 def expand_map(view: torch.Tensor, side: int) -> torch.Tensor:
@@ -49,8 +53,15 @@ def expand_patch(patch: torch.Tensor, shape) -> torch.Tensor:
         batch, TERRAIN_CHANNELS, rows * columns, dtype=torch.float32, device=patch.device
     )
     planes.scatter_(1, kind.unsqueeze(1), 1.0)
-    shots = ((patch & PATCH_PROJECTILE) > 0).to(torch.float32).unsqueeze(1)
-    return torch.cat((planes, shots), dim=1).view(batch, TERRAIN_CHANNELS + 1, rows, columns)
+    marks = torch.stack(
+        [
+            (patch & PATCH_PROJECTILE) > 0,
+            (patch & PATCH_FOE) > 0,
+            (patch & PATCH_SELF) > 0,
+        ],
+        dim=1,
+    ).to(torch.float32)
+    return torch.cat((planes, marks), dim=1).view(batch, PATCH_CHANNELS, rows, columns)
 
 
 class RunningNorm(nn.Module):
@@ -94,6 +105,10 @@ class WormPolicy(nn.Module):
         map_side: int = 32,
         width: int = 256,
         vector_width: int = 128,
+        weapon_ids_at: int | None = None,
+        weapon_ids_count: int = 0,
+        weapon_count: int = 0,
+        weapon_width: int = 8,
     ):
         super().__init__()
         self.head_sizes = list(head_sizes)
@@ -102,11 +117,20 @@ class WormPolicy(nn.Module):
         self.map_side = map_side
         self.use_map = use_map
         self.norm = RunningNorm(vector_size)
+        # Which weapon, rather than only what it measures like. Twelve names in
+        # this mod belong to two different weapons and ten measured numbers
+        # cannot separate them, so the identity gets a vector of its own that
+        # the network learns. Index 0 is "nothing held"; a weapon is its id + 1.
+        self.weapon_ids_at = weapon_ids_at
+        self.weapon_ids_count = weapon_ids_count if weapon_ids_at is not None else 0
+        self.weapon_count = weapon_count
+        if self.weapon_ids_count:
+            self.weapon_embed = nn.Embedding(weapon_count + 1, weapon_width)
         self.vector = nn.Sequential(
             nn.Linear(vector_size, vector_width),
             nn.ReLU(),
         )
-        joined = vector_width
+        joined = vector_width + self.weapon_ids_count * weapon_width
         if use_patch:
             # Three strided layers rather than two. On the old 32x32 patch a
             # two-layer tower flattened to 1,568; on the real 213x121 view the
@@ -116,7 +140,7 @@ class WormPolicy(nn.Module):
             # keeps that layer the size it was, and gives the tower the depth to
             # recognise a ledge or a corridor rather than a texture.
             self.conv = nn.Sequential(
-                nn.Conv2d(4, 32, kernel_size=8, stride=4),
+                nn.Conv2d(PATCH_CHANNELS, 32, kernel_size=8, stride=4),
                 nn.ReLU(),
                 nn.Conv2d(32, 64, kernel_size=4, stride=2),
                 nn.ReLU(),
@@ -129,7 +153,7 @@ class WormPolicy(nn.Module):
                 nn.Flatten(),
             )
             with torch.no_grad():
-                joined += self.conv(torch.zeros(1, 4, *self.patch_shape)).shape[1]
+                joined += self.conv(torch.zeros(1, PATCH_CHANNELS, *self.patch_shape)).shape[1]
         if use_map:
             # The same shape of tower as the patch, on a picture of the whole
             # level instead of the worm's own few metres. This is the half that
@@ -160,7 +184,19 @@ class WormPolicy(nn.Module):
         nn.init.zeros_(self.critic.bias)
 
     def features(self, vectors, patches=None, maps=None) -> torch.Tensor:
+        held = None
+        if self.weapon_ids_count:
+            at = self.weapon_ids_at
+            upto = at + self.weapon_ids_count
+            ids = vectors[:, at:upto].round().long().clamp(-1, self.weapon_count - 1) + 1
+            held = self.weapon_embed(ids).flatten(1)
+            # Out of the vector before the normaliser sees them: an id is a name,
+            # and a running mean of names is not a weapon.
+            vectors = vectors.clone()
+            vectors[:, at:upto] = 0.0
         parts = [self.vector(self.norm(vectors))]
+        if held is not None:
+            parts.append(held)
         if self.use_patch:
             parts.append(self.conv(expand_patch(patches, self.patch_shape)))
         if self.use_map:

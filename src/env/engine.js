@@ -387,6 +387,81 @@ export function resetEngineForTesting() {
  * Missing, every row is zeros and the policy is simply told nothing — better
  * than telling it something invented.
  */
+/**
+ * A name for each weapon that survives the mod being updated.
+ *
+ * Ids do not: this mod keeps its crate-only variants at the end of the list, so
+ * anything inserted earlier shifts them, and a policy that learned weapon 108
+ * would wake up holding something else. Names do not either — twelve names are
+ * used twice here, once for the ordinary weapon and once for the strange
+ * version that only falls out of a crate. VIRUS 31 spreads a little; VIRUS 108
+ * spreads twice as far.
+ *
+ * So the name is what the weapon is made of: its own definition, hashed. The
+ * same weapon after an update keeps its key; a genuinely rebalanced one gets a
+ * new key and is learned again, which is the honest outcome.
+ */
+/**
+ * What the room lets each weapon do, read off the room's own weapon screen.
+ *
+ * The file is the list that screen shows, in order, one `name<TAB>state` per
+ * line. Its order is the mod's weapon order, so a line's position is the
+ * weapon id — which is the only unambiguous way to say which VIRUS is meant
+ * when the mod has two of them and the room enables one and bans the other.
+ *
+ * "Banned" does not mean absent. In this game it means nobody spawns holding
+ * it and it still falls out of crates, which is how the odd ones are kept odd.
+ *
+ * Checking every name against the loaded mod in order is also the mod-update
+ * detector: if a weapon is inserted or renamed upstream, the positions stop
+ * lining up and this refuses rather than quietly banning the wrong guns.
+ */
+export function roomWeapons(settings, mod = DEFAULT_MOD) {
+  const path = new URL(`${mod}/room-weapons.txt`, MODS_DIR);
+  if (!existsSync(path)) return null;
+  const rows = readFileSync(path, "utf8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [name, state] = line.split("\t");
+      return { name: (name ?? "").trim(), state: (state ?? "").trim() };
+    });
+  if (rows.length !== settings.O.length) {
+    throw new Error(
+      `${mod}/room-weapons.txt lists ${rows.length} weapons and the mod has ` +
+        `${settings.O.length}. The mod has changed; re-copy the room's weapon list.`,
+    );
+  }
+  const wrong = rows
+    .map((row, id) => [id, row.name, String(settings.O[id].name).trim()])
+    .filter(([, listed, real]) => listed !== real);
+  if (wrong.length) {
+    const [id, listed, real] = wrong[0];
+    throw new Error(
+      `${mod}/room-weapons.txt is out of step with the mod: position ${id} says ` +
+        `"${listed}" and the mod has "${real}" (${wrong.length} disagree). ` +
+        "Re-copy the room's weapon list.",
+    );
+  }
+  const enabled = [];
+  const crateOnly = [];
+  rows.forEach((row, id) => (row.state === "Banned" ? crateOnly : enabled).push(id));
+  return { enabled, crateOnly };
+}
+
+export function weaponKeys(settings) {
+  return settings.O.map((weapon) => {
+    // Everything but the id, which is the thing that moves.
+    const { id, ...rest } = weapon;
+    const digest = createHash("sha256")
+      .update(JSON.stringify(rest, (key, value) => (key === "id" ? undefined : value)))
+      .digest("hex")
+      .slice(0, 16);
+    return `${String(weapon.name).trim().toUpperCase()}:${digest}`;
+  });
+}
+
 function loadWeaponProfiles(settings, mod) {
   const features = new Float32Array(settings.O.length * WEAPON_FEATURE_COUNT);
   const path = weaponProfilesFor(mod);

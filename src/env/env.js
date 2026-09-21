@@ -6,12 +6,13 @@
 // worth interrupting. Everything that could make two runs of one seed differ
 // goes through a single seeded generator, so a rollout is reproducible and a
 // policy's bad episode can be replayed exactly.
-import { applyNormalizedAction, normalizeAction } from "./actions.js";
-import { makeRng, respawnWorm, watchDamage } from "./engine.js";
+import { KEYS, applyNormalizedAction, normalizeAction } from "./actions.js";
+import { makeRng, respawnWorm, roomWeapons, watchDamage } from "./engine.js";
 import {
   MAP_CELLS,
   OBSERVATIONS,
   encodeMapTerrain,
+  nearestFoe,
   observationSpec,
   observe,
 } from "./observation.js";
@@ -24,6 +25,11 @@ import {
   tallyDamage,
 } from "./reward.js";
 import { viewFromWorld } from "./view.js";
+import { reach } from "./terrain.js";
+
+/** How far a worm is paid for aiming at somebody, and how wide the cone is. */
+const AIM_RANGE_PX = 450;
+const AIM_CONE = Math.PI / 8;
 
 // Stock Liero weapons that give a worm something to do at every range: shotgun,
 // rifle, bazooka, mine, crackler. Pass "random" instead to draw five per worm
@@ -78,8 +84,14 @@ export function directFire(engine) {
   return ids;
 }
 
-/** Named pools a trainer can ask for. "all" is every weapon the mod has. */
-export const WEAPON_POOL_NAMES = ["direct", "all"];
+/**
+ * Named pools a trainer can ask for.
+ *
+ * "room" is the weapons the watched room lets a worm spawn holding, read off
+ * its own weapon screen; the rest of the mod still turns up in crates, which is
+ * what the room's "Banned" actually means. "all" is every weapon there is.
+ */
+export const WEAPON_POOL_NAMES = ["room", "direct", "all"];
 
 export const DEFAULTS = {
   // Three is a free-for-all, which is the interesting case; two is a duel and
@@ -162,9 +174,11 @@ export class WormEnv {
     // rather than defaulted through, or asking for all of them reads as a typo.
     const chosen =
       typeof settings.weaponPool === "string"
-        ? settings.weaponPool === "direct"
-          ? this.#directOrEverything(settings.slots ?? 5)
-          : null
+        ? settings.weaponPool === "room"
+          ? roomWeapons(this.engine.settings, this.engine.mod)?.enabled ?? null
+          : settings.weaponPool === "direct"
+            ? this.#directOrEverything(settings.slots ?? 5)
+            : null
         : settings.weaponPool;
     const barred = this.#bannedAtStart(settings.banStart);
     // Null means every weapon, so the ban has to be spelled out as a list.
@@ -258,6 +272,38 @@ export class WormEnv {
     return null;
   }
 
+  /**
+   * Whether this worm is pointing at somebody it could actually hit.
+   *
+   * Aiming pays nothing on its own in this game: the reward for it arrives
+   * later, as damage, if the shot lands at all — and a policy that cannot aim
+   * never fires well enough to find that out. So the alignment itself is paid
+   * for, but only when it is real: a living foe, within reach, with nothing
+   * solid in between. Pointing at a wall earns nothing, and neither does
+   * pointing at somebody across the map through a hill.
+   */
+  #aimAt(agent) {
+    const view = this.views[agent];
+    const self = view?.self;
+    if (!self?.alive) return { onTarget: 0, aimedShot: 0 };
+    const foe = nearestFoe(view);
+    if (!foe) return { onTarget: 0, aimedShot: 0 };
+    const dx = foe.position.x - self.position.x;
+    const dy = foe.position.y - self.position.y;
+    const range = Math.hypot(dx, dy);
+    if (range < 1 || range > AIM_RANGE_PX) return { onTarget: 0, aimedShot: 0 };
+    // How far off the aim is, as an angle, wrapped to [-PI, PI].
+    let off = Math.atan2(dy, dx) - self.aimRadians;
+    off = Math.atan2(Math.sin(off), Math.cos(off));
+    if (Math.abs(off) > AIM_CONE) return { onTarget: 0, aimedShot: 0 };
+    const blocked = reach(view.terrain, self.position.x, self.position.y, dx / range, dy / range, Math.round(range));
+    if (blocked !== null) return { onTarget: 0, aimedShot: 0 };
+    // Closer to the middle of the cone is worth more, so there is a gradient to
+    // climb rather than a cliff to find.
+    const onTarget = 1 - Math.abs(off) / AIM_CONE;
+    return { onTarget, aimedShot: this.firing[agent] ? onTarget : 0 };
+  }
+
   reset({ seed } = {}) {
     const episodeSeed = (seed ?? this.seed) >>> 0;
     this.seed = (episodeSeed + 0x9e3779b9) >>> 0;
@@ -297,10 +343,13 @@ export class WormEnv {
     this.queues = this.latency.map((ticks) =>
       Array.from({ length: ticks }, () => NO_ACTION),
     );
-    this.progress.forEach((progress, agent) =>
-      progress.reset({ goal: this.makeGoal?.(this, agent) ?? null }),
-    );
+    this.progress.forEach((progress, agent) => {
+      // A new level every episode, and covering it is paid as a share of it.
+      progress.sized(this.world.level);
+      progress.reset({ goal: this.makeGoal?.(this, agent) ?? null });
+    });
     this.alive = this.worms.map((worm) => Boolean(worm.u));
+    this.firing = this.worms.map(() => false);
     this.totals = this.worms.map(() => ({}));
     this.episodeStartTick = this.world.qb;
     this.done = false;
@@ -320,6 +369,9 @@ export class WormEnv {
     }
     for (const [agent, action] of actions.entries()) {
       const normalized = normalizeAction(action);
+      // Whether it pulled the trigger this decision, for the aim reward: firing
+      // while lined up is the thing worth paying for, and the view does not say.
+      this.firing[agent] = (normalized.keys & KEYS.fire) !== 0;
       const queue = this.queues[agent];
       // Held keys last the whole decision; the rope and weapon messages are
       // sent once, so only the first tick of the decision carries them.
@@ -357,7 +409,7 @@ export class WormEnv {
         worm.u ? worm : this.views[agent].self.position ?? worm,
         Boolean(worm.u),
       );
-      const outcome = this.reward(events, moved, this.weights);
+      const outcome = this.reward(events, { ...moved, ...this.#aimAt(agent) }, this.weights);
       rewards.push(outcome.reward);
       parts.push(outcome.parts);
       addEvents(this.totals[agent], events);

@@ -223,6 +223,12 @@ export class VecWormEnv {
       agents: this.agents,
       heads: ACTION_HEADS.map(([name, choices]) => ({ name, choices: choices.length })),
       vectorSize: this.spec.vectorSize,
+      // Where the weapon identities sit in the vector, and how many there are
+      // to tell apart. The network embeds them; nothing else should normalise
+      // or interpolate them.
+      weaponIdsAt: this.spec.offsets.weaponIds,
+      weaponIdsCount: 1 + this.spec.foeSlots,
+      weaponCount: this.engine.settings.O.length,
       patchCells: this.wantsPatch ? PATCH_CELLS : 0,
       patchShape: this.wantsPatch ? PATCH_SHAPE : null,
       mapCells: this.wantsMap ? MAP_SIZE : 0,

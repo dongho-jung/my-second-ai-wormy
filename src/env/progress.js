@@ -118,8 +118,25 @@ export class Progress {
     return this.facts(movedPx, stuck, novel, revisit, goalDelta, reachedGoal);
   }
 
+  /**
+   * How much of this map one cell is.
+   *
+   * Covering ground was worth a flat amount per cell, which made it worth
+   * eleven times more on a 2126x920 community map than on a stock 504x350 one
+   * — and on the big maps wandering paid better than winning, so a run duly
+   * stopped fighting. A share of the map means the same thing everywhere.
+   */
+  sized(level) {
+    const { cellPx } = this.options;
+    this.cells = Math.max(
+      1,
+      Math.floor(level.width / cellPx) * Math.floor(level.height / cellPx),
+    );
+  }
+
   facts(movedPx, stuck, novel, revisit, goalDelta, reachedGoal) {
     return {
+      cells: this.cells ?? 1,
       movedPx: Number.isFinite(movedPx) ? movedPx : null,
       stuck,
       stuckSteps: this.stuckSteps,

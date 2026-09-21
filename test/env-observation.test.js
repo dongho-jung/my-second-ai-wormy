@@ -209,8 +209,8 @@ test("the byte patch and the one-hot patch are the same picture", () => {
   const floats = encodePatch(view);
   assert.equal(bytes.length, PATCH_CELLS);
   assert.equal(floats.length, PATCH_SIZE);
-  // A quarter of the bytes, because one cell is one byte and not four floats.
-  assert.equal(bytes.byteLength * 4, floats.byteLength / 4);
+  // One byte a cell against one float per channel per cell.
+  assert.equal(floats.byteLength, bytes.byteLength * PATCH.channels.length * 4);
   for (let cell = 0; cell < PATCH_CELLS; cell++) {
     const kind = bytes[cell] & PATCH_KIND;
     assert.ok(kind <= 2, `cell ${cell} has a terrain code of ${kind}`);

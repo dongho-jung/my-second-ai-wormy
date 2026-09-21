@@ -48,17 +48,19 @@ def parse_args(argv=None):
                        help="the game's own level pool, as `npm run levels` downloads it")
     world.add_argument("--stock-levels", type=int, default=64,
                        help="how many of them to use; 0 trains on generated maps alone")
-    world.add_argument("--weapons", default="all", choices=["direct", "all"],
-                       help="a real room lets a player pick any of the forty, explosives included")
+    world.add_argument("--weapons", default="room", choices=["room", "direct", "all"],
+                       help="which weapons a worm can spawn holding. `room` is the list the "
+                            "watched room actually allows, read off its weapon screen: 95 of the "
+                            "129, with the other 34 reachable only out of a crate")
     world.add_argument("--mod", default=None,
                        help="the game to train under. Defaults to whichever mod the environment "
                             "does, so the name does not live in two languages at once — it was "
                             "spelled here as well, went stale, and the run duly ignored every "
                             "recording from the room it was meant to be learning from")
-    world.add_argument("--ban-start",
-                       default="CRAZY IVAN,ENERGY SHIELD,FORCE FIELD,BARRACUDA,BIG BERTHA,NUKA-COLA",
-                       help="weapons nobody spawns holding, by the mod's own names. They still "
-                            "turn up as crates, which is how the rooms run them")
+    world.add_argument("--ban-start", default="",
+                       help="further weapons nobody spawns holding, by name, on top of whatever "
+                            "--weapons already allows. Names are ambiguous where a mod uses one "
+                            "twice, so prefer --weapons room, which goes by position")
     world.add_argument("--rules", default="room", choices=["room", "clean"],
                        help="room matches the watched room's own settings, read off it: weapon "
                             "crates every 480 ticks and a weapon-change delay. The engine's bare "
@@ -257,6 +259,9 @@ def main(argv=None):
         use_patch=use_patch,
         use_map=use_map,
         map_side=map_side,
+        weapon_ids_at=layout.weapon_ids_at,
+        weapon_ids_count=layout.weapon_ids_count,
+        weapon_count=layout.weapon_count,
     ).to(device)
     # What a checkpoint has to carry for a viewer or a resume to rebuild it.
     shape_of = {
@@ -272,6 +277,9 @@ def main(argv=None):
         "rules": args.rules,
         "usePatch": use_patch,
         "patchShape": list(patch_shape),
+        "weaponIdsAt": layout.weapon_ids_at,
+        "weaponIdsCount": layout.weapon_ids_count,
+        "weaponCount": layout.weapon_count,
         "useMap": use_map,
         "mapSide": map_side,
     }
@@ -318,7 +326,7 @@ def main(argv=None):
             "parallelWorms": slots,
             "observation": (
                 f"vector {layout.vector_size}"
-                + (f" + patch 4x{patch_shape[0]}x{patch_shape[1]}" if use_patch else "")
+                + (f" + patch {layout.patch_shape[0]}x{patch_shape[0]}x{patch_shape[1]}" if use_patch else "")
                 + (f" + map 4x{map_side}x{map_side}" if use_map else "")
             ),
             "rolloutSteps": args.steps,

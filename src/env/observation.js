@@ -93,6 +93,13 @@ export function observationSpec({
     // The nearest shots: where, where to, and how much they are going to hurt.
     ["projectiles", projectileSlots * (4 + SHOT_WEAPON_FIELDS)],
     ["pickups", pickupSlots * PICKUP_FIELDS], // health and weapon crates nearby
+    // Which weapon, not just what it does. Twelve names in this mod belong to
+    // two different weapons — the ordinary one and the strange crate-only
+    // version — and ten measured numbers do not say how a VIRUS spreads or
+    // what a FORCE FIELD is for. These are indices for the network to embed,
+    // so they are kept out of the running normaliser, which would average them
+    // into nonsense. Self first, then each foe; -1 for nobody.
+    ["weaponIds", 1 + foeSlots],
   ];
   const offsets = {};
   const vectorSize = layout.reduce((at, [name, size]) => {
@@ -133,7 +140,11 @@ export const PATCH = {
   // Free space gets a channel of its own instead of being the absence of the
   // other two, so "solid" and "nothing measured" never look alike. Past the
   // edge of the map reads as rock, which is exactly how it behaves.
-  channels: ["rock", "dirt", "free", "projectile"],
+  // Worms among the terrain, not only as coordinates in the vector. Without
+  // these the policy sees the ground in front of it and is told where the enemy
+  // is in two numbers it has to reconcile with that picture itself; "he is
+  // behind that wall" is something it should be able to look at.
+  channels: ["rock", "dirt", "free", "projectile", "foe", "self"],
   columns: 213,
   rows: 121,
   // Two pixels per cell, the resolution footwork happens at.
@@ -334,6 +345,16 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
     into[at++] = crate.kind === "health" ? 1 : 0;
     into[at++] = crate.kind === "health" ? 0 : 1;
   }
+
+  // Which weapon, as an index for the network to embed rather than a number to
+  // do arithmetic on. Written last and kept out of the running normaliser,
+  // which would otherwise average weapon 31 and weapon 108 into weapon 70 —
+  // and those two are a VIRUS that spreads a little and one that spreads twice
+  // as far. Ten measured numbers cannot say that; an identity can.
+  const held = (worm) => worm?.weapons?.[worm.selectedWeapon]?.id ?? -1;
+  into[at++] = held(self);
+  for (let slot = 0; slot < spec.foeSlots; slot++) into[at++] = held(foes[slot]);
+
   return into;
 }
 
@@ -465,6 +486,8 @@ const DIRT = 1;
 const FREE = 2;
 /** Bit set on a cell that has a shot in it, alongside the terrain code. */
 export const PATCH_PROJECTILE = 4;
+export const PATCH_FOE = 8;
+export const PATCH_SELF = 16;
 export const PATCH_KIND = 3;
 
 const patchScratch = new Uint8Array(PATCH_CELLS);
@@ -528,6 +551,16 @@ export function encodePatchBytes(view, into = new Uint8Array(PATCH_CELLS)) {
     const at = patchCellOf(origin, shot.position.x, shot.position.y);
     if (at) into[at.cell] |= PATCH_PROJECTILE;
   }
+  // And the worms, in the same picture as the ground they stand on. The vector
+  // says where a foe is in two numbers; this says it in the place it actually
+  // is, beside the wall that is or is not between them.
+  for (const foe of view.foes ?? []) {
+    if (!foe.alive) continue;
+    const at = patchCellOf(origin, foe.position.x, foe.position.y);
+    if (at) into[at.cell] |= PATCH_FOE;
+  }
+  const here = patchCellOf(origin, self.position.x, self.position.y);
+  if (here) into[here.cell] |= PATCH_SELF;
   return into;
 }
 
@@ -541,6 +574,8 @@ export function encodePatch(view, into = new Float32Array(PATCH_SIZE)) {
     const byte = bytes[cell];
     into[(byte & PATCH_KIND) * plane + cell] = 1;
     if (byte & PATCH_PROJECTILE) into[3 * plane + cell] = 1;
+    if (byte & PATCH_FOE) into[4 * plane + cell] = 1;
+    if (byte & PATCH_SELF) into[5 * plane + cell] = 1;
   }
   return into;
 }

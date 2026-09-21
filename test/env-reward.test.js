@@ -130,8 +130,16 @@ test("standing in a hole costs, and never enough to make dying the way out", () 
 });
 
 test("new ground pays and doubling back costs", () => {
-  assert.equal(combatReward(emptyEvents(1)[0], { ...still, novel: 1 }).parts.fromExplore, 0.02);
-  assert.equal(combatReward(emptyEvents(1)[0], { ...still, revisit: 1 }).parts.fromRevisit, -0.02);
+  assert.equal(
+    combatReward(emptyEvents(1)[0], { ...still, novel: 1, cells: 300 }).parts.fromExplore,
+    3 / 300,
+  );
+  // Paid as a share of the map: one cell of a 300-cell map is a three-hundredth
+  // of what covering all of it is worth.
+  assert.equal(
+    combatReward(emptyEvents(1)[0], { ...still, revisit: 1, cells: 300 }).parts.fromRevisit,
+    -3 / 300,
+  );
 });
 
 test("a goal pays for closing on it and once for arriving", () => {

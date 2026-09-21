@@ -33,11 +33,19 @@ export const DEFAULT_WEIGHTS = {
   damageTaken: 0.5 / 100,
   kill: 4,
   death: 2,
-  // Ground it has not covered before, per grid cell.
-  explore: 0.02,
+  // Covering the map, as a share of it rather than a count of cells: the
+  // community maps are up to twelve times the area of a stock one, and a flat
+  // per-cell payment made wandering them worth more than any fight. Measured
+  // on a run that had stopped fighting altogether: exploring paid 4.99 an
+  // episode while a kill and the death that came with it netted 0.12.
+  //
+  // These are what covering the WHOLE map is worth. A typical episode sees a
+  // few percent of it, so this is a nudge away from camping, and the stuck and
+  // revisit terms are what actually punish sitting still.
+  exploreMap: 3,
   // Coming back to somewhere it was recently. Pacing a short loop trips this
   // every step and nothing else notices it.
-  revisit: 0.02,
+  revisitMap: 3,
   // Per step spent unable to move. It has to hurt enough to be worth digging
   // out of, and not so much that dying becomes the cheaper way out of a hole.
   // At this weight, being stuck long enough to be worth dying over is about 200
@@ -47,6 +55,16 @@ export const DEFAULT_WEIGHTS = {
   // Per pixel of progress toward a goal, when one is set, and for arriving.
   goalProgress: 0.02,
   reachedGoal: 2,
+  // Pointing at somebody it could actually hit, per decision, scaled by how
+  // centred the aim is. Aiming earns nothing by itself in this game — the
+  // payoff arrives later as damage, if the shot lands — so a policy that
+  // cannot aim never fires well enough to discover that aiming was the point.
+  // This is the ladder up to that discovery, and it is deliberately small: the
+  // reward for hitting somebody has to stay the reason to do it.
+  onTarget: 0.004,
+  // And firing while lined up, which is the behaviour actually wanted. Worth
+  // more than the aim alone, and it cannot be earned by standing and staring.
+  aimedShot: 0.025,
 };
 
 /** The blank each step's events are read into, one per agent. */
@@ -108,9 +126,11 @@ export function combatReward(events, progress, weights = DEFAULT_WEIGHTS) {
     fromDamageTaken: -events.damageTaken * weights.damageTaken,
     fromKill: events.killed * weights.kill,
     fromDeath: -events.died * weights.death,
-    fromExplore: progress.novel * weights.explore,
-    fromRevisit: -progress.revisit * weights.revisit,
+    fromExplore: (progress.novel / (progress.cells ?? 1)) * weights.exploreMap,
+    fromRevisit: -(progress.revisit / (progress.cells ?? 1)) * weights.revisitMap,
     fromStuck: progress.stuck ? -weights.stuck : 0,
+    fromOnTarget: (progress.onTarget ?? 0) * weights.onTarget,
+    fromAimedShot: (progress.aimedShot ?? 0) * weights.aimedShot,
     fromGoal:
       progress.goalDelta * weights.goalProgress +
       (progress.reachedGoal ? weights.reachedGoal : 0),

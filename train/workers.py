@@ -58,6 +58,9 @@ class Layout:
     frame_bytes: int
     engine_sha256: str
     mod: str
+    weapon_ids_at: int | None
+    weapon_ids_count: int
+    weapon_count: int
     frameskip: int
     episode_ticks: int
     maps: int
@@ -86,6 +89,9 @@ class Layout:
             frame_bytes=at,
             engine_sha256=raw["engineSha256"],
             mod=raw["mod"],
+            weapon_ids_at=raw.get("weaponIdsAt"),
+            weapon_ids_count=int(raw.get("weaponIdsCount", 0)),
+            weapon_count=int(raw.get("weaponCount", 0)),
             frameskip=raw["frameskip"],
             episode_ticks=raw["episodeTicks"],
             maps=raw["maps"],
