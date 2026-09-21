@@ -240,7 +240,19 @@ export class WormEnv {
     if (typeof pool !== "string") return pool;
     const { settings, mod } = { settings: this.engine.settings, mod: this.engine.mod };
     if (pool === "starter") return weaponList(settings, mod, "starter-weapons.txt");
-    if (pool === "room") return roomWeapons(settings, mod)?.enabled ?? null;
+    if (pool === "room") {
+      const room = roomWeapons(settings, mod);
+      if (room) return room.enabled;
+      // Falling through here silently is how a run ends up spawning worms with
+      // the weapons a room only ever puts in a crate, while its own log still
+      // says the room's list was used.
+      console.warn(
+        `no room-weapons.txt beside ${mod}: every one of ${settings.O.length} ` +
+          "weapons can be spawned with, crate-only ones included. " +
+          "Run `npm run mods` to lay the room's list down.",
+      );
+      return null;
+    }
     if (pool === "direct") return this.#directOrEverything(slots);
     return null; // "all"
   }
