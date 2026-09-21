@@ -292,6 +292,12 @@ def main(argv=None):
     device = pick_device(args.device)
 
     latency = [int(part) for part in str(args.input_latency).split("-")]
+    # A checkpoint to carry on from is read once, here, because two things
+    # below have to know about it before the workers start: how far the ladder
+    # had faded, and how the convolution was padded.
+    carried = (
+        torch.load(args.resume, map_location="cpu", weights_only=False) if args.resume else None
+    )
     config = dict(
         envs=args.envs,
         agents=args.agents,
@@ -347,6 +353,10 @@ def main(argv=None):
         # by how many are playing it.
         worms = max(1, args.workers * args.envs * args.agents)
         config["shapingFullAt"] = int(args.total_steps * args.shaping_decay / worms)
+        if carried is not None:
+            # Carrying on: the ladder had faded this far already. Without this
+            # a resumed run started the fade over from the top.
+            config["decisionsDone"] = int(carried.get("step", 0)) // worms
 
     pool = WorkerPool(args.workers, config)
     layout = pool.layout
@@ -367,9 +377,8 @@ def main(argv=None):
     # A resumed checkpoint decides how the convolution is padded, because its
     # weights only fit the network it was trained as. A fresh run is padded.
     conv_padding = True
-    if args.resume:
-        resumed_shape = torch.load(args.resume, map_location="cpu", weights_only=False)["layout"]
-        conv_padding = bool(resumed_shape.get("convPadding", False))
+    if carried is not None:
+        conv_padding = bool(carried["layout"].get("convPadding", False))
 
     policy = WormPolicy(
         layout.vector_size,
@@ -420,8 +429,7 @@ def main(argv=None):
     # the policy is — so only the observation has to still match.
     resumed_from = None
     resumed_at = 0
-    if args.resume:
-        carried = torch.load(args.resume, map_location="cpu", weights_only=False)
+    if carried is not None:
         shape = carried["layout"]
         if shape["vectorSize"] != layout.vector_size or shape["headSizes"] != layout.head_sizes:
             raise RuntimeError(

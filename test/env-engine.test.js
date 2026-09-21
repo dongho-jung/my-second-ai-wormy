@@ -525,3 +525,16 @@ test("the observation carries the decision that came before it", { skip }, async
   env.reset({ seed: 6 });
   assert.deepEqual(block(env.observations[0]), new Array(width).fill(0));
 });
+
+test("a world told how far the ladder had faded carries on from there", { skip }, async () => {
+  const engine = await loadEngine();
+  const resumed = new WormEnv(engine, {
+    agents: 2, episodeTicks: 400, seed: 3, shapingFullAt: 100, decisionsDone: 50,
+  });
+  assert.equal(resumed.shaping, 0.5, "half the fade was already done");
+  resumed.reset({ seed: 3 });
+  resumed.step([0, 0]);
+  assert.ok(Math.abs(resumed.shaping - 0.49) < 1e-9, "and it goes on from there");
+  const fresh = new WormEnv(engine, { agents: 2, episodeTicks: 400, seed: 3, shapingFullAt: 100 });
+  assert.equal(fresh.shaping, 1, "a new run starts at the top");
+});

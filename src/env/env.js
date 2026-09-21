@@ -150,6 +150,10 @@ export const DEFAULTS = {
   // knows how many worms are playing and this environment does not.
   shapingFullAt: 0,
   shapingFloor: 0,
+  // Decisions this world is taken to have made before it started: a run
+  // carrying on from a checkpoint hands over how far the ladder had already
+  // faded, so the fade does not start again from the top.
+  decisionsDone: 0,
 };
 
 const NO_ACTION = { keys: 0, rope: 0, weapon: 0, fresh: false };
@@ -174,8 +178,12 @@ export class WormEnv {
     this.shapingFloor = settings.shapingFloor ?? 0;
     // How much of the ladder is still being paid. Counted in decisions taken
     // rather than episodes, because episodes are a clock and this is progress.
-    this.decisions = 0;
+    this.decisions = Math.max(0, Math.trunc(settings.decisionsDone ?? 0));
     this.shaping = 1;
+    if (this.shapingFullAt > 0 && this.decisions > 0) {
+      const gone = Math.min(1, this.decisions / this.shapingFullAt);
+      this.shaping = 1 - (1 - this.shapingFloor) * gone;
+    }
     // Shared by every worm in this world: the terrain is the same for all of
     // them, and only where they are differs.
     this.mapTerrain = new Uint8Array(3 * MAP_CELLS);
