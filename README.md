@@ -271,10 +271,11 @@ docker run -d --name wormy-pages -v wormy-runs:/app/artifacts/runs \
   -p 8768:8768 -p 8769:8769 wormy node scripts/monitor.js
 ```
 
-Then <http://localhost:8768> — or `127.0.0.1`, both answer — and the **Watch**
-button opens the match on 8769. No `WORMY_PUBLIC_ORIGIN` and no
-`WORMY_BASE_PATH`: unset, the pages serve at the root and answer to loopback,
-which is exactly what they did before any of this.
+Then <http://localhost:8768> — or `127.0.0.1`, or any port you published them
+on — and the **Watch** button opens the match on 8769. No
+`WORMY_PUBLIC_ORIGIN` and no `WORMY_BASE_PATH`: unset, the pages serve at the
+root and answer to loopback under any name and any port, which is exactly what
+they did before any of this.
 
 To rehearse the deployment instead, set them to whatever the ingress will be
 and send the `Host` header by hand:
@@ -303,9 +304,11 @@ each with an environment variable of its own:
 | `--public-origin` | `WORMY_PUBLIC_ORIGIN` | where a browser actually reaches it |
 | `--base-path` | `WORMY_BASE_PATH` | a path it is mounted under, like `/ai-worm` |
 
-The host check stays: a request claiming to be somewhere neither of those is
-refused, so opening the bind address widens what may connect without widening
-what may pretend to be this. The pages ask for their own files by relative
+The host check stays: it is what stops a page on another site driving this one
+through a browser that can reach it. The question it asks is the *name* — an
+attacker's domain pointed at a loopback address still arrives carrying its own
+name — so loopback answers on whatever port it was published on, and anything
+else has to be named through `--public-origin`. The pages ask for their own files by relative
 path, so one prefix moves the whole thing, and `/ai-worm` redirects to
 `/ai-worm/` so that resolving works.
 

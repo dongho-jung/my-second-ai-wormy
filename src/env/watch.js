@@ -189,28 +189,37 @@ function needsSlash(pathname, base) {
  * reached at an ingress hostname, and both are this viewer.
  */
 /**
- * The names this server answers to.
+ * Whether a request's `Host` and `Origin` say it was meant for this server.
  *
- * The check is against DNS rebinding: an attacker's domain resolving to
- * 127.0.0.1 still arrives with its own name in `Host`, and is refused. Adding
- * the loopback spellings does not weaken that — `localhost` and `127.0.0.1`
- * are the same machine either way — and it is the difference between the page
- * working and not when somebody publishes the port and types the other one.
+ * The check is against DNS rebinding: an attacker's domain resolving to a
+ * loopback address still arrives carrying its own name, and is refused. So the
+ * question is the name, not the port — and the port is not something this can
+ * know anyway. Published on 18768 and listening on 8768, a browser says
+ * `localhost:18768` and it is still the same machine.
+ *
+ * Anything else has to be named, through `--public-origin`.
  */
-function reachableAs(port, publicOrigin) {
-  const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
-  const origins = new Set([...hosts].map((host) => `http://${host}`));
-  if (publicOrigin) {
-    hosts.add(new URL(publicOrigin).host);
-    origins.add(publicOrigin);
+function loopback(host) {
+  if (!host) return false;
+  const name = host.startsWith("[") ? host.slice(0, host.indexOf("]") + 1) : host.split(":")[0];
+  return name === "127.0.0.1" || name === "localhost" || name === "[::1]";
+}
+
+function meantForUs(request, publicOrigin) {
+  const host = request.headers.host;
+  const named = publicOrigin ? new URL(publicOrigin).host : null;
+  if (!(loopback(host) || (named && host === named))) return false;
+  const from = request.headers.origin;
+  if (!from) return true;
+  try {
+    return loopback(new URL(from).host) || (publicOrigin && from === publicOrigin);
+  } catch {
+    return false;
   }
-  return { hosts, origins };
 }
 
 function allowed(request) {
-  const { hosts, origins } = reachableAs(server.address().port, publicOrigin);
-  if (!hosts.has(request.headers.host)) return false;
-  return !request.headers.origin || origins.has(request.headers.origin);
+  return meantForUs(request, publicOrigin);
 }
 
 const server = createServer((request, response) => {

@@ -41,22 +41,33 @@ const MAX_CACHED_RECORDS = 20_000;
  * somebody else's request arriving on this port.
  */
 /**
- * The names this server answers to.
+ * Whether a request's `Host` and `Origin` say it was meant for this server.
  *
- * The check is against DNS rebinding: an attacker's domain resolving to
- * 127.0.0.1 still arrives with its own name in `Host`, and is refused. Adding
- * the loopback spellings does not weaken that — `localhost` and `127.0.0.1`
- * are the same machine either way — and it is the difference between the page
- * working and not when somebody publishes the port and types the other one.
+ * The check is against DNS rebinding: an attacker's domain resolving to a
+ * loopback address still arrives carrying its own name, and is refused. So the
+ * question is the name, not the port — and the port is not something this can
+ * know anyway. Published on 18768 and listening on 8768, a browser says
+ * `localhost:18768` and it is still the same machine.
+ *
+ * Anything else has to be named, through `--public-origin`.
  */
-function reachableAs(port, publicOrigin) {
-  const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
-  const origins = new Set([...hosts].map((host) => `http://${host}`));
-  if (publicOrigin) {
-    hosts.add(new URL(publicOrigin).host);
-    origins.add(publicOrigin);
+function loopback(host) {
+  if (!host) return false;
+  const name = host.startsWith("[") ? host.slice(0, host.indexOf("]") + 1) : host.split(":")[0];
+  return name === "127.0.0.1" || name === "localhost" || name === "[::1]";
+}
+
+function meantForUs(request, publicOrigin) {
+  const host = request.headers.host;
+  const named = publicOrigin ? new URL(publicOrigin).host : null;
+  if (!(loopback(host) || (named && host === named))) return false;
+  const from = request.headers.origin;
+  if (!from) return true;
+  try {
+    return loopback(new URL(from).host) || (publicOrigin && from === publicOrigin);
+  } catch {
+    return false;
   }
-  return { hosts, origins };
 }
 
 function underBase(pathname, base) {
@@ -262,10 +273,7 @@ export async function createMonitorServer({
       "default-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
     );
     if (closing) return json(503, { error: "Server is shutting down" });
-    if (
-      !allowedHosts.has(request.headers.host) ||
-      (request.headers.origin && !allowedOrigins.has(request.headers.origin))
-    ) {
+    if (!meantForUs(request, publicOrigin)) {
       return json(403, { error: "Use the monitor's own origin" });
     }
     const url = new URL(request.url, origin);
@@ -392,10 +400,7 @@ export async function createMonitorServer({
     server.listen(port, host, resolve);
   });
   origin = `http://127.0.0.1:${server.address().port}`;
-  const { hosts: allowedHosts, origins: allowedOrigins } = reachableAs(
-    server.address().port,
-    publicOrigin,
-  );
+
   let polling = false;
   const timer = setInterval(() => {
     // Skip a beat rather than stack reads when the disk is slow.
