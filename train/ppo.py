@@ -43,12 +43,19 @@ def parse_args(argv=None):
                             "300ms behind, which is eighteen ticks; training at the old 0-3 taught "
                             "reflexes that do not survive the trip. A range rather than a number "
                             "so the policy does not learn one particular delay")
-    world.add_argument("--maps", type=int, default=12,
-                       help="generated levels to mix in alongside the pool, as a random room would")
+    world.add_argument("--maps", type=int, default=0,
+                       help="generated dirt levels to mix in. Off: the room this trains for plays "
+                            "community maps, and a generated field is a map it never picks. "
+                            "Pass 12 to mix them back in")
     world.add_argument("--map-width", type=int, default=504,
                        help="the width the game itself generates; narrower makes worms meet sooner")
-    world.add_argument("--levels-dir", default=str(REPO / "artifacts" / "levels"),
-                       help="the game's own level pool, as `npm run levels` downloads it")
+    world.add_argument("--levels-dir", default=str(REPO / "artifacts" / "maps" / "dsds-cs"),
+                       help="the maps to play on. Defaults to the cs_ pool `npm run maps` "
+                            "downloads, which is what the watched room runs. The game's own "
+                            "pool is artifacts/levels, where `npm run levels` puts it — it was "
+                            "the default here while the cs_ maps sat in another directory "
+                            "entirely, so every run that meant to train on them trained on "
+                            "generated dirt and the stock pool instead")
     world.add_argument("--stock-levels", type=int, default=64,
                        help="how many of them to use; 0 trains on generated maps alone")
     world.add_argument("--drill", action="store_true",
