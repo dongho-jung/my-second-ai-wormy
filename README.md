@@ -298,6 +298,7 @@ npm run evaluate -- --left artifacts/runs/<a>/best.pt --right artifacts/runs/<b>
 npm run evaluate -- --left artifacts/runs/<a> --right random      # against keys pressed at random
 npm run evaluate -- --left artifacts/runs/<a> --right still       # against a worm that does nothing
 npm run evaluate -- --history artifacts/runs/<a>                  # against its own earlier selves
+npm run evaluate -- --left latest --right still                   # the newest run, against still
 ```
 
 Nothing on the training page can compare two runs: every figure there is a

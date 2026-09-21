@@ -12,7 +12,8 @@ interval.
     npm run evaluate -- --left artifacts/runs/<a> --right random
     npm run evaluate -- --left artifacts/runs/<a> --right still --episodes 96
 
-A run directory stands for its best.pt. `random` presses keys at random and
+A run directory stands for its best.pt, and `latest` for the newest run's.
+`random` presses keys at random and
 `still` presses nothing: two bars that never move, so a policy can be measured
 against the same thing at the start of a run and at the end of it.
 """
@@ -32,6 +33,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from policy import policy_from_shape
 from ppo import stock_levels
+from run import DEFAULT_RUNS
+from watch import newest_checkpoint
 from workers import REPO, WorkerPool
 
 BASELINES = ("random", "still")
@@ -50,7 +53,8 @@ METRICS = [
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--left", default=None, help="a .pt, a run directory, or random / still")
+    parser.add_argument("--left", default=None,
+                        help="a .pt, a run directory, `latest` for the newest run, or random / still")
     parser.add_argument("--right", default=None, help="the other side, the same way")
     parser.add_argument("--history", default=None,
                         help="a run directory: its best.pt against every policy-<steps>.pt the run "
@@ -78,7 +82,9 @@ def parse_args(argv=None):
 
 
 def checkpoint_path(spec: str) -> Path:
-    """A .pt as given, or a run directory's best.pt, or its policy.pt."""
+    """A .pt as given, a run directory's best.pt or policy.pt, or `latest`."""
+    if spec == "latest":
+        return newest_checkpoint(DEFAULT_RUNS)
     path = Path(spec)
     if path.is_dir():
         for name in ("best.pt", "policy.pt"):
