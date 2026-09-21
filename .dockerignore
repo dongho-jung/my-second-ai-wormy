@@ -5,6 +5,11 @@ artifacts/*
 !artifacts/headless-sim
 !artifacts/mods
 !artifacts/maps
+# The measured weapon profiles too. Without them the engine has no ballistics
+# and no weapon features: the aim rewards pay nothing and 72 vector fields are
+# always zero, and the first run in a cluster spent two and a half hours that
+# way before anyone noticed. The trainer now refuses to start without them.
+!artifacts/weapons.*.json
 node_modules/
 .git/
 .ai-memory

@@ -330,6 +330,10 @@ export class VecWormEnv {
       weaponIdsAt: this.spec.offsets.weaponIds,
       weaponIdsCount: WEAPON_SLOTS + this.spec.foeSlots,
       weaponCount: this.engine.settings.O.length,
+      // Whether the mod's weapons were measured. Without the profile the
+      // weapon features above are all zero and the aim rewards pay nothing;
+      // a trainer must refuse rather than run blind.
+      weaponsMeasured: Boolean(this.engine.weaponsMeasured),
       patchCells: this.wantsPatch ? this.spec.patch.cells : 0,
       patchShape: this.wantsPatch ? this.spec.patch.shape : null,
       patchScale: this.spec.patch.scalePx,

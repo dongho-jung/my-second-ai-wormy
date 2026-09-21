@@ -7,6 +7,10 @@ artifacts/*
 !artifacts/headless-sim/
 !artifacts/mods/
 !artifacts/maps/
+# And what `npm run weapons` measures about the mod's weapons: the policy's
+# ballistics and weapon features come from here, and a build without the file
+# trains blind. Committed so a fresh clone and the image both have it.
+!artifacts/weapons.*.json
 *.log
 
 # Python leaves these beside the trainer; they are not source.

@@ -61,6 +61,7 @@ class Layout:
     weapon_ids_at: int | None
     weapon_ids_count: int
     weapon_count: int
+    weapons_measured: bool
     frameskip: int
     episode_ticks: int
     maps: int
@@ -93,6 +94,7 @@ class Layout:
             weapon_ids_at=raw.get("weaponIdsAt"),
             weapon_ids_count=int(raw.get("weaponIdsCount", 0)),
             weapon_count=int(raw.get("weaponCount", 0)),
+            weapons_measured=bool(raw.get("weaponsMeasured", True)),
             frameskip=raw["frameskip"],
             episode_ticks=raw["episodeTicks"],
             maps=raw["maps"],

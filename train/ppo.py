@@ -77,6 +77,12 @@ def parse_args(argv=None):
                             "fired it; `room` is the list the "
                             "watched room actually allows, read off its weapon screen: 95 of the "
                             "129, with the other 34 reachable only out of a crate")
+    world.add_argument("--allow-unmeasured-weapons", action="store_true",
+                       help="start even though the mod's weapons have not been measured "
+                            "(`npm run weapons`). Without the profile the policy sees no "
+                            "weapon behaviour — 72 fields of the vector stay zero — and the "
+                            "aim rewards pay nothing. The first cluster run went two and a "
+                            "half hours that way. Only for a deliberate experiment")
     world.add_argument("--mod", default=None,
                        help="the game to train under. Defaults to whichever mod the environment "
                             "does, so the name does not live in two languages at once — it was "
@@ -337,6 +343,15 @@ def main(argv=None):
     pool = WorkerPool(args.workers, config)
     layout = pool.layout
     slots = pool.slots
+    if not layout.weapons_measured and not args.allow_unmeasured_weapons:
+        pool.close()
+        raise RuntimeError(
+            f"the weapons of {layout.mod} have not been measured: there is no "
+            "artifacts/weapons.<mod>.json, so the policy would see no weapon "
+            "behaviour and the aim rewards would pay nothing. Run `npm run weapons` "
+            "(and, for an image, make sure the file is in the build). "
+            "--allow-unmeasured-weapons overrides this for a deliberate experiment"
+        )
     use_patch = not args.no_patch and layout.patch_cells > 0
     use_map = not args.no_map and layout.map_cells > 0
     patch_shape = tuple(layout.patch_shape[1:]) if layout.patch_shape else (121, 213)

@@ -10,6 +10,7 @@
 // the simulation, runs untouched.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { CLIENT_SHA256 } from "../adapter-v20.js";
 import { decodeIndexedPng } from "./png.js";
@@ -499,10 +500,41 @@ export function weaponKeys(settings) {
 function loadWeaponProfiles(settings, mod) {
   const features = new Float32Array(settings.O.length * WEAPON_FEATURE_COUNT);
   const path = weaponProfilesFor(mod);
-  if (!existsSync(path)) return { features, measured: false, weapons: [] };
+  if (!existsSync(path)) {
+    // Loudly. Without the profile there are no ballistics and no weapon
+    // features: the aim rewards pay nothing and 72 fields of the vector are
+    // zero for the whole run, and nothing else in the pipeline can tell. The
+    // first cluster run went two and a half hours that way with every chart
+    // looking healthy. The trainer refuses to start on `measured: false`.
+    console.warn(
+      `no weapon profile at ${fileURLToPath(path)}: the policy will see no ` +
+        "weapon behaviour and the aim rewards will pay nothing. " +
+        "Run `npm run weapons` to measure the mod's weapons.",
+    );
+    return { features, measured: false, weapons: [] };
+  }
   const { weapons } = JSON.parse(readFileSync(path, "utf8"));
+  // The profile is measured off one version of the mod. If the mod has since
+  // changed, an id here means a different weapon, so refuse rather than feed
+  // the policy a rifle's numbers for a rocket.
+  const wrong = weapons.filter(
+    (weapon) =>
+      weapon.id >= settings.O.length ||
+      String(settings.O[weapon.id].name).trim() !== String(weapon.name ?? "").trim(),
+  );
+  if (weapons.length !== settings.O.length || wrong.length) {
+    const first = wrong[0];
+    throw new Error(
+      `${fileURLToPath(path)} does not match ${settings.name}: it lists ` +
+        `${weapons.length} weapons and the mod has ${settings.O.length}` +
+        (first
+          ? `, and id ${first.id} is "${first.name}" there but ` +
+            `"${settings.O[first.id]?.name ?? "nothing"}" in the mod`
+          : "") +
+        ". The mod has changed; run `npm run weapons` to measure it again.",
+    );
+  }
   for (const weapon of weapons) {
-    if (weapon.id >= settings.O.length) continue;
     WEAPON_FEATURES.forEach(([field, scale], index) => {
       const value = (weapon[field] ?? 0) / scale;
       features[weapon.id * WEAPON_FEATURE_COUNT + index] = Math.max(-2, Math.min(2, value));
