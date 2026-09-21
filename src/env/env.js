@@ -554,6 +554,10 @@ export class WormEnv {
       this.totals[agent].stuckSteps =
         (this.totals[agent].stuckSteps ?? 0) + (moved.stuck ? 1 : 0);
       this.totals[agent].cellsVisited = moved.cellsVisited;
+      // Decisions spent hanging from an attached rope: the one Liero skill
+      // that nothing else on the page can see being learned or not.
+      this.totals[agent].ropeSteps =
+        (this.totals[agent].ropeSteps ?? 0) + (this.views[agent].self.rope?.attached ? 1 : 0);
     }
     const killed = this.events.some((events) => events.killed > 0);
 

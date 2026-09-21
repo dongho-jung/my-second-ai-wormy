@@ -128,6 +128,7 @@ test("a row of worlds writes into one buffer per kind", { skip }, async () => {
   );
   assert.equal(stats.steps, 50, "200 ticks at 4 ticks a step");
   assert.ok(Number.isFinite(stats.reward));
+  assert.ok(stats.ropeShare >= 0 && stats.ropeShare <= 1, "a share of the match");
   assert.ok(stats.seed > 0);
   assert.equal(vec.envs[0].done, false, "and is already playing the next one");
 });

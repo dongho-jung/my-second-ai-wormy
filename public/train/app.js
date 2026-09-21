@@ -32,6 +32,7 @@ const SERIES = {
   damageRatio: { label: "damage dealt per taken", good: "up" },
   stuckSteps: { label: "steps stuck", good: "down" },
   cellsVisited: { label: "ground covered", good: "up" },
+  ropeShare: { label: "share of the match hanging from the rope", good: "up" },
   entropy: { label: "entropy: how undecided it still is" },
   demoAgreement: { label: "agrees with recorded play", good: "up" },
   demoFrames: { label: "frames of recorded play", good: "up" },
@@ -692,7 +693,7 @@ const GROUPS = [
   },
   {
     title: "How the fights go",
-    of: ["damageDealt", "damageTaken", "selfDamage", "suicides", "damageRatio", "stuckSteps", "cellsVisited"],
+    of: ["damageDealt", "damageTaken", "selfDamage", "suicides", "damageRatio", "stuckSteps", "cellsVisited", "ropeShare"],
   },
   {
     title: "Is it still learning?",
