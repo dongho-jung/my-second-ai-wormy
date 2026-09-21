@@ -355,17 +355,27 @@ const HEADLINES = [
         ? `kills a match against worms that never move, dying ${own.toFixed(2)} times by its own hand`
         : "kills a match against worms that never move";
     },
-    state: (value) => (value >= 1 ? "good" : value < 0.2 ? "bad" : "flat"),
+    // Good only when it kills them more often than it kills itself: three
+    // kills a match against worms that cannot shoot back is not much of a
+    // result if it died four times getting them.
+    state: (value) => {
+      const own = latest("probeSuicides");
+      if (value >= 1 && (!Number.isFinite(own) || own <= value)) return "good";
+      return value < 0.2 ? "bad" : "flat";
+    },
     say: (move, value) => {
       if (!Number.isFinite(value)) {
         return "No probe yet. A run probes itself every --probe-every updates; the first lands after that many.";
       }
+      const own = latest("probeSuicides");
       const standing =
-        value >= 1
-          ? "It finds them and kills them."
-          : value < 0.2
-            ? "It cannot yet find a worm that does not move, or kills itself first."
-            : "The odd kill on a target that never moves.";
+        value >= 1 && Number.isFinite(own) && own > value
+          ? "It finds them and kills them, and kills itself more often than that."
+          : value >= 1
+            ? "It finds them and kills them."
+            : value < 0.2
+              ? "It cannot yet find a worm that does not move, or kills itself first."
+              : "The odd kill on a target that never moves.";
       if (!move) return `${standing} Not enough probes yet to say which way it is going.`;
       return move.change > CHANGED
         ? `${standing} Better than earlier in the run.`
