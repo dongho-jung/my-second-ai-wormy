@@ -129,6 +129,22 @@ def main(argv=None):
     config["levelFiles"] = [
         path for path in (config.get("levelFiles") or []) if Path(path).exists()
     ]
+    if not config["levelFiles"]:
+        # A checkpoint from another machine names maps by paths that are not
+        # here — a run from the cluster says /app/... — and with none of them
+        # the viewer would play on one generated dirt field. Fall back to the
+        # pool a fresh clone downloads, which is what the room plays.
+        pool_dir = REPO / "artifacts" / "maps" / "dsds-cs"
+        config["levelFiles"] = sorted(
+            str(path) for path in pool_dir.glob("*")
+            if path.suffix.lower() in (".lev", ".png") and path.is_file()
+        )[:64]
+        if config["levelFiles"]:
+            print(
+                f"the checkpoint's maps are not on this machine; playing the "
+                f"{len(config['levelFiles'])} in {pool_dir}",
+                flush=True,
+            )
 
     if args.seed is not None:
         config["seed"] = args.seed
