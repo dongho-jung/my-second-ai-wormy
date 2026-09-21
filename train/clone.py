@@ -26,7 +26,7 @@ from torch import nn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from policy import WormPolicy
+from policy import WormPolicy, policy_from_shape
 from run import DEFAULT_RUNS, Run
 from workers import REPO
 
@@ -157,22 +157,27 @@ def main(argv=None):
     # match an observation anyway, and `demos.load` has already skipped them.
     patch_shape = tuple((meta.get("patchShape") or [4, 121, 213])[1:])
 
-    policy = WormPolicy(
-        meta["vectorSize"],
-        head_sizes,
-        patch_shape=patch_shape,
-        weapon_ids_at=meta.get("weaponIdsAt"),
-        weapon_ids_count=meta.get("weaponIdsCount", 0),
-        weapon_count=meta.get("weaponCount", 0),
-        use_patch=meta["patchCells"] > 0,
-        use_map=meta["mapCells"] > 0,
-        map_side=32,
-    ).to(device)
     if args.resume:
+        # The checkpoint decides the network — its padding, its embedding —
+        # because its weights fit nothing else.
         carried = torch.load(args.resume, map_location="cpu", weights_only=False)
         if carried["layout"]["vectorSize"] != meta["vectorSize"]:
             raise RuntimeError("that checkpoint was trained on a different observation")
+        policy = policy_from_shape(carried["layout"]).to(device)
         policy.load_state_dict(carried["policy"])
+    else:
+        policy = WormPolicy(
+            meta["vectorSize"],
+            head_sizes,
+            patch_shape=patch_shape,
+            weapon_ids_at=meta.get("weaponIdsAt"),
+            weapon_ids_count=meta.get("weaponIdsCount", 0),
+            weapon_count=meta.get("weaponCount", 0),
+            use_patch=meta["patchCells"] > 0,
+            use_map=meta["mapCells"] > 0,
+            map_side=32,
+            conv_padding=True,
+        ).to(device)
     optimiser = torch.optim.Adam(policy.parameters(), lr=args.lr)
 
     order = np.random.permutation(total)
@@ -270,6 +275,11 @@ def main(argv=None):
                         "patchShape": list(patch_shape),
                         "useMap": meta["mapCells"] > 0,
                         "mapSide": 32,
+                        # What the loaders need to rebuild this exact network.
+                        "weaponIdsAt": policy.weapon_ids_at,
+                        "weaponIdsCount": policy.weapon_ids_count,
+                        "weaponCount": policy.weapon_count,
+                        "convPadding": policy.conv_padding,
                         "agents": meta.get("foeSlots", 2) + 1,
                         "frameskip": 4,
                         "episodeTicks": 3600,
