@@ -46,6 +46,7 @@ export function fixture() {
     Wa: 1 | 16,
     direction: 1,
     Oa: 0.25,
+    ub: 0.02,
     Ka: 0,
     O: [weapon],
     Fa: { Sc: false },

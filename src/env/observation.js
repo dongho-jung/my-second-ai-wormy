@@ -141,6 +141,11 @@ export function observationSpec({
     ["health", 1],
     ["velocity", 2], //       px per tick, already around 1
     ["aim", 2], //            cos and sin, so the wrap at PI is not a cliff
+    // How fast the aim is turning, radians per tick. The aim keys accelerate
+    // the angle rather than moving it a fixed step, so without this a policy
+    // sees where it is pointing and not where it is about to point, and
+    // overshoots what it cannot see coming.
+    ["aimVelocity", 1],
     ["facing", 1], //         -1 left, +1 right
     ["contacts", 4], //       the engine's own up/right/down/left probe counts
     ["stepping", 1], //       the engine is lifting the worm over a bump
@@ -296,6 +301,7 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
   into[at++] = self.velocity.y;
   into[at++] = Math.cos(self.aimRadians);
   into[at++] = Math.sin(self.aimRadians);
+  into[at++] = self.aimVelocity ?? 0;
   into[at++] = self.facing === "right" ? 1 : -1;
 
   contactsAt(terrain, x, y, contacts);

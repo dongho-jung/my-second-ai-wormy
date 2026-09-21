@@ -75,6 +75,7 @@ test("the vector puts every field where the layout says", () => {
   assert.equal(at("velocity", 1), 0.5);
   assert.equal(at("aim", 0), f32(Math.cos(-0.25)));
   assert.equal(at("aim", 1), f32(Math.sin(-0.25)));
+  assert.equal(at("aimVelocity"), f32(-0.02), "radians per tick, screen angle");
   assert.equal(at("facing"), 1, "+1 right");
 
   // The engine's own contact counts: three probes on the ground, none else.

@@ -23,6 +23,7 @@ test("state keeps coordinates, scores, ammo and null spectator worms, detached",
   assert.equal(self.worm.health, 67);
   assert.equal(self.worm.keys, 17, "the engine's own input bitmask");
   assert.equal(self.worm.aimRadians, -0.25);
+  assert.equal(self.worm.aimVelocity, -0.02, "turning in the same screen angle");
   assert.equal(self.worm.weapons[0].reloadTicksRemaining, 38);
   assert.deepEqual(self.score, { value: 3, display: "3", kills: 5, deaths: 2 });
   assert.equal(state.players[1].worm, null);
@@ -43,6 +44,7 @@ test("death, room exit and left-facing aim", () => {
   controller.Ub.X.B.get(12).ra.direction = 0;
   let state = snapshotV20.call(controller);
   assert.equal(state.players[0].worm.aimRadians, Math.PI + 0.25);
+  assert.equal(state.players[0].worm.aimVelocity, 0.02);
   controller.Ub.X.B.get(12).ra.u = false;
   state = snapshotV20.call(controller);
   assert.equal(state.players[0].worm, null);

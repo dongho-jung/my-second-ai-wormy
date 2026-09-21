@@ -269,6 +269,14 @@ export function snapshotV20({ terrain = false, terrainPatch = false } = {}) {
               worm.direction === 1
                 ? -number(worm.Oa)
                 : Math.PI + number(worm.Oa),
+            // How fast that angle is turning, per tick, in the same screen
+            // angle. Aiming accelerates in this engine (`Oa += ub` each tick),
+            // so where the aim will be next tick is not something the angle
+            // alone can say. A replicated worm may not carry it.
+            aimVelocity:
+              worm.direction === 1
+                ? -(Number.isFinite(worm.ub) ? worm.ub : 0)
+                : Number.isFinite(worm.ub) ? worm.ub : 0,
             selectedWeapon: worm.Ka,
             weapons: worm.O.map((weapon, slot) => ({
               slot,

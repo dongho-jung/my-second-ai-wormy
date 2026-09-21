@@ -86,6 +86,9 @@ function wormFromEngine(world, worm) {
     // Aim is stored as an angle off the facing direction; this is the same
     // screen-space angle the adapter reports, with y pointing down.
     aimRadians: worm.direction === 1 ? -worm.Oa : Math.PI + worm.Oa,
+    // And how fast it is turning, in the same screen angle: the engine adds
+    // `ub` to `Oa` every tick, and the aim keys accelerate it.
+    aimVelocity: worm.direction === 1 ? -worm.ub : worm.ub,
     facing: worm.direction === 1 ? "right" : "left",
     selectedWeapon: worm.Ka,
     weapons: worm.O.map((weapon, slot) => ({
