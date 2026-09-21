@@ -232,7 +232,9 @@ export async function joinTeam(page, preference = "any", { timeoutMs = 30_000 } 
  * holds a handful of people at a time.
  */
 export async function spectate(page, { timeoutMs = 8000 } = {}) {
-  if (await page.locator(SPECTATING).isVisible().catch(() => false)) return true;
+  // No shortcut on the spectating panel: it is in the page either way, so
+  // asking it whether we are already watching always said yes and this did
+  // nothing at all.
   await clickThrough(page.locator('.game-view [data-hook="menu"]'));
   const menu = page.locator(".dropmenu-view");
   await menu.first().waitFor({ state: "visible", timeout: timeoutMs });
@@ -243,7 +245,7 @@ export async function spectate(page, { timeoutMs = 8000 } = {}) {
     return false;
   }
   await clickThrough(entry.first());
-  await page.waitForSelector(SPECTATING, { timeout: timeoutMs }).catch(() => {});
+  await page.waitForTimeout(500);
   return true;
 }
 

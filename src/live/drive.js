@@ -130,15 +130,21 @@ function handleDialogs(page) {
 // that ends leaves its players seated, and WebLiero asks for a CAPTCHA to make
 // a room — so opening three more tabs beside them would cost a seat each and a
 // CAPTCHA, for nothing.
-const watcherTab = async (page) =>
-  Boolean(await page.evaluate(() => window.__wormyWatcher === true).catch(() => false));
+/**
+ * Tabs this driver has driven before, and only those.
+ *
+ * Taking over "any tab already in a room" was written when the room was ours
+ * and every tab in it was one we opened. This room is somebody else's and the
+ * person who owns this browser plays in it — and a tab of theirs duly got
+ * taken over, so their worm started walking around on its own while ours stood
+ * still. A tab is fair game only if it was marked by a driver.
+ */
+const drivenTab = async (page) =>
+  Boolean(await page.evaluate(() => window.__wormyDriver === true).catch(() => false));
 const inRoomPages = (await findGamePages(browser)).filter((found) => found.inGame);
 const existing = [];
 for (const found of inRoomPages) {
-  // The recorder sits in this room too, in the spectator seat. Taking its tab
-  // would put the watcher in the game and leave nobody watching.
-  if (await watcherTab(found.page)) continue;
-  existing.push(found);
+  if (await drivenTab(found.page)) existing.push(found);
 }
 const reused = config.fresh ? [] : existing.slice(0, players);
 if (reused.length) say(`taking over ${reused.length} tab(s) already in a room`);
@@ -158,7 +164,21 @@ for (let index = 0; index < players; index++) {
       () => {},
     );
   }
-  seats.push({ index, page, nickname, controls: null, observer: null, terrain: null, terrainAt: 0 });
+  // Claim the tab, so a later run knows this one is ours and every other one
+  // belongs to somebody who is playing.
+  await page.evaluate(() => {
+    window.__wormyDriver = true;
+  }).catch(() => {});
+  seats.push({
+    index,
+    page,
+    nickname,
+    playerId: null,
+    controls: null,
+    observer: null,
+    terrain: null,
+    terrainAt: 0,
+  });
 }
 const seated = reused.length >= players;
 
@@ -278,6 +298,9 @@ async function publishDriven(playing) {
 async function look(seat, now) {
   const read = await seat.observer.read().catch(() => null);
   if (seat.index === 0 && read?.game) room = read.game;
+  // Which player this tab is, by the id the game gave it. Names are not ours
+  // alone: somebody in this room is playing under the watcher's name right now.
+  if (read?.game?.localPlayerId != null) seat.playerId = read.game.localPlayerId;
   if (!read?.game || !spawned(read)) return null;
   if (!seat.terrain || now - seat.terrainAt > mapMs) {
     const map = await seat.observer.read({ terrain: true }).catch(() => null);
@@ -456,16 +479,22 @@ const SEATING_PAUSE_MS = 20_000;
 
 /** How many people the room should hold before the worms give their seats up. */
 const yieldTo = Number(config.yieldTo ?? 0);
-/** Names to treat as not-people: the watcher sitting in the spectator seat. */
-const watching = new Set(config.watching ?? []);
-
-/** How many people are actually playing, not counting anything we drive. */
+/**
+ * How many people are actually playing, not counting anything we drive.
+ *
+ * By what they are doing, not by what they are called. Spectators are already
+ * out — they are on no team and have no worm — so there is nothing to exclude
+ * by name, and excluding one meant that the person watching, who then sat down
+ * and played under the same name, counted as nobody and the seat was never
+ * given up. Only our own worms are known by name here, and only because we
+ * named them ourselves a moment ago.
+ */
 function playersPresent() {
   const ours = new Set(seats.map((seat) => seat.nickname));
+  const mine = new Set(seats.map((seat) => seat.playerId).filter((id) => id != null));
   let count = 0;
   for (const player of room?.players ?? []) {
-    if (ours.has(player.name)) continue;
-    if (watching.has(player.name)) continue;
+    if (mine.size ? mine.has(player.id) : ours.has(player.name)) continue;
     // On a team at all, whether or not their worm is alive this second.
     if (player.team > 0 || player.alive) count++;
   }
@@ -491,21 +520,24 @@ async function takeSeats() {
   if (Date.now() - seatedAt < SEATING_PAUSE_MS) return;
   const people = playersPresent();
   const wanted = Math.max(0, Math.min(seats.length, yieldTo - people));
-  const seated = [];
-  for (const seat of seats) {
-    const spectating = await seat.page
-      .locator(SPECTATING)
-      .isVisible()
-      .catch(() => false);
-    if (!spectating) seated.push(seat);
-  }
+  // Seated according to the game, not according to whether a panel is on
+  // screen: that panel is in the page whether or not anybody is spectating,
+  // so reading it had the worms convinced they had already stood up.
+  const teams = new Map((room.players ?? []).map((player) => [player.id, player.team]));
+  const seated = seats.filter(
+    (seat) => seat.playerId != null && (teams.get(seat.playerId) ?? 0) > 0,
+  );
   if (seated.length === wanted) return;
   seating = true;
   try {
     if (seated.length > wanted) {
       for (const seat of seated.slice(wanted)) {
         await seat.controls?.release().catch(() => {});
-        await spectate(seat.page).catch(() => {});
+        const left = await spectate(seat.page).catch((error) => {
+          log.warn("spectate_failed", { seat: seat.index, message: error.message });
+          return false;
+        });
+        if (!left) log.warn("still_seated", { seat: seat.index, nickname: seat.nickname });
       }
     } else {
       for (const seat of seats.filter((s) => !seated.includes(s)).slice(0, wanted - seated.length)) {
@@ -527,6 +559,16 @@ async function takeSeats() {
 // Said before the first frame, not only when the seating changes: the recorder
 // needs the names from the moment there is anything to record.
 await publishDriven(seats.length);
+// On a timer, not only when the seating changes. The recorder ignores this
+// file once it is a minute old — a stale one must not go on hiding a person
+// who shares the name — and a driver that simply keeps playing never changed
+// the seating, so the file went stale underneath it and its own worms started
+// being filed as somebody's play.
+const sayingWhoWeAre = setInterval(
+  () => void publishDriven(seats.length).catch(() => {}),
+  10_000,
+);
+sayingWhoWeAre.unref?.();
 
 playing = true;
 await sample();

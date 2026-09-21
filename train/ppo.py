@@ -51,6 +51,11 @@ def parse_args(argv=None):
                        help="the game's own level pool, as `npm run levels` downloads it")
     world.add_argument("--stock-levels", type=int, default=64,
                        help="how many of them to use; 0 trains on generated maps alone")
+    world.add_argument("--drill", action="store_true",
+                       help="give every worm five of one weapon, a different one each episode. "
+                            "A worm handed five unfamiliar weapons in a fight learns nothing "
+                            "about any of them; one for a whole episode is long enough to find "
+                            "out what it does")
     world.add_argument("--weapons", default="room", choices=["starter", "room", "direct", "all"],
                        help="which weapons a worm can spawn holding. `starter` is a hand-picked 45 for "
                             "learning to aim before learning what a rocket does to whoever "
@@ -229,6 +234,7 @@ def main(argv=None):
         levelFiles=stock_levels(args),
         levelOptions={"width": args.map_width},
         weaponPool=args.weapons,
+        loadout="drill" if args.drill else "random",
         banStart=[name.strip() for name in args.ban_start.split(",") if name.strip()],
         # Read off the room this project watches, rather than assumed: it drops
         # weapon crates only, eight seconds apart, and makes a swapped-to weapon

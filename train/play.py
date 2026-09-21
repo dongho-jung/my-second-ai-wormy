@@ -56,9 +56,6 @@ def parse_args(argv=None):
     parser.add_argument("--yield-to", type=int, default=0,
                         help="give the seats up once this many people are playing. 0 never "
                              "yields; 2 keeps a quiet room company and leaves a busy one alone")
-    parser.add_argument("--watching", default="",
-                        help="names that are not people, e.g. the recorder sitting in the "
-                             "spectator seat, comma separated")
     parser.add_argument("--names", default="BOT FOO,BOT BAR,BOT BAZ",
                         help="one name per driven worm, in order")
     parser.add_argument("--colours", default="220,60,50 70,200,90 70,120,230",
@@ -167,7 +164,6 @@ def main(argv=None):
         "yieldTo": args.yield_to,
         "greeting": args.greeting,
         "farewell": args.farewell,
-        "watching": [name.strip() for name in args.watching.split(",") if name.strip()],
         "colours": [
             [int(channel) for channel in triple.split(",")]
             for triple in args.colours.split()

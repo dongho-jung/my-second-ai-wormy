@@ -61,6 +61,18 @@ export const DEFAULT_WEIGHTS = {
   // cannot aim never fires well enough to discover that aiming was the point.
   // This is the ladder up to that discovery, and it is deliberately small: the
   // reward for hitting somebody has to stay the reason to do it.
+  // Per pixel closed on the nearest foe, and charged the same for backing off.
+  // Over a whole episode this adds up to the distance between where a fight
+  // started and where it ended, whatever route was taken — so there is no way
+  // to earn it by pacing, and standing still earns nothing at all. It is the
+  // first rung: a policy that cannot find anybody cannot learn to shoot them.
+  approach: 0.001,
+  // Back on. It was switched off on a measurement that turned out to be the
+  // measurement's fault: the shot's *velocity* carries gravity, spread and in
+  // most weapons the worm's own movement, and reading it said the aim was 180
+  // degrees out. Read as the distance a shot actually travels in one tick, from
+  // a worm standing still, with a weapon that has no spread and inherits no
+  // speed, the view's angle matches where the shot goes to the degree.
   onTarget: 0.004,
   // And firing while lined up, which is the behaviour actually wanted. Worth
   // more than the aim alone, and it cannot be earned by standing and staring.
@@ -129,6 +141,7 @@ export function combatReward(events, progress, weights = DEFAULT_WEIGHTS) {
     fromExplore: (progress.novel / (progress.cells ?? 1)) * weights.exploreMap,
     fromRevisit: -(progress.revisit / (progress.cells ?? 1)) * weights.revisitMap,
     fromStuck: progress.stuck ? -weights.stuck : 0,
+    fromApproach: (progress.approach ?? 0) * weights.approach,
     fromOnTarget: (progress.onTarget ?? 0) * weights.onTarget,
     fromAimedShot: (progress.aimedShot ?? 0) * weights.aimedShot,
     fromGoal:

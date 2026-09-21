@@ -155,6 +155,27 @@ if (!pages.length) {
   );
   process.exit(1);
 }
+// Whatever tab this ends up on, reused or opened here: the game raises dialogs
+// on its own — leaving a room asks first — and Playwright races its own default
+// handling of them, which took the watcher down mid-session. A tab that was
+// reused never got a handler at all.
+for (const page of pages) {
+  page.on("dialog", (dialog) => void dialog.accept().catch(() => {}));
+}
+
+// Any in-room tab can see the whole room, so prefer one the policy driver is
+// not using: reading from the driver's tab would mark it as the watcher's and
+// have the driver skip its own seat on the next restart.
+pages.sort(async () => 0);
+const mine = [];
+for (const page of pages) {
+  const driven = await page
+    .evaluate(() => window.__wormyDriver === true)
+    .catch(() => false);
+  if (!driven) mine.push(page);
+}
+if (mine.length) pages.splice(0, pages.length, ...mine);
+
 // One tab is enough: it can see everybody.
 // Marked, so the policy driver does not take this tab over and turn the watcher
 // into a player — which is exactly what it did, and the recording then filled

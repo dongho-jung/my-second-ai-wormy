@@ -30,6 +30,8 @@ import { reach } from "./terrain.js";
 /** How far a worm is paid for aiming at somebody, and how wide the cone is. */
 const AIM_RANGE_PX = 450;
 const AIM_CONE = Math.PI / 8;
+/** A step bigger than this was a respawn, not a walk. */
+const APPROACH_LIMIT_PX = 60;
 
 // Stock Liero weapons that give a worm something to do at every range: shotgun,
 // rifle, bazooka, mine, crackler. Pass "random" instead to draw five per worm
@@ -288,23 +290,65 @@ export class WormEnv {
   #aimAt(agent) {
     const view = this.views[agent];
     const self = view?.self;
-    if (!self?.alive) return { onTarget: 0, aimedShot: 0 };
+    const was = this.foeRange[agent];
+    this.foeRange[agent] = null;
+    const nothing = { onTarget: 0, aimedShot: 0, approach: 0 };
+    if (!self?.alive) return nothing;
     const foe = nearestFoe(view);
-    if (!foe) return { onTarget: 0, aimedShot: 0 };
+    if (!foe) return nothing;
     const dx = foe.position.x - self.position.x;
     const dy = foe.position.y - self.position.y;
     const range = Math.hypot(dx, dy);
-    if (range < 1 || range > AIM_RANGE_PX) return { onTarget: 0, aimedShot: 0 };
+    this.foeRange[agent] = { id: foe.id, range };
+    // Ground closed on the nearest foe since the last decision. Signed, so
+    // backing away costs exactly what closing in pays and a worm cannot farm it
+    // by pacing in and out. Only against the same foe, and only over a step
+    // small enough to have been walked: a respawn moves a worm across the map.
+    const approach =
+      was && was.id === foe.id && Math.abs(was.range - range) < APPROACH_LIMIT_PX
+        ? was.range - range
+        : 0;
+    if (range < 1 || range > AIM_RANGE_PX) return { ...nothing, approach };
     // How far off the aim is, as an angle, wrapped to [-PI, PI].
     let off = Math.atan2(dy, dx) - self.aimRadians;
     off = Math.atan2(Math.sin(off), Math.cos(off));
-    if (Math.abs(off) > AIM_CONE) return { onTarget: 0, aimedShot: 0 };
+    if (Math.abs(off) > AIM_CONE) return { ...nothing, approach };
     const blocked = reach(view.terrain, self.position.x, self.position.y, dx / range, dy / range, Math.round(range));
-    if (blocked !== null) return { onTarget: 0, aimedShot: 0 };
+    if (blocked !== null) return { ...nothing, approach };
     // Closer to the middle of the cone is worth more, so there is a gradient to
     // climb rather than a cliff to find.
     const onTarget = 1 - Math.abs(off) / AIM_CONE;
-    return { onTarget, aimedShot: this.firing[agent] ? onTarget : 0 };
+    return { onTarget, aimedShot: this.firing[agent] ? onTarget : 0, approach };
+  }
+
+  /**
+   * Five of one weapon, a different one each episode.
+   *
+   * A worm handed five weapons it has never used, in a fight, learns nothing
+   * about any of them: whatever it was holding when something good happened
+   * gets the credit. One weapon for a whole episode is long enough to find out
+   * what that weapon does — how far it carries, how much it drops, what it does
+   * to whoever fired it — before any of that has to be chosen between.
+   */
+  #drillLoadout() {
+    // The same weapon for everybody, so the whole episode is about that one
+    // weapon: both sides learn what it does and what it does back.
+    return [0, 0, 0, 0, 0].map(() => this.drillWeapon);
+  }
+
+  /** Pick the episode's weapon, once, before anybody is given a loadout. */
+  #chooseDrillWeapon() {
+    const pool = this.weaponPool ?? this.engine.settings.O.map((_, id) => id);
+    this.drillWeapon = pool[Math.floor(this.rng() * pool.length)];
+  }
+
+  /** The five weapons one worm starts an episode holding. */
+  #loadoutFor(agent) {
+    if (this.loadout === "drill") return this.#drillLoadout();
+    if (this.loadout === "random") {
+      return this.engine.randomLoadout(this.rng, { pool: this.weaponPool });
+    }
+    return Array.isArray(this.loadout[0]) ? this.loadout[agent] : this.loadout;
   }
 
   reset({ seed } = {}) {
@@ -322,12 +366,9 @@ export class WormEnv {
     // A new level is a new map; nothing cached about the last one holds.
     this.mapAt = -1;
 
+    if (this.loadout === "drill") this.#chooseDrillWeapon();
     this.loadouts = Array.from({ length: this.agents }, (_, agent) =>
-      this.loadout === "random"
-        ? this.engine.randomLoadout(this.rng, { pool: this.weaponPool })
-        : Array.isArray(this.loadout[0])
-          ? this.loadout[agent]
-          : this.loadout,
+      this.#loadoutFor(agent),
     );
     this.worms = this.loadouts.map((loadout, agent) =>
       this.engine.spawnWorm(this.world, {
@@ -353,6 +394,7 @@ export class WormEnv {
     });
     this.alive = this.worms.map((worm) => Boolean(worm.u));
     this.firing = this.worms.map(() => false);
+    this.foeRange = this.worms.map(() => null);
     this.totals = this.worms.map(() => ({}));
     this.episodeStartTick = this.world.qb;
     this.done = false;
