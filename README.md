@@ -165,6 +165,12 @@ the point. Pointing at somebody you could actually hit pays per decision, and
 firing while lined up pays more. These are the ladder, not the destination, and
 they do not anneal on their own.
 
+A death nobody else caused — its own rocket, a fall — is counted apart, and
+`--suicide-cost` can charge for it on top of the death. It is off by default:
+a kill pays 4 and a death costs 2, so a worm that blows itself up on the way to
+one kill still comes out ahead, and whether charging for that makes a better
+player or a shyer one is for `npm run evaluate` to say.
+
 The weights are `DEFAULT_WEIGHTS` in `src/env/reward.js`, and the reasoning
 behind each one — including the run that learned to stand still — is in the
 comments beside them. `docs/network.html` draws the whole policy in Korean.
