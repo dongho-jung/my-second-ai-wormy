@@ -172,17 +172,29 @@ comments beside them. `docs/network.html` draws the whole policy in Korean.
 ## Training
 
 ```bash
-npm run train -- --agents 3 --total-steps 8000000
+npm run train -- --agents 6 --opponents 0.34 --total-steps 20000000
 npm run train -- --help
 ```
 
+- **Six worms a match is the better bet, measured.** Against three, at the same
+  number of worms in flight, it costs about five per cent of the throughput and
+  pays back **more than three times the kills and four times the damage**: a
+  three-way free-for-all spends most of its early life with nothing happening,
+  and the reward is made of things happening. The buffers are
+  `steps × workers × envs × worms`, so doubling the worms means halving `--envs`
+  to stay in the same memory. `compose.yaml` and `deploy/train-job.yaml` both
+  run six; the code's own default is still three.
 - **Every worm shares one policy**, unless `--opponents` says otherwise. In a
   free-for-all that is self-play by construction: whatever one of them learns
   it immediately has to face, and there is no opponent to hand-write. It is also
   why the average reward going up is not the same as getting better — all three
   getting more reckless together looks identical. `--opponents 0.34` hands one
-  worm in three to an older copy of the policy and learns from nothing it does,
-  so the number it is scored against stays still while the policy moves.
+  worm in three to an older copy of the policy — two of six — and learns from
+  nothing they do, so the number it is scored against stays still while the
+  policy moves. Each opponent seat gets its own generation, so a match with two
+  of them is two different past selves rather than one standing in two places.
+  The training page's first headline, **is it beating its past self**, is that
+  difference; without opponents it has nothing to compare and says so.
 - **The ladder can be taken away.** Aiming, closing in and covering ground pay
   because nothing else would get a policy started, and each is also a way to
   score without playing well. `--shaping-decay 0.6` fades them over the first

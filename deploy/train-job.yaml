@@ -46,8 +46,25 @@ spec:
           args:
             - node
             - scripts/train.js
+            # Six worms a match. At a fixed worm count it costs about five per
+            # cent of the throughput against three, and pays back more than
+            # three times the kills and four times the damage — a three-way
+            # free-for-all is mostly nothing happening, and the reward is made
+            # of things happening.
+            - --agents=6
             - --workers=8
-            - --envs=12
+            # Halved against the three-way numbers, because the buffers are
+            # steps x workers x envs x worms and the worms just doubled. This
+            # is the same 288 and the same ~1.1GB as before.
+            - --envs=6
+            # Two of the six are older copies of this policy, each a different
+            # generation. Nothing is learned from what they do; they are there
+            # so that "better" has something to be better than.
+            - --opponents=0.34
+            # The aim, approach and exploration rewards fade over the first
+            # three fifths, leaving the rest of the run on damage, kills and
+            # deaths — what the game is actually scored on.
+            - --shaping-decay=0.6
             - --total-steps=20000000
             - --device=cpu
             - --label=k8s

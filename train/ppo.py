@@ -469,9 +469,15 @@ def main(argv=None):
     # match is always the one being trained and a match is never all opponents.
     per_match = layout.agents
     is_opponent = torch.zeros(slots, dtype=torch.bool, device=device)
+    # One block of lane indices per opponent seat, so each seat can be played by
+    # a different generation.
+    opponent_seats = []
     if frozen_per_match > 0:
         for seat in range(per_match - frozen_per_match, per_match):
             is_opponent[seat::per_match] = True
+            opponent_seats.append(
+                torch.arange(seat, slots, per_match, device=device)
+            )
     learners = (~is_opponent).nonzero(as_tuple=True)[0]
     opponents = is_opponent.nonzero(as_tuple=True)[0]
     if frozen_per_match:
@@ -579,25 +585,39 @@ def main(argv=None):
             f"at weight {demo_weight():.4f} of {args.bc_coef}",
             flush=True,
         )
-    # Copies of what this policy used to be, and one spare network to play them
-    # back through. A state dict is 1.6M floats — six of them is under 40MB, so
-    # they are kept in memory rather than reloaded off disk every rollout.
-    frozen = None
+    # Copies of what this policy used to be, and a network per opponent seat to
+    # play them back through. A state dict is 1.6M floats — six of them is under
+    # 40MB, so they are kept in memory rather than read off disk every rollout.
+    #
+    # One network per seat rather than one for all of them, because a match with
+    # three opponents in it should be three different opponents. A field of
+    # identical copies is one opponent standing in three places, and beating it
+    # says less than beating a spread of what this policy used to be.
+    frozen = []
     past = []
     if frozen_per_match:
-        frozen = copy.deepcopy(policy).to(device)
-        for parameter in frozen.parameters():
-            parameter.requires_grad_(False)
-        frozen.eval()
+        for _ in range(frozen_per_match):
+            copy_of = copy.deepcopy(policy).to(device)
+            for parameter in copy_of.parameters():
+                parameter.requires_grad_(False)
+            copy_of.eval()
+            frozen.append(copy_of)
         # Seeded with the policy as it starts out. An opponent that presses keys
         # at random is a low bar, but it is a fixed one, which is the point.
         past.append({k: v.detach().cpu().clone() for k, v in policy.state_dict().items()})
 
-    def draw_opponent():
-        """One of the past selves, for this rollout."""
+    def draw_opponents():
+        """A generation for each opponent seat, different ones where there are
+        enough to go round."""
         if not past:
             return
-        frozen.load_state_dict(past[random.randrange(len(past))])
+        spread = (
+            random.sample(past, len(frozen))
+            if len(past) >= len(frozen)
+            else [random.choice(past) for _ in frozen]
+        )
+        for network, weights in zip(frozen, spread):
+            network.load_state_dict(weights)
 
     started = time.perf_counter()
     # Every worm's observations still flatten together: they feed the running
@@ -618,7 +638,7 @@ def main(argv=None):
             # the bonus is a fixed size while the advantages are normalised, so
             # a coefficient that does not come down eventually outweighs
             # whatever the policy has learned and holds it at random.
-            draw_opponent()
+            draw_opponents()
             bc_weight = demo_weight()
             progress = min(1.0, max(0.0, (total_steps - resumed_at) / max(1, args.total_steps)))
             entropy_coef = args.entropy + (args.entropy_final - args.entropy) * progress
@@ -639,21 +659,21 @@ def main(argv=None):
                         next_v, next_p, next_m, want_entropy=False,
                         carried=before, restart=restart,
                     )
-                    if frozen is not None:
+                    for network, seat in zip(frozen, opponent_seats):
                         # The same observation, through an older set of weights
                         # and an older memory. Its log-prob and value are the
                         # learner's and are wrong for these seats, which is why
                         # nothing is learned from them.
-                        theirs, _, _, _, remembered = frozen.act(
-                            next_v[opponents],
-                            next_p[opponents] if use_patch else None,
-                            next_m[opponents] if use_map else None,
+                        theirs, _, _, _, remembered = network.act(
+                            next_v[seat],
+                            next_p[seat] if use_patch else None,
+                            next_m[seat] if use_map else None,
                             want_entropy=False,
-                            carried=before[opponents],
-                            restart=restart[opponents],
+                            carried=before[seat],
+                            restart=restart[seat],
                         )
-                        head[opponents] = theirs
-                        memory[opponents] = remembered
+                        head[seat] = theirs
+                        memory[seat] = remembered
                 acts[step] = head
                 logps[step] = logp
                 vals[step] = value
@@ -716,7 +736,7 @@ def main(argv=None):
                 # The steps whose action was never applied — and, if some worms
                 # are older copies, everything they did as well.
                 valid = (dones != DONE_LAST).to(rews.dtype)
-                if frozen is not None:
+                if frozen:
                     valid = valid * (~is_opponent).to(rews.dtype)
 
             flat_v = obs_v.reshape(batch, -1)
@@ -860,7 +880,7 @@ def main(argv=None):
                         passes += 1
 
             updates += 1
-            if frozen is not None and updates % args.pool_every == 0:
+            if frozen and updates % args.pool_every == 0:
                 past.append({k: v.detach().cpu().clone() for k, v in policy.state_dict().items()})
                 # Oldest out first, so the pool is a window on the recent past
                 # rather than a museum of the first few minutes.

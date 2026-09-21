@@ -26,9 +26,21 @@ services:
     # Small enough to run beside whatever else this machine is doing, and
     # saving often enough that the Watch button has something to play within a
     # minute or so. The cluster numbers are in deploy/train-job.yaml.
+    #
+    # Six worms a match, not three. Measured at the same worm count either way,
+    # it costs about five per cent of the throughput and pays back more than
+    # three times the kills and four times the damage: a three-way free-for-all
+    # spends most of its early life with nothing happening, and the reward is
+    # made of things happening.
+    #
+    # Two of the six are older copies of the policy (--opponents 0.34 of six
+    # rounds to two), which is what makes "is it beating its past self" on the
+    # training page a number rather than a blank.
     command: >
       node scripts/train.js
-      --workers 2 --envs 4
+      --agents 6
+      --workers 2 --envs 2
+      --opponents 0.34
       --total-steps 2000000
       --save-every 5
       --label local
