@@ -522,6 +522,10 @@ def main(argv=None):
     DONE_ONGOING = float(layout.done_codes["ongoing"])
     DONE_FIRST = float(layout.done_codes["first"])
     DONE_LAST = float(layout.done_codes["last"])
+    # The staggered first episode of a world ends `cut`: valued like `last`
+    # (the match was still going) and, like `last`, the action sampled there
+    # is never applied, so it is held out of the update the same way.
+    DONE_CUT = float(layout.done_codes.get("cut", -1))
     obs_v = torch.zeros(args.steps, slots, layout.vector_size, device=device)
     obs_p = (
         torch.zeros(args.steps, slots, layout.patch_cells, dtype=torch.uint8, device=device)
@@ -768,7 +772,7 @@ def main(argv=None):
                 returns = advantages + vals
                 # The steps whose action was never applied — and, if some worms
                 # are older copies, everything they did as well.
-                valid = (dones != DONE_LAST).to(rews.dtype)
+                valid = ((dones != DONE_LAST) & (dones != DONE_CUT)).to(rews.dtype)
                 if frozen:
                     valid = valid * (~is_opponent).to(rews.dtype)
 
