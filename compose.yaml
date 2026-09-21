@@ -1,0 +1,47 @@
+# The whole thing on this machine, for looking at before it goes anywhere.
+#
+#     docker compose up
+#
+# Then http://localhost:8768 — the training page, following the run as it goes,
+# with a Watch button that opens the match being played on 8769.
+#
+# Two containers rather than one, because that is what a cluster runs: the
+# trainer writes to a volume and the pages read it, and neither needs to know
+# the other exists. Nothing is configured — no WORMY_PUBLIC_ORIGIN, no
+# WORMY_BASE_PATH — because unset is the local case: the pages serve at the
+# root and answer to localhost.
+#
+#     docker compose down -v     # and the runs with it
+name: wormy
+
+x-wormy: &wormy
+  build: .
+  image: wormy-local
+  volumes:
+    - runs:/app/artifacts/runs
+
+services:
+  train:
+    <<: *wormy
+    # Small enough to run beside whatever else this machine is doing, and
+    # saving often enough that the Watch button has something to play within a
+    # minute or so. The cluster numbers are in deploy/train-job.yaml.
+    command: >
+      node scripts/train.js
+      --workers 2 --envs 4
+      --total-steps 2000000
+      --save-every 5
+      --label local
+
+  pages:
+    <<: *wormy
+    command: node scripts/monitor.js
+    ports:
+      # Left side is what the browser uses. Keep 8769 as 8769: the Watch button
+      # follows the address the viewer says it is reachable at, and inside the
+      # container that is 8769.
+      - "8768:8768"
+      - "8769:8769"
+
+volumes:
+  runs:

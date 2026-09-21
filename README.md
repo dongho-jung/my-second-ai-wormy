@@ -254,46 +254,18 @@ can do it for you.
 
 ### Trying it locally first
 
-The defaults are the local case, so nothing has to be set:
-
 ```bash
-docker build -t wormy .
-
-# A short run, to see that it trains at all.
-docker run --rm wormy node scripts/train.js --total-steps 20000 \
-  --workers 2 --envs 4 --episode-ticks 1200
-
-# The training page and the viewer, on a volume the two of them share.
-docker volume create wormy-runs
-docker run -d --name wormy-train -v wormy-runs:/app/artifacts/runs wormy \
-  node scripts/train.js --workers 2 --envs 4 --total-steps 2000000
-docker run -d --name wormy-pages -v wormy-runs:/app/artifacts/runs \
-  -p 8768:8768 -p 8769:8769 wormy node scripts/monitor.js
+docker compose up
 ```
 
-Then <http://localhost:8768> — or `127.0.0.1`, or any port you published the
-page on — and the **Watch** button opens the match it is playing. The link that
-button follows is the address the viewer says it is reachable at, so publish
-the viewer as `8769:8769` locally; remap it and the page still works but the
-button points at a port nothing is on. No
-`WORMY_PUBLIC_ORIGIN` and no `WORMY_BASE_PATH`: unset, the pages serve at the
-root and answer to loopback under any name and any port, which is exactly what
-they did before any of this.
+Then <http://localhost:8768>: the training page, following the run as it goes,
+with a **Watch** button that opens the match being played on 8769. It builds
+the image the first time and keeps the runs in a volume; `docker compose down
+-v` takes both away.
 
-To rehearse the deployment instead, set them to whatever the ingress will be
-and send the `Host` header by hand:
-
-```bash
-docker run --rm -p 8768:8768 \
-  -e WORMY_PUBLIC_ORIGIN=https://dashboard.example.com \
-  -e WORMY_BASE_PATH=/ai-worm \
-  wormy node scripts/monitor.js
-
-curl -H 'Host: dashboard.example.com' http://127.0.0.1:8768/ai-worm/
-```
-
-A browser cannot send that header, so for clicking around use a hosts-file
-entry pointing the name at `127.0.0.1`, or just leave both unset.
+Nothing is configured, because unset is the local case — the pages serve at the
+root and answer to localhost. The first checkpoint takes a minute, and the
+Watch button says so until there is one.
 
 ### The two pages, from somewhere that is not this machine
 

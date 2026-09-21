@@ -82,7 +82,16 @@ def main(argv=None):
     else:
         path = newest_checkpoint(runs)
     if not path.exists():
-        raise FileNotFoundError(f"no checkpoint at {path}")
+        # Not a failure so much as being early: a run writes its first
+        # checkpoint after --save-every updates, and there is nothing to watch
+        # until then. The monitor puts the last of stderr on the page, so this
+        # says what to do rather than where it stopped.
+        print(
+            f"no checkpoint in {path.parent.name} yet — a run saves its first one "
+            "after --save-every updates. Try again in a minute.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
     shape = checkpoint["layout"]
