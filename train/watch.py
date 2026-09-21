@@ -23,7 +23,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from policy import WormPolicy
+from policy import policy_from_shape
 from run import DEFAULT_RUNS
 from workers import REPO, _read_frame
 
@@ -99,17 +99,7 @@ def main(argv=None):
     agents = args.agents or trained_agents
     device = torch.device(args.device)
 
-    policy = WormPolicy(
-        shape["vectorSize"],
-        shape["headSizes"],
-        patch_shape=tuple(shape.get("patchShape") or (121, 213)),
-        weapon_ids_at=shape.get("weaponIdsAt"),
-        weapon_ids_count=shape.get("weaponIdsCount", 0),
-        weapon_count=shape.get("weaponCount", 0),
-        use_patch=shape.get("usePatch", True),
-        use_map=shape.get("useMap", False),
-        map_side=shape.get("mapSide", 32),
-    ).to(device)
+    policy = policy_from_shape(shape).to(device)
     policy.load_state_dict(checkpoint["policy"])
     policy.eval()
 

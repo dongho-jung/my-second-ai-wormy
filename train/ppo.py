@@ -356,6 +356,12 @@ def main(argv=None):
     use_map = not args.no_map and layout.map_cells > 0
     patch_shape = tuple(layout.patch_shape[1:]) if layout.patch_shape else (121, 213)
     map_side = layout.map_shape[1] if layout.map_shape else 32
+    # A resumed checkpoint decides how the convolution is padded, because its
+    # weights only fit the network it was trained as. A fresh run is padded.
+    conv_padding = True
+    if args.resume:
+        resumed_shape = torch.load(args.resume, map_location="cpu", weights_only=False)["layout"]
+        conv_padding = bool(resumed_shape.get("convPadding", False))
 
     policy = WormPolicy(
         layout.vector_size,
@@ -367,6 +373,7 @@ def main(argv=None):
         weapon_ids_at=layout.weapon_ids_at,
         weapon_ids_count=layout.weapon_ids_count,
         weapon_count=layout.weapon_count,
+        conv_padding=conv_padding,
     ).to(device)
     # What a checkpoint has to carry for a viewer or a resume to rebuild it.
     shape_of = {
@@ -390,6 +397,7 @@ def main(argv=None):
         "weaponCount": layout.weapon_count,
         "useMap": use_map,
         "mapSide": map_side,
+        "convPadding": conv_padding,
     }
     # Seven independent choices, so the most undecided a policy can be is the
     # sum of each head's own maximum, not one action space's worth.

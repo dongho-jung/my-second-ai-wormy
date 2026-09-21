@@ -64,6 +64,28 @@ def expand_patch(patch: torch.Tensor, shape) -> torch.Tensor:
     return torch.cat((planes, marks), dim=1).view(batch, PATCH_CHANNELS, rows, columns)
 
 
+def policy_from_shape(shape: dict) -> "WormPolicy":
+    """The network a checkpoint's `layout` describes, before its weights.
+
+    Every script that loads a checkpoint used to spell this constructor out
+    for itself, and each new option had to be threaded through all of them or
+    one of them would quietly build a different network. Defaults are what a
+    checkpoint from before the option existed was trained with.
+    """
+    return WormPolicy(
+        shape["vectorSize"],
+        shape["headSizes"],
+        patch_shape=tuple(shape.get("patchShape") or (121, 213)),
+        use_patch=shape.get("usePatch", True),
+        use_map=shape.get("useMap", False),
+        map_side=shape.get("mapSide", 32),
+        weapon_ids_at=shape.get("weaponIdsAt"),
+        weapon_ids_count=shape.get("weaponIdsCount", 0),
+        weapon_count=shape.get("weaponCount", 0),
+        conv_padding=shape.get("convPadding", False),
+    )
+
+
 class RunningNorm(nn.Module):
     """Mean and variance of the vector so far, kept as buffers so they are saved.
 
@@ -109,11 +131,13 @@ class WormPolicy(nn.Module):
         weapon_ids_count: int = 0,
         weapon_count: int = 0,
         weapon_width: int = 8,
+        conv_padding: bool = True,
     ):
         super().__init__()
         self.head_sizes = list(head_sizes)
         self.patch_shape = tuple(patch_shape)
         self.use_patch = use_patch
+        self.conv_padding = conv_padding
         self.map_side = map_side
         self.use_map = use_map
         self.norm = RunningNorm(vector_size)
@@ -139,16 +163,25 @@ class WormPolicy(nn.Module):
             # picture through one enormous matrix. Striding down to 6x12 first
             # keeps that layer the size it was, and gives the tower the depth to
             # recognise a ledge or a corridor rather than a texture.
+            # Padded, so the tower's grid is centred on the worm. Without
+            # padding each strided layer drops whatever does not fit a whole
+            # stride at the bottom and the right, and at four pixels a cell
+            # that came to a strip 36 px high and 44 px wide that no output
+            # cell ever looked at: a worm saw 212 px to its left and 168 to
+            # its right. Older checkpoints were trained without it, and say so.
+            # Measured cost on the M2 Pro, one 32-step chunk forward and back:
+            # 2.8 to 3.1 s at four pixels a cell, 6.8 to 7.5 s at two.
+            pad = (2, 1, 1) if conv_padding else (0, 0, 0)
             self.conv = nn.Sequential(
-                nn.Conv2d(PATCH_CHANNELS, 32, kernel_size=8, stride=4),
+                nn.Conv2d(PATCH_CHANNELS, 32, kernel_size=8, stride=4, padding=pad[0]),
                 nn.ReLU(),
-                nn.Conv2d(32, 64, kernel_size=4, stride=2),
+                nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=pad[1]),
                 nn.ReLU(),
                 # Narrowing on the last layer rather than the first: the
-                # 6x12 grid that reaches the dense layer is the one thing it
+                # grid that reaches the dense layer is the one thing it
                 # cannot rebuild, so keep its shape and spend the channels
                 # earlier, where the weights are shared across every position.
-                nn.Conv2d(64, 32, kernel_size=3, stride=2),
+                nn.Conv2d(64, 32, kernel_size=3, stride=2, padding=pad[2]),
                 nn.ReLU(),
                 nn.Flatten(),
             )

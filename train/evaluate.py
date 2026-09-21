@@ -30,7 +30,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from policy import WormPolicy
+from policy import policy_from_shape
 from ppo import stock_levels
 from workers import REPO, WorkerPool
 
@@ -103,17 +103,7 @@ class Side:
         self.name = f"{path.parent.name}/{path.name}"
         self.shape = shape
         self.steps = int(checkpoint.get("step", 0))
-        self.policy = WormPolicy(
-            shape["vectorSize"],
-            shape["headSizes"],
-            patch_shape=tuple(shape.get("patchShape") or (121, 213)),
-            weapon_ids_at=shape.get("weaponIdsAt"),
-            weapon_ids_count=shape.get("weaponIdsCount", 0),
-            weapon_count=shape.get("weaponCount", 0),
-            use_patch=shape.get("usePatch", True),
-            use_map=shape.get("useMap", False),
-            map_side=shape.get("mapSide", 32),
-        ).to(device)
+        self.policy = policy_from_shape(shape).to(device)
         self.policy.load_state_dict(checkpoint["policy"])
         self.policy.eval()
         self.head_sizes = list(shape["headSizes"])
@@ -181,12 +171,14 @@ def main(argv=None):
     for side in (left, right):
         if side.baseline or side is anchor:
             continue
-        for key in ("vectorSize", "headSizes", "patchShape", "usePatch", "useMap", "mapSide"):
+        for key in ("vectorSize", "headSizes", "patchShape", "usePatch", "useMap", "mapSide", "convPadding"):
             if side.shape.get(key) != shape.get(key):
                 raise SystemExit(
                     f"{left.name} and {right.name} cannot sit in one match: {key} is "
                     f"{shape.get(key)} on one side and {side.shape.get(key)} on the other. "
-                    "Two patch scales need an observation per side, which does not exist yet"
+                    "They were trained on different observations, and a match encodes one"
+                    + (" — two patch scales would need an observation per side, which does "
+                       "not exist yet" if key == "patchShape" else "")
                 )
 
     trained_agents = int(shape.get("agents", 3))
