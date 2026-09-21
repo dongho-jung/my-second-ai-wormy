@@ -179,6 +179,27 @@ function hasOpponents() {
   return Number(run?.meta?.opponents ?? 0) > 0;
 }
 
+/**
+ * Updates a run needs before "is it still learning?" can mean anything.
+ *
+ * The critic is scored on how well it predicts an episode's return, and no
+ * episode closes until the run has collected a whole episode's worth of
+ * decisions — `episodeTicks / frameskip` of them, `rolloutSteps` at a time.
+ * Until that happens `explainedVariance` sits at zero for a reason that has
+ * nothing to do with the gradients, and every healthy run reads as dead for
+ * its first quarter of an hour.
+ */
+function warmupUpdates() {
+  const meta = run?.meta ?? {};
+  const decisions = Number(meta.episodeTicks) / Number(meta.frameskip);
+  const steps = Number(meta.rolloutSteps);
+  if (!Number.isFinite(decisions) || !Number.isFinite(steps) || steps <= 0) return 0;
+  return Math.ceil(decisions / steps);
+}
+
+/** Asked too soon to answer. Shown and waited on, not reported as a failure. */
+const TOO_EARLY = -1;
+
 function latest(key, numeric = true) {
   for (let index = records.length - 1; index >= 0; index--) {
     const value = records[index][key];
@@ -438,24 +459,30 @@ const HEADLINES = [
       const clipped = latest("clipFraction");
       const explained = latest("explainedVariance");
       if (![kl, clipped, explained].every(Number.isFinite)) return undefined;
+      if ((latest("update") ?? 0) < warmupUpdates()) return TOO_EARLY;
       const moving = kl > 0.0015 && clipped > 0.02;
       const predicting = explained > 0.1;
       return moving && predicting ? 1 : moving || predicting ? 0.5 : 0;
     },
-    show: (value) => (value === 1 ? "yes" : value === 0.5 ? "half" : "stalled"),
+    show: (value) =>
+      value === TOO_EARLY ? "too early" : value === 1 ? "yes" : value === 0.5 ? "half" : "stalled",
     unit: () => {
       const kl = latest("approxKL");
       const explained = latest("explainedVariance");
       return `moves ${Number.isFinite(kl) ? kl.toFixed(4) : "—"} per update · `
         + `critic explains ${Number.isFinite(explained) ? percent(explained) : "—"}`;
     },
-    state: (value) => (value === 1 ? "good" : value === 0.5 ? "flat" : "bad"),
+    state: (value) =>
+      value === TOO_EARLY ? "flat" : value === 1 ? "good" : value === 0.5 ? "flat" : "bad",
     say: (move, value) =>
-      value === 1
-        ? "Updates are changing the policy, and the critic can predict the reward."
-        : value === 0.5
-          ? "Half healthy — one of the two has gone flat. Worth a look."
-          : "The updates have stopped moving anything. This will not recover on its own.",
+      value === TOO_EARLY
+        ? `No episode has finished yet, so the critic has nothing to predict `
+          + `against. This answers itself around update ${warmupUpdates()}.`
+        : value === 1
+          ? "Updates are changing the policy, and the critic can predict the reward."
+          : value === 0.5
+            ? "Half healthy — one of the two has gone flat. Worth a look."
+            : "The updates have stopped moving anything. This will not recover on its own.",
   },
   {
     title: "Is it learning from you?",
