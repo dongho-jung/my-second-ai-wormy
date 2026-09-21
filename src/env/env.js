@@ -110,6 +110,9 @@ export const DEFAULTS = {
   // larger number is fewer cells for the network to look at. See
   // `patchGeometry` for what each value comes to.
   patchScale: 2,
+  // A second patch scale to encode as well, or null. Only an evaluation
+  // seating two policies trained at different scales wants it.
+  patchScale2: null,
   // Four ticks is a policy deciding at 15 Hz: about as often as a person
   // changes their mind, and four times less network to run.
   frameskip: 4,
@@ -172,6 +175,7 @@ export class WormEnv {
       foeSlots: settings.observationFoes ?? this.agents - 1,
       weaponFeatures: engine.weaponFeatures,
       patchScale: settings.patchScale,
+      patchScale2: settings.patchScale2 ?? null,
     });
     this.mapEvery = settings.mapEvery;
     this.shapingFullAt = Math.max(0, settings.shapingFullAt ?? 0);

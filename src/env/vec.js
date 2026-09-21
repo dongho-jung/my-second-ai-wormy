@@ -175,7 +175,16 @@ export class VecWormEnv {
           level,
           // The byte forms are what go on the wire; expanding them into planes
           // is the trainer's job, where it is free.
-          observations: options.observations ?? ["vector", "patchBytes", "map"],
+          // A second patch scale means a second cut in every observation,
+          // whether or not the caller listed the kinds itself: a checkpoint's
+          // saved world names the kinds it trained with, and the second cut
+          // is only ever added on top of those.
+          observations: [
+            ...(options.observations ?? ["vector", "patchBytes", "map"]).filter(
+              (kind) => kind !== "patchBytes2",
+            ),
+            ...(options.patchScale2 ? ["patchBytes2"] : []),
+          ],
         }),
     );
     this.agents = this.envs[0].agents;
@@ -188,6 +197,8 @@ export class VecWormEnv {
     const slots = envs * this.agents;
     this.vectors = new Float32Array(slots * this.spec.vectorSize);
     this.patches = new Uint8Array(slots * this.spec.patch.cells);
+    this.wantsPatch2 = Boolean(this.spec.patch2) && this.envs[0].observationKinds.includes("patchBytes2");
+    this.patches2 = new Uint8Array(this.wantsPatch2 ? slots * this.spec.patch2.cells : 0);
     this.maps = new Uint8Array(slots * MAP_SIZE);
     this.rewards = new Float32Array(slots);
     this.dones = new Uint8Array(envs);
@@ -216,6 +227,12 @@ export class VecWormEnv {
           into.patchBytes = this.patches.subarray(
             slot * this.spec.patch.cells,
             (slot + 1) * this.spec.patch.cells,
+          );
+        }
+        if (this.wantsPatch2) {
+          into.patchBytes2 = this.patches2.subarray(
+            slot * this.spec.patch2.cells,
+            (slot + 1) * this.spec.patch2.cells,
           );
         }
         if (this.wantsMap) {
@@ -364,6 +381,10 @@ export class VecWormEnv {
       patchCells: this.wantsPatch ? this.spec.patch.cells : 0,
       patchShape: this.wantsPatch ? this.spec.patch.shape : null,
       patchScale: this.spec.patch.scalePx,
+      // The second cut, when one was asked for; zero cells otherwise.
+      patch2Cells: this.wantsPatch2 ? this.spec.patch2.cells : 0,
+      patch2Shape: this.wantsPatch2 ? this.spec.patch2.shape : null,
+      patch2Scale: this.wantsPatch2 ? this.spec.patch2.scalePx : null,
       mapCells: this.wantsMap ? MAP_SIZE : 0,
       mapShape: this.wantsMap ? [4, 32, 32] : null,
       statFields: EPISODE_STATS,

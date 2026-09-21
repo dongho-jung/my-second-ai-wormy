@@ -194,8 +194,10 @@ test("the worker speaks the frames it says it will", { skip }, async () => {
     assert.equal(layout.agents, 3);
     assert.equal(layout.patchCells, PATCH_CELLS);
     assert.equal(layout.actionBytes, 2 * 3 * HEADS);
-    assert.deepEqual(layout.order, ["vectors", "patches", "maps", "rewards", "dones", "restarts",
-      "stats"]);
+    assert.deepEqual(layout.order, ["vectors", "patches", "patches2", "maps", "rewards", "dones",
+      "restarts", "stats"]);
+    assert.equal(layout.patch2Cells, 0, "no second cut unless one was asked for");
+    assert.equal(layout.bytes.patches2, 0);
     assert.ok(layout.mapCells > 0, "the whole level goes on the wire too");
     // The layout is the only thing a reader needs: every block's size is in it.
     const total = Object.values(layout.bytes).reduce((sum, one) => sum + one, 0);
@@ -235,4 +237,21 @@ test("the worker speaks the frames it says it will", { skip }, async () => {
   } finally {
     child.kill();
   }
+});
+
+test("a match can cut the ground at two scales, one per side", { skip }, async () => {
+  const engine = await loadEngine();
+  const vec = new VecWormEnv(engine, { envs: 1, agents: 2, patchScale: 4, patchScale2: 2 });
+  const layout = vec.describe();
+  assert.deepEqual(layout.patchShape, [6, 61, 107]);
+  assert.deepEqual(layout.patch2Shape, [6, 121, 213]);
+  assert.equal(layout.patch2Scale, 2);
+  assert.equal(vec.patches2.length, 2 * 121 * 213);
+  const heads = new Uint8Array(2 * HEADS);
+  vec.step(heads);
+  // Both cuts show the same ground: a cell of the coarse one is rock only if
+  // some pixel in it is rock, and the fine one is where that pixel would be.
+  const coarse = vec.patches2.length ? vec.patches.subarray(0, 61 * 107) : null;
+  assert.ok(coarse.some((byte) => (byte & 3) !== 2), "some terrain in view");
+  assert.ok(vec.patches2.subarray(0, 121 * 213).some((byte) => (byte & 3) !== 2));
 });

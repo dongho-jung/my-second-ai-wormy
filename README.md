@@ -302,8 +302,9 @@ difference — and reports kills, deaths, damage dealt, damage to itself and
 deaths of its own doing for each side, with a bootstrap interval on the
 difference. `random` and `still` are two bars that never move, so a policy
 can be measured against the same thing early in a run and late in it. Both
-sides must have been trained on the same observation; two patch scales cannot
-yet share a match.
+sides must have been trained on the same vector; two patch scales can share a
+match, because the world cuts the same ground twice and shows each side the
+cut it learned on.
 
 ## Running it somewhere else
 

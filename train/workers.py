@@ -49,6 +49,8 @@ class Layout:
     vector_size: int
     patch_cells: int
     patch_shape: tuple
+    patch2_cells: int
+    patch2_shape: tuple
     map_cells: int
     map_shape: tuple
     head_sizes: list
@@ -82,6 +84,8 @@ class Layout:
             vector_size=raw["vectorSize"],
             patch_cells=raw["patchCells"],
             patch_shape=tuple(raw["patchShape"]) if raw["patchShape"] else None,
+            patch2_cells=int(raw.get("patch2Cells", 0)),
+            patch2_shape=tuple(raw["patch2Shape"]) if raw.get("patch2Shape") else None,
             map_cells=raw.get("mapCells", 0),
             map_shape=tuple(raw["mapShape"]) if raw.get("mapShape") else None,
             head_sizes=[head["choices"] for head in raw["heads"]],
@@ -149,13 +153,20 @@ class WorkerPool:
 
         `restarts` is one byte per worm: it came back from the dead on this
         step, so a policy's memory of it should start over even though the
-        match, and its `dones` byte, carry on.
+        match, and its `dones` byte, carry on. The second patch cut, when one
+        was asked for, is kept on `self.patches2` rather than widening the
+        tuple every caller unpacks.
         """
         layout = self.layout
         vectors = np.empty((self.slots, layout.vector_size), dtype=np.float32)
         patches = (
             np.empty((self.slots, layout.patch_cells), dtype=np.uint8)
             if layout.patch_cells
+            else None
+        )
+        patches2 = (
+            np.empty((self.slots, layout.patch2_cells), dtype=np.uint8)
+            if layout.patch2_cells
             else None
         )
         maps = (
@@ -188,12 +199,15 @@ class WorkerPool:
             vectors[agents] = take("vectors", np.float32).reshape(per_worker, -1)
             if patches is not None:
                 patches[agents] = take("patches", np.uint8).reshape(per_worker, -1)
+            if patches2 is not None:
+                patches2[agents] = take("patches2", np.uint8).reshape(per_worker, -1)
             if maps is not None:
                 maps[agents] = take("maps", np.uint8).reshape(per_worker, -1)
             rewards[agents] = take("rewards", np.float32)
             dones[envs] = take("dones", np.uint8)
             restarts[agents] = take("restarts", np.uint8)
             stats[envs] = take("stats", np.float32).reshape(layout.envs, -1)
+        self.patches2 = patches2
         return vectors, patches, maps, rewards, dones, restarts, stats
 
     def step(self, heads: np.ndarray):

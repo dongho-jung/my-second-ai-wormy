@@ -143,6 +143,9 @@ export function observationSpec({
   pickupSlots = PICKUP_SLOTS,
   weaponFeatures = null,
   patchScale = DEFAULT_PATCH_SCALE,
+  // A second cut of the same ground, for a match in which two policies were
+  // trained at different scales: each is shown the patch it learned on.
+  patchScale2 = null,
 } = {}) {
   const layout = [
     ["rays", RAY_COUNT], //   distance to the first solid pixel, 1 = clear to the limit
@@ -209,6 +212,7 @@ export function observationSpec({
     pickupSlots,
     weaponFeatures,
     patch: patchGeometry(patchScale),
+    patch2: patchScale2 ? patchGeometry(patchScale2) : null,
     layout,
     offsets,
     vectorSize,
@@ -281,6 +285,9 @@ export function observe(
   if (kinds.includes("patch")) out.patch = encodePatch(view, into.patch, spec.patch);
   if (kinds.includes("patchBytes")) {
     out.patchBytes = encodePatchBytes(view, into.patchBytes, spec.patch);
+  }
+  if (kinds.includes("patchBytes2") && spec.patch2) {
+    out.patchBytes2 = encodePatchBytes(view, into.patchBytes2, spec.patch2);
   }
   if (kinds.includes("map")) {
     out.map = mapTerrain

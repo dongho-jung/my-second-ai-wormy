@@ -96,6 +96,10 @@ class Side:
         self.policy = None
         self.memory = None
         self.head_sizes = head_sizes
+        # Pixels per patch cell this side trained at, and whether it takes the
+        # match's second cut of the ground rather than the first.
+        self.patch_scale = None
+        self.patch2 = False
         if spec in BASELINES:
             return
         path = checkpoint_path(spec)
@@ -108,6 +112,9 @@ class Side:
         self.policy.load_state_dict(checkpoint["policy"])
         self.policy.eval()
         self.head_sizes = list(shape["headSizes"])
+        world = shape.get("world") or {}
+        rows = (shape.get("patchShape") or [6, 121, 213])[-2]
+        self.patch_scale = int(world.get("patchScale") or round(242 / rows))
 
     @property
     def baseline(self) -> bool:
@@ -174,15 +181,20 @@ def main(argv=None):
     for side in (left, right):
         if side.baseline or side is anchor:
             continue
-        for key in ("vectorSize", "headSizes", "patchShape", "usePatch", "useMap", "mapSide", "convPadding"):
+        for key in ("vectorSize", "headSizes", "usePatch", "useMap", "mapSide"):
             if side.shape.get(key) != shape.get(key):
                 raise SystemExit(
                     f"{left.name} and {right.name} cannot sit in one match: {key} is "
                     f"{shape.get(key)} on one side and {side.shape.get(key)} on the other. "
                     "They were trained on different observations, and a match encodes one"
-                    + (" — two patch scales would need an observation per side, which does "
-                       "not exist yet" if key == "patchShape" else "")
                 )
+    # Two policies that look at the ground through different patch scales can
+    # still share a match: the world cuts the same ground twice and each side
+    # is shown the cut it learned on.
+    second_scale = None
+    if not left.baseline and not right.baseline and left.patch_scale != right.patch_scale:
+        second_scale = right.patch_scale
+        right.patch2 = True
 
     trained_agents = int(shape.get("agents", 3))
     agents = args.agents or trained_agents
@@ -214,6 +226,8 @@ def main(argv=None):
         "levelPool": args.maps,
         "levelFiles": stock_levels(args),
     }
+    if second_scale:
+        config["patchScale2"] = second_scale
     if args.episode_ticks:
         config["episodeTicks"] = args.episode_ticks
 
@@ -231,6 +245,13 @@ def main(argv=None):
     matches = pools[0].envs
     use_patch = bool(shape.get("usePatch", True)) and layout.patch_cells > 0
     use_map = bool(shape.get("useMap", False)) and layout.map_cells > 0
+    if second_scale and layout.patch2_cells != right.shape["patchShape"][-2] * right.shape["patchShape"][-1]:
+        for pool in pools:
+            pool.close()
+        raise SystemExit(
+            f"the match cuts the second patch into {layout.patch2_cells} cells and "
+            f"{right.name} wants {right.shape['patchShape']}"
+        )
     at = {name: index for index, name in enumerate(layout.stat_fields)}
     DONE_FIRST = layout.done_codes["first"]
     DONE_LAST = layout.done_codes["last"]
@@ -249,6 +270,8 @@ def main(argv=None):
         f"{left.name} (left) against {right.name} (right): {agents} worms a match, "
         f"{front} in front and {back} behind, every map played once each way, "
         f"2 x {matches} matches at once on {layout.maps} maps"
+        + (f", the ground cut at {left.patch_scale} px a cell for the left and "
+           f"{right.patch_scale} for the right" if second_scale else "")
         + (", greedy" if args.greedy else ""),
         flush=True,
     )
@@ -261,6 +284,7 @@ def main(argv=None):
             vectors, patches, maps, _, _, _, _ = pool.observations()
             self.v = torch.as_tensor(vectors, device=device)
             self.p = torch.as_tensor(patches, device=device) if use_patch else None
+            self.p2 = torch.as_tensor(pool.patches2, device=device) if second_scale else None
             self.m = torch.as_tensor(maps, device=device) if use_map else None
             self.done = torch.zeros(slots, device=device)
             self.reset = torch.zeros(slots, device=device)
@@ -269,13 +293,16 @@ def main(argv=None):
         def step(self, index):
             restart = ((self.done == DONE_FIRST) | (self.reset > 0)).float()
             seats = seating[index]
-            self.heads[seats["left"]] = left.act(index, seats["left"], self.v, self.p, self.m, restart)
-            self.heads[seats["right"]] = right.act(index, seats["right"], self.v, self.p, self.m, restart)
+            cut = lambda side: self.p2 if side.patch2 else self.p
+            self.heads[seats["left"]] = left.act(index, seats["left"], self.v, cut(left), self.m, restart)
+            self.heads[seats["right"]] = right.act(index, seats["right"], self.v, cut(right), self.m, restart)
             self.pool.step(self.heads.to(torch.uint8).numpy())
             vectors, patches, maps, _, env_done, restarts, stats = self.pool.observations()
             self.v = torch.as_tensor(vectors, device=device)
             if use_patch:
                 self.p = torch.as_tensor(patches, device=device)
+            if second_scale:
+                self.p2 = torch.as_tensor(self.pool.patches2, device=device)
             if use_map:
                 self.m = torch.as_tensor(maps, device=device)
             self.done = torch.as_tensor(np.repeat(env_done, per_match).astype(np.float32), device=device)
