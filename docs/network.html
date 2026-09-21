@@ -104,9 +104,9 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
 </section>
 <section id="inputs">
   <span class="kicker">02 / OBSERVATION</span><h2>숫자 하나의 묶음, 두 가지 시야</h2>
-  <p class="muted">수치는 코드 기본값인 상대 슬롯 2개, 패치 셀 2픽셀, 패치와 전체 지도 입력을 모두 켠 구성 기준입니다. 6인전 실행 설정에서는 상대 슬롯이 5개라 벡터가 224로 늘어납니다.</p>
+  <p class="muted">수치는 코드 기본값인 상대 슬롯 2개, 패치 셀 2픽셀, 패치와 전체 지도 입력을 모두 켠 구성 기준입니다. 6인전 실행 설정에서는 상대 슬롯이 5개라 벡터가 234로 늘어납니다.</p>
   <div class="grid">
-    <article class="card"><h3>상태 벡터</h3><span class="shape">164 <small style="font-size:.55em;color:var(--muted)">(6인전 224)</small></span><p>체력, 탄약, 조준과 조준 각속도, 16방향 거리 센서, 상대와 투사체 정보, 그리고 직전 결정입니다. 학습 중 누적한 평균·분산으로 정규화한 뒤 완전연결층에 넣습니다. 끝의 무기 ID 7개 — 내 다섯 슬롯과 상대 둘이 든 것 — 만은 측정값이 아니라 이름이므로 정규화에서 빼고 임베딩으로 따로 처리합니다. 6인전에서는 상대 5명 몫이 더해져 무기 ID도 10개입니다.</p></article>
+    <article class="card"><h3>상태 벡터</h3><span class="shape">168 <small style="font-size:.55em;color:var(--muted)">(6인전 234)</small></span><p>체력, 탄약, 조준과 조준 각속도, 16방향 거리 센서, 상대와 투사체 정보, 상대마다 든 무기로 맞히려면 조준을 얼마나 돌려야 하는지, 그리고 직전 결정입니다. 학습 중 누적한 평균·분산으로 정규화한 뒤 완전연결층에 넣습니다. 끝의 무기 ID 7개 — 내 다섯 슬롯과 상대 둘이 든 것 — 만은 측정값이 아니라 이름이므로 정규화에서 빼고 임베딩으로 따로 처리합니다. 6인전에서는 상대 5명 몫이 더해져 무기 ID도 10개입니다.</p></article>
     <article class="card"><h3>주변 지형 패치</h3><span class="shape">6 × 121 × 213</span><p>웜 주변 가로 426 × 세로 242픽셀을 2 × 2픽셀 셀로 읽습니다. 게임의 426 × 240 시야에 세로 여유 2픽셀을 둡니다. 셀 안의 가장 단단한 지형을 바위·흙·빈 공간 중 하나로, 투사체·상대·자기 자신을 각각 별도 채널로 표현합니다. 셀 크기는 <code>--patch-scale</code>로 고르며 4를 주면 같은 시야가 6 × 61 × 107이 됩니다. 체크포인트에 실리므로 뷰어도 학습한 배율로 재생합니다.</p></article>
     <article class="card"><h3>전체 지도</h3><span class="shape">4 × 32 × 32</span><p>맵 전체를 32 × 32 격자로 압축합니다. 빈 공간·흙·바위의 비율과 웜의 위치를 담습니다. 기본 학습은 방이 실제로 도는 커뮤니티 맵(<code>cs_</code> 풀)에서만 하고, 게임이 만들어 주는 504 × 350 dirt 맵은 켜야 섞입니다.</p></article>
   </div>
@@ -118,7 +118,7 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
   <p class="muted">세 갈래 입력을 각각 처리한 뒤 합치고, 공통 특징에서 행동과 가치를 읽습니다. 아래 크기는 배치 차원을 생략했습니다.</p>
   <figure class="flow">
     <div class="flow-grid">
-      <div class="lane"><div class="node input"><strong>상태 벡터</strong><code>164</code><small>6인전 224</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>누적 통계 정규화</strong><small>평균·분산 적용, 범위 제한</small><small>무기 ID 7개는 제외</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>164 → 128</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>무기 ID 임베딩 이어붙이기</strong><small>내 5슬롯과 상대 2명의 무기</small><code>7 × 8 = 56</code><small>6인전 10 × 8 = 80</small></div><span class="arrow">출력 128 + 56</span></div>
+      <div class="lane"><div class="node input"><strong>상태 벡터</strong><code>168</code><small>6인전 234</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>누적 통계 정규화</strong><small>평균·분산 적용, 범위 제한</small><small>무기 ID 7개는 제외</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>168 → 128</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>무기 ID 임베딩 이어붙이기</strong><small>내 5슬롯과 상대 2명의 무기</small><code>7 × 8 = 56</code><small>6인전 10 × 8 = 80</small></div><span class="arrow">출력 128 + 56</span></div>
       <div class="lane"><div class="node input"><strong>주변 패치</strong><code>6 × 121 × 213</code><small>25,773바이트 → 지형 3채널 + 투사체·상대·자기 3채널</small><small>셀 4픽셀이면 6 × 61 × 107</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 6 → 32 + ReLU</strong><small>커널 8 × 8 · 보폭 4 · 패딩 2</small><code>32 × 30 × 53</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 32 → 64 + ReLU</strong><small>커널 4 × 4 · 보폭 2 · 패딩 1</small><code>64 × 15 × 26</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 64 → 32 + ReLU</strong><small>커널 3 × 3 · 보폭 2 · 패딩 1</small><code>32 × 8 × 13</code></div><span class="arrow">펼치기 → 3,328 <small>(셀 4픽셀이면 896)</small></span></div>
       <div class="lane"><div class="node input"><strong>전체 지도</strong><code>4 × 32 × 32</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 4 → 16 + ReLU</strong><small>커널 4 × 4 · 보폭 2</small><code>16 × 15 × 15</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 16 → 32 + ReLU</strong><small>커널 3 × 3 · 보폭 2</small><code>32 × 7 × 7</code></div><span class="arrow">펼치기 → 1,568</span></div>
     </div>
@@ -131,7 +131,7 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
   </figure>
 </section>
 <section id="vector">
-  <span class="kicker">04 / VECTOR</span><h2>164개 숫자에는 무엇이 들어갈까</h2>
+  <span class="kicker">04 / VECTOR</span><h2>168개 숫자에는 무엇이 들어갈까</h2>
   <p>학습으로 생성한 임베딩이 아니라, 코드가 직접 측정하는 관측값입니다. 아래 표는 인접한 일부 필드를 묶어 표시했습니다.</p>
   <details><summary>전체 필드와 오프셋 펼치기</summary>
     <p class="scroll-hint">좁은 화면에서는 표 안에서 좌우로 스크롤할 수 있습니다.</p>
@@ -150,31 +150,31 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
       <tr><td class="n">51</td><td class="n">5</td><td><code>weaponsReload</code></td><td>슬롯별 재장전 진행도</td></tr>
       <tr><td class="n">56</td><td class="n">10</td><td><code>weapon</code></td><td>현재 무기의 속도·낙하·사거리·발사체 수·피해 등 특성</td></tr>
       <tr><td class="n">66</td><td class="n">5</td><td><code>rope</code></td><td>로프 전개·부착 여부, 상대 위치, 길이</td></tr>
-      <tr><td class="n">71</td><td class="n">38</td><td><code>foes</code></td><td>상대 2명 × 19개: 생존·위치·거리·방향·체력·속도·무기 특성</td></tr>
-      <tr><td class="n">109</td><td class="n">24</td><td><code>projectiles</code></td><td>가까운 투사체 3개 × 8개: 상대 위치·속도·무기 특성. 무기가 던진 것만 세고 피·탄피·파편 같은 장식 입자는 뺍니다</td></tr>
-      <tr><td class="n">133</td><td class="n">12</td><td><code>pickups</code></td><td>가까운 보급품 3개 × 4개: 상대 위치·체력 또는 무기 여부</td></tr>
-      <tr><td class="n">145</td><td class="n">11</td><td><code>lastAction</code></td><td>직전 결정: 눌린 키 9개(좌·우·조준 상·하·발사·점프·로프 감기·풀기·굴착)와 로프 메시지(던지기 +1, 해제 −1), 무기 메시지(다음 +1, 이전 −1). 점프·굴착은 누르는 순간에만 작동하고, 지연 큐에 실려 가는 행동은 세계에 아직 보이지 않으므로 정책이 자기 선택을 기억해야 합니다. 매치 시작 시 0</td></tr>
-      <tr><td class="n">156</td><td class="n">1</td><td><code>latency</code></td><td>이번 에피소드에 이 웜의 키가 얼마나 늦게 닿는지. 30틱으로 나눈 값이라 런이 달라도 같은 뜻입니다</td></tr>
-      <tr><td class="n">157</td><td class="n">7</td><td><code>weaponIds</code></td><td>내 5슬롯과 상대 2명이 든 무기의 ID. 빈 슬롯은 −1. 측정값이 아니라 이름이므로 정규화 대상에서 빼고 임베딩으로 넘깁니다</td></tr>
-      </tbody><tfoot><tr><td class="n">합계</td><td class="n">164</td><td colspan="2">상대 슬롯을 1개로 설정하면 144, 4개면 204, 6인전의 5개면 224. 슬롯 수가 바뀌면 <code>foes</code> 뒤의 오프셋이 함께 밀립니다</td></tr></tfoot>
+      <tr><td class="n">71</td><td class="n">42</td><td><code>foes</code></td><td>상대 2명 × 21개: 생존·위치·거리·방향·체력·속도·무기 특성, 그리고 <strong>사격 해</strong> 2개. 지금 든 무기의 속도와 낙차로 그 상대를 맞히려면 조준을 얼마나 돌려야 하는지(부호 있는 라디안)와 그 궤적이 지형에 막히지 않는지입니다. 조준 보상이 지급되는 것과 같은 계산이라, 보상받는 것과 보이는 것이 같습니다</td></tr>
+      <tr><td class="n">113</td><td class="n">24</td><td><code>projectiles</code></td><td>가까운 투사체 3개 × 8개: 상대 위치·속도·무기 특성. 무기가 던진 것만 세고 피·탄피·파편 같은 장식 입자는 뺍니다</td></tr>
+      <tr><td class="n">137</td><td class="n">12</td><td><code>pickups</code></td><td>가까운 보급품 3개 × 4개: 상대 위치·체력 또는 무기 여부</td></tr>
+      <tr><td class="n">149</td><td class="n">11</td><td><code>lastAction</code></td><td>직전 결정: 눌린 키 9개(좌·우·조준 상·하·발사·점프·로프 감기·풀기·굴착)와 로프 메시지(던지기 +1, 해제 −1), 무기 메시지(다음 +1, 이전 −1). 점프·굴착은 누르는 순간에만 작동하고, 지연 큐에 실려 가는 행동은 세계에 아직 보이지 않으므로 정책이 자기 선택을 기억해야 합니다. 매치 시작 시 0</td></tr>
+      <tr><td class="n">160</td><td class="n">1</td><td><code>latency</code></td><td>이번 에피소드에 이 웜의 키가 얼마나 늦게 닿는지. 30틱으로 나눈 값이라 런이 달라도 같은 뜻입니다</td></tr>
+      <tr><td class="n">161</td><td class="n">7</td><td><code>weaponIds</code></td><td>내 5슬롯과 상대 2명이 든 무기의 ID. 빈 슬롯은 −1. 측정값이 아니라 이름이므로 정규화 대상에서 빼고 임베딩으로 넘깁니다</td></tr>
+      </tbody><tfoot><tr><td class="n">합계</td><td class="n">168</td><td colspan="2">상대 슬롯을 1개로 설정하면 146, 4개면 212, 6인전의 5개면 234. 슬롯 수가 바뀌면 <code>foes</code> 뒤의 오프셋이 함께 밀립니다</td></tr></tfoot>
     </table></div>
   </details>
   <p class="note">벡터 크기는 실제 참가자 수가 아니라 <strong>설정한 상대 슬롯 수</strong>에 따라 결정됩니다. 6인전으로 학습한 정책을 뷰어에서 3인전에 넣으면 상대 슬롯 5개 중 둘만 채워지고 나머지는 0으로 남습니다. 체크포인트가 학습 당시의 슬롯 수를 기억하므로 벡터 폭은 유지됩니다.</p>
 </section>
 <section id="parameters">
   <span class="kicker">05 / PARAMETERS</span><h2>약 186만~187만 개의 파라미터, 대부분은 결합 직후와 기억에</h2>
-  <div class="two"><div><p>코드 기본값에서는 총 <strong>1,858,390개</strong>의 학습 파라미터 중 70.0%가 <code>5,080 → 256</code> 완전연결층에, 21.2%가 GRU에 있습니다. 6인전 실행 설정은 벡터가 224, 무기 ID가 10개라 첫 완전연결층과 결합층이 조금 커져 <strong>1,872,214개</strong>가 됩니다. 패치 셀을 4픽셀로 하면 결합 입력이 2,672로 줄어 1,249,622개입니다. 아래 수치는 편향을 포함하고, 정규화의 누적 통계 버퍼는 제외합니다. 무기 임베딩은 모드가 정의한 무기 수에 따라 달라지며, 아래는 이 방이 쓰는 129개 기준입니다.</p><p class="note"><strong>크다고 곧 병목은 아닙니다.</strong> 파라미터 비중만으로 어디를 넓혀야 할지 결정할 수 없습니다. 합성곱 출력 채널을 늘리면 뒤의 결합층 입력도 커져 전체 비용이 함께 늘어납니다. 먼저 관측·보상·평가의 문제를 구분해야 합니다.</p></div>
+  <div class="two"><div><p>코드 기본값에서는 총 <strong>1,858,902개</strong>의 학습 파라미터 중 70.0%가 <code>5,080 → 256</code> 완전연결층에, 21.2%가 GRU에 있습니다. 6인전 실행 설정은 벡터가 234, 무기 ID가 10개라 첫 완전연결층과 결합층이 조금 커져 <strong>1,873,494개</strong>가 됩니다. 패치 셀을 4픽셀로 하면 결합 입력이 2,672로 줄어 1,250,902개입니다. 아래 수치는 편향을 포함하고, 정규화의 누적 통계 버퍼는 제외합니다. 무기 임베딩은 모드가 정의한 무기 수에 따라 달라지며, 아래는 이 방이 쓰는 129개 기준입니다.</p><p class="note"><strong>크다고 곧 병목은 아닙니다.</strong> 파라미터 비중만으로 어디를 넓혀야 할지 결정할 수 없습니다. 합성곱 출력 채널을 늘리면 뒤의 결합층 입력도 커져 전체 비용이 함께 늘어납니다. 먼저 관측·보상·평가의 문제를 구분해야 합니다.</p></div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="파라미터 수 표"><table><caption>층별 학습 파라미터 (코드 기본값 3인전 · 괄호는 6인전)</caption><thead><tr><th scope="col">층</th><th scope="col" class="n">개수</th><th scope="col" class="n">비중</th></tr></thead><tbody>
   <tr><td><code>5080 → 256</code><span class="bar" style="width:100%"></span></td><td class="n">1,300,736 <span class="muted">(1,306,880)</span></td><td class="n">70.0%</td></tr>
   <tr><td>순환 기억 · GRU <code>256 → 256</code><span class="bar" style="width:30%"></span></td><td class="n">394,752</td><td class="n">21.2%</td></tr>
   <tr><td><code>256 → 256</code></td><td class="n">65,792</td><td class="n">3.5%</td></tr>
   <tr><td>주변 패치 합성곱 3층</td><td class="n">63,616</td><td class="n">3.4%</td></tr>
-  <tr><td><code>164 → 128</code></td><td class="n">21,120 <span class="muted">(224 → 128: 28,800)</span></td><td class="n">1.1%</td></tr>
+  <tr><td><code>168 → 128</code></td><td class="n">21,632 <span class="muted">(234 → 128: 30,080)</span></td><td class="n">1.2%</td></tr>
   <tr><td>전체 지도 합성곱 2층</td><td class="n">5,680</td><td class="n">0.3%</td></tr>
   <tr><td>행동 출력</td><td class="n">5,397</td><td class="n">0.3%</td></tr>
   <tr><td>무기 ID 임베딩 <code>130 × 8</code></td><td class="n">1,040</td><td class="n">0.06%</td></tr>
   <tr><td>가치 출력</td><td class="n">257</td><td class="n">0.01%</td></tr>
-  </tbody><tfoot><tr><td>합계</td><td class="n">1,858,390 <span class="muted">(1,872,214)</span></td><td class="n">100%</td></tr></tfoot></table></div></div>
+  </tbody><tfoot><tr><td>합계</td><td class="n">1,858,902 <span class="muted">(1,873,494)</span></td><td class="n">100%</td></tr></tfoot></table></div></div>
 </section>
 <section id="actions">
   <span class="kicker">06 / ACTION</span><h2>1,944개 조합을 8개의 선택으로 나눕니다</h2>
@@ -200,8 +200,8 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
   <span class="kicker">08 / AIM &amp; FIRE</span><h2>어디를 조준해서, 언제 쏠지 어떻게 판별할까?</h2>
   <p class="verdict">정확한 명중 좌표를 출력하는 자동 조준기가 아닙니다.<br>조준을 위·아래로 바꿀지, 지금 발사 키를 누를지를 함께 선택합니다.</p>
   <ol class="checks">
-    <li><strong>상대와 현재 총구 방향을 비교할 재료를 받습니다.</strong> 내 조준 각도의 cos·sin과 좌우 방향, 상대의 상대 위치·방향·거리·속도가 벡터에 있습니다. 주변 지형과 전체 지도도 같은 신경망에 들어갑니다. 벽 뒤 상대를 지워 주는 가시성 필터나 별도 시선 차폐·명중 확률 입력은 없습니다.</li>
-    <li><strong>무기의 성격을 함께 봅니다.</strong> 현재 무기의 10개 특성은 속도, 낙하량, 사거리, 발사체 수, 근거리·원거리 피해, 근거리 자기 피해, 재장전 시간, 발사 간격, 탄창 크기입니다. ID가 범위 밖이면 해당 특성은 0으로 채워지고, 프로파일 파일(<code>artifacts/weapons.&lt;mod&gt;.json</code>) 자체가 없으면 학습을 시작하지 않습니다. 2026-09-21 클러스터의 두 런은 이 파일이 이미지에 빠진 채 두 시간 반을 돌았고, 그동안 조준 보상 두 항은 0, 무기 특성 72칸은 항상 0이었습니다. 이 모드에는 같은 이름을 쓰는 서로 다른 무기가 있어 10개 수치만으로는 갈라지지 않으므로, 무기 ID 자체를 8차원 임베딩으로 따로 넣습니다. 프로파일을 관측값으로 주지만, 추론 중 탄도를 시뮬레이션하거나 상대의 미래 좌표를 계산하는 요격 알고리즘은 없습니다. 낙차 보정이나 앞쪽 조준이 나타난다면 경험으로 학습한 결과이며 정확성을 보장하지 않습니다.</li>
+    <li><strong>상대와 현재 총구 방향을 비교할 재료를 받습니다.</strong> 내 조준 각도의 cos·sin과 각속도, 좌우 방향, 상대의 상대 위치·방향·거리·속도가 벡터에 있습니다. 여기에 상대마다 <strong>사격 해</strong> 두 칸이 붙습니다. 지금 든 무기의 속도와 낙차로 그 상대를 맞히려면 조준을 얼마나 어느 쪽으로 돌려야 하는지, 그리고 그 궤적이 지형에 막히는지입니다. 벽 뒤 상대는 그 두 번째 칸이 0으로 말해 줍니다. 명중 확률 입력은 없습니다.</li>
+    <li><strong>무기의 성격을 함께 봅니다.</strong> 현재 무기의 10개 특성은 속도, 낙하량, 사거리, 발사체 수, 근거리·원거리 피해, 근거리 자기 피해, 재장전 시간, 발사 간격, 탄창 크기입니다. ID가 범위 밖이면 해당 특성은 0으로 채워지고, 프로파일 파일(<code>artifacts/weapons.&lt;mod&gt;.json</code>) 자체가 없으면 학습을 시작하지 않습니다. 2026-09-21 클러스터의 두 런은 이 파일이 이미지에 빠진 채 두 시간 반을 돌았고, 그동안 조준 보상 두 항은 0, 무기 특성 72칸은 항상 0이었습니다. 이 모드에는 같은 이름을 쓰는 서로 다른 무기가 있어 10개 수치만으로는 갈라지지 않으므로, 무기 ID 자체를 8차원 임베딩으로 따로 넣습니다. 사격 해는 상대의 <strong>지금</strong> 위치에 대한 것이라, 움직이는 상대를 앞서 겨누는 요격은 없습니다. 앞쪽 조준이 나타난다면 상대 속도 입력에서 경험으로 학습한 결과입니다.</li>
     <li><strong>조준·발사·무기 헤드가 같은 순간에 결정합니다.</strong> 조준은 유지·위·아래, 발사는 끄기·켜기, 무기는 유지·다음·이전 중 하나입니다. 좌우 이동 입력은 웜이 바라보는 방향에도 관여합니다. 절대 각도나 목표 좌표를 직접 지정하지 않고, 현재 조준에서 키로 조금씩 바꾸는 제어입니다.</li>
     <li><strong>실제로 발사되는지는 게임 엔진이 결정합니다.</strong> 5개 슬롯별 탄약·발사 가능 여부·재장전 및 쿨다운 대기량이 입력됩니다. 발사 가능 값은 탄약이 있고 쿨다운이 끝났는지를 나타내며, 정책 출력에 강제로 적용하는 행동 마스크는 아닙니다. 발사 키를 선택해도 엔진의 재장전·발사 간격 등의 조건을 만족해야 탄이 나갑니다. 키는 기본 4틱 동안 유지되며, 학습 CLI는 기본 6~21틱 입력 지연을 적용합니다. 이 정책이 플레이할 방이 약 300밀리초, 곧 18틱 뒤처져 있어서, 예전의 0~3틱으로 익힌 반사 신경은 옮겨 가면 통하지 않았습니다. 하나의 값이 아니라 범위로 두어 특정 지연에 맞춰 버리지 않게 합니다.</li>
   </ol>
