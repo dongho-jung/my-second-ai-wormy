@@ -19,6 +19,7 @@ import { loadEngine } from "./engine.js";
 import { readFileSync } from "node:fs";
 import { WormEnv } from "./env.js";
 import { MAP_SIZE, PATCH_CELLS, PATCH_SHAPE } from "./observation.js";
+import { gzipSync } from "node:zlib";
 
 const HEADS = ACTION_HEADS.length;
 const MAX_CLIENTS = 8;
@@ -77,6 +78,9 @@ const env = new WormEnv(engine, {
   seed: config.seed ?? Math.floor(Math.random() * 0xffffffff),
 });
 env.reset();
+
+/** Below this, packing costs more than it saves. */
+const GZIP_OVER = 4096;
 
 let levelVersion = 0;
 let episodes = 0;
@@ -224,8 +228,23 @@ function allowed(request) {
 
 const server = createServer((request, response) => {
   const json = (status, body) => {
+    const text = JSON.stringify(body);
+    // The level is the only big answer here and the page asks for it once a
+    // second, because the ground is being dug through while they play. It is
+    // palette indices with long runs of the same value, so gzip takes 230 KB
+    // down to 74 KB and the viewer stops being the heaviest thing on the wire.
+    const wants = /\bgzip\b/.test(request.headers["accept-encoding"] ?? "");
+    if (wants && text.length > GZIP_OVER) {
+      const packed = gzipSync(text);
+      response.writeHead(status, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Encoding": "gzip",
+        Vary: "Accept-Encoding",
+      });
+      return response.end(packed);
+    }
     response.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify(body));
+    response.end(text);
   };
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("X-Content-Type-Options", "nosniff");
