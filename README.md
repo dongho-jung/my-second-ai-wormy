@@ -254,9 +254,28 @@ browser on port 8769: the terrain the worms are digging through, where they are
 aiming, what they are holding, and the score.
 
 This is **the headless engine rendered, not a room on webliero.com**. The
-physics are identical — the same bundle, checked by the same checksum — but
-putting a policy into a live online room needs the key-input path this
-repository does not have yet.
+physics are identical — the same bundle, checked by the same checksum.
+
+## Playing in a real room
+
+```bash
+npm run play                              # three worms, the newest run's best policy
+npm run play -- --room-url URL --players 2
+npm run record -- --patch-scale 4         # write down what the people in the room do
+```
+
+`npm run play` loads a checkpoint and drives `src/live/drive.js`, which opens
+the game windows, gets them into one room and presses the keys the policy
+chooses (`src/live/keys.js` proves every action it can take is one a player
+could press). WebLiero asks for a CAPTCHA to create a room; it is waited out in
+the window, never worked around.
+
+The policy has to meet **the observation it trained on**, or it is playing a
+different game on its first real match. The driver therefore builds the vector
+with the mod's measured weapon profile, cuts the patch at the checkpoint's own
+scale, and refuses a room running another mod. `npm run record` needs the same
+care: pass `--patch-scale` to match the run that will learn from the recording,
+because a recording at the wrong scale is skipped, not used.
 
 ## Comparing two policies
 
