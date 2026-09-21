@@ -258,6 +258,25 @@ physics are identical — the same bundle, checked by the same checksum — but
 putting a policy into a live online room needs the key-input path this
 repository does not have yet.
 
+## Comparing two policies
+
+```bash
+npm run evaluate -- --left artifacts/runs/<a>/best.pt --right artifacts/runs/<b>/best.pt
+npm run evaluate -- --left artifacts/runs/<a> --right random      # against keys pressed at random
+npm run evaluate -- --left artifacts/runs/<a> --right still       # against a worm that does nothing
+```
+
+Nothing on the training page can compare two runs: every figure there is a
+policy measured against itself or its own recent past, and a run that improves
+slowly and one that improves quickly can show the same **is it beating its past
+self**. This seats the two checkpoints in the same free-for-all, on the same
+maps, with the sides swapped every other match, and reports kills, deaths,
+damage dealt and damage to itself for each side with a bootstrap interval on
+the difference. `random` and `still` are two bars that never move, so a policy
+can be measured against the same thing early in a run and late in it. Both
+sides must have been trained on the same observation; two patch scales cannot
+yet share a match.
+
 ## Running it somewhere else
 
 The learning half goes in a container. The watching half does not — it drives a
