@@ -44,6 +44,7 @@ METRICS = [
     ("deaths", "deaths", "deathsVsPast"),
     ("damage dealt", "damageDealt", "damageVsPast"),
     ("damage to itself", "selfDamage", "selfDamageVsPast"),
+    ("deaths, own doing", "suicides", "suicidesVsPast"),
 ]
 
 

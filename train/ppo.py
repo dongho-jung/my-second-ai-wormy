@@ -179,6 +179,13 @@ def parse_args(argv=None):
                             "every run so far has done")
     learn.add_argument("--shaping-floor", type=float, default=0.0,
                        help="what the ladder is worth once it has faded; 0 is nothing at all")
+    learn.add_argument("--suicide-cost", type=float, default=0.0,
+                       help="charged on top of the death cost for a death nobody else caused: "
+                            "its own rocket, its own grenade, a fall. A kill pays 4 and a death "
+                            "costs 2, so a worm that blows itself up on the way to one kill "
+                            "still comes out +2, and 44%% of the first cluster run's deaths were "
+                            "its own. 0 leaves the arithmetic as it is; the evaluator says "
+                            "whether a value here makes a better player or a shyer one")
     learn.add_argument("--value-coef", type=float, default=0.5)
     learn.add_argument("--max-grad-norm", type=float, default=0.5)
     learn.add_argument("--seed", type=int, default=1)
@@ -306,6 +313,7 @@ def main(argv=None):
         # Filled in below, once the worker count is known.
         shapingFullAt=0,
         shapingFloor=args.shaping_floor,
+        **({"weights": {"suicide": args.suicide_cost}} if args.suicide_cost else {}),
         banStart=[name.strip() for name in args.ban_start.split(",") if name.strip()],
         # Read off the room this project watches, rather than assumed: it drops
         # weapon crates only, eight seconds apart, and makes a swapped-to weapon
@@ -470,6 +478,7 @@ def main(argv=None):
             "opponents": frozen_per_match,
             "poolSize": args.pool_size if frozen_per_match else 0,
             "shapingDecay": args.shaping_decay,
+            "suicideCost": args.suicide_cost,
             "gamma": args.gamma,
             "clip": args.clip,
             "entropy": args.entropy,

@@ -31,12 +31,15 @@ export const EPISODE_STATS = [
   "selfDamage",
   "kills",
   "deaths",
+  // Of those deaths, the ones nobody else caused.
+  "suicides",
   "stuckSteps",
   "cellsVisited",
   "fromDamageDealt",
   "fromDamageTaken",
   "fromKill",
   "fromDeath",
+  "fromSuicide",
   "fromExplore",
   "fromRevisit",
   "fromStuck",
@@ -61,6 +64,7 @@ export const EPISODE_STATS = [
   // itself more, is not read as simply better.
   "deathsVsPast",
   "selfDamageVsPast",
+  "suicidesVsPast",
   // What the match is actually scored on — damage, kills and deaths, with no
   // ladder in it — averaged over the worms being trained only. The best
   // checkpoint is picked on this rather than on `reward`: with the ladder
@@ -79,12 +83,14 @@ const STAT_SOURCE = {
   selfDamage: "selfDamage",
   kills: "killed",
   deaths: "died",
+  suicides: "suicides",
   stuckSteps: "stuckSteps",
   cellsVisited: "cellsVisited",
   fromDamageDealt: "fromDamageDealt",
   fromDamageTaken: "fromDamageTaken",
   fromKill: "fromKill",
   fromDeath: "fromDeath",
+  fromSuicide: "fromSuicide",
   fromExplore: "fromExplore",
   fromRevisit: "fromRevisit",
   fromStuck: "fromStuck",
@@ -326,6 +332,7 @@ export class VecWormEnv {
       else if (field === "damageVsPast") this.stats[at + offset] = versus("damageDealt");
       else if (field === "deathsVsPast") this.stats[at + offset] = versus("died");
       else if (field === "selfDamageVsPast") this.stats[at + offset] = versus("selfDamage");
+      else if (field === "suicidesVsPast") this.stats[at + offset] = versus("suicides");
       else if (field === "combat") {
         this.stats[at + offset] =
           meanOf(0, split, "fromDamageDealt") +

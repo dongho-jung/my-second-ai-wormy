@@ -199,7 +199,9 @@ export class WormEnv {
     this.weaponPool = !barred.size
       ? chosen
       : (chosen ?? this.engine.settings.O.map((_, id) => id)).filter((id) => !barred.has(id));
-    this.weights = settings.weights;
+    // A partial set of weights overrides the defaults rather than replacing
+    // them, so a trainer can turn one knob without restating the rest.
+    this.weights = { ...DEFAULT_WEIGHTS, ...(settings.weights ?? {}) };
     this.observationKinds = settings.observations;
     this.makeGoal = settings.goals;
     this.reward = settings.reward ?? combatReward;

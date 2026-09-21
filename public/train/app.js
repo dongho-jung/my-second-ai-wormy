@@ -13,11 +13,13 @@ const SERIES = {
   damageVsPast: { label: "damage dealt: learners minus their past selves", good: "up" },
   deathsVsPast: { label: "deaths: learners minus their past selves", good: "down" },
   selfDamageVsPast: { label: "damage to itself: learners minus their past selves", good: "down" },
+  suicidesVsPast: { label: "deaths by its own hand: learners minus their past selves", good: "down" },
   combat: { label: "combat score: damage, kills, deaths, learners only", good: "up" },
   bestCombat: { label: "best combat score kept", good: "up" },
   bestReward: { label: "best reward kept", good: "up" },
   kills: { label: "kills", good: "up" },
   deaths: { label: "deaths", good: "down" },
+  suicides: { label: "deaths by its own hand", good: "down" },
   damageDealt: { label: "damage dealt", good: "up" },
   damageTaken: { label: "damage taken", good: "down" },
   selfDamage: { label: "damage to itself", good: "down" },
@@ -38,6 +40,7 @@ const SERIES = {
   fromDamageTaken: { label: "reward from: damage taken", good: "up" },
   fromKill: { label: "reward from: kills", good: "up" },
   fromDeath: { label: "reward from: deaths", good: "up" },
+  fromSuicide: { label: "reward from: dying by its own hand", good: "up" },
   fromExplore: { label: "reward from: new ground", good: "up" },
   fromRevisit: { label: "reward from: doubling back", good: "up" },
   fromStuck: { label: "reward from: being stuck", good: "up" },
@@ -621,14 +624,14 @@ const GROUPS = [
   {
     title: "What it is being paid for",
     of: [
-      "shaping", "fromDamageDealt", "fromDamageTaken", "fromKill", "fromDeath",
+      "shaping", "fromDamageDealt", "fromDamageTaken", "fromKill", "fromDeath", "fromSuicide",
       "fromOnTarget", "fromAimedShot", "fromApproach", "fromExplore",
       "fromRevisit", "fromStuck", "fromGoal",
     ],
   },
   {
     title: "How the fights go",
-    of: ["damageDealt", "damageTaken", "selfDamage", "damageRatio", "stuckSteps", "cellsVisited"],
+    of: ["damageDealt", "damageTaken", "selfDamage", "suicides", "damageRatio", "stuckSteps", "cellsVisited"],
   },
   {
     title: "Is it still learning?",

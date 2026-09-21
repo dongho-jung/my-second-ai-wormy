@@ -33,6 +33,13 @@ export const DEFAULT_WEIGHTS = {
   damageTaken: 0.5 / 100,
   kill: 4,
   death: 2,
+  // On top of `death`, for a death nobody else caused: its own grenade, its
+  // own rocket, a fall. At the weights above a life traded for a kill nets
+  // +2, and in the first cluster run 44% of all deaths were self-inflicted —
+  // the arithmetic does not mind a worm that blows itself up on the way to
+  // one kill. Zero until an evaluation says what it should be: it is a knob
+  // for that experiment (`--suicide-cost`), not a setting anyone has measured.
+  suicide: 0,
   // Covering the map, as a share of it rather than a count of cells: the
   // community maps are up to twelve times the area of a stock one, and a flat
   // per-cell payment made wandering them worth more than any fight. Measured
@@ -104,6 +111,7 @@ export function emptyEvents(agents) {
     selfDamage: 0,
     killed: 0,
     died: 0,
+    suicides: 0,
   }));
 }
 
@@ -122,6 +130,7 @@ export function tallyDamage({ damage, kills }, agents, into = emptyEvents(agents
     events.selfDamage = 0;
     events.killed = 0;
     events.died = 0;
+    events.suicides = 0;
   }
   for (let at = 0; at < damage.length; at += 3) {
     const victim = damage[at];
@@ -136,8 +145,10 @@ export function tallyDamage({ damage, kills }, agents, into = emptyEvents(agents
   for (let at = 0; at < kills.length; at += 2) {
     const victim = kills[at];
     const killer = kills[at + 1];
-    // Blowing yourself up is a death, not a kill.
+    // Blowing yourself up is a death, not a kill — and it is counted apart, so
+    // a death that was nobody's kill can be charged for on its own.
     if (killer >= 0 && killer < agents && killer !== victim) into[killer].killed++;
+    else if (victim >= 0 && victim < agents) into[victim].suicides++;
   }
   return into;
 }
@@ -155,6 +166,7 @@ export function combatReward(events, progress, weights = DEFAULT_WEIGHTS, shapin
     fromDamageTaken: -events.damageTaken * weights.damageTaken,
     fromKill: events.killed * weights.kill,
     fromDeath: -events.died * weights.death,
+    fromSuicide: -((events.suicides ?? 0) * (weights.suicide ?? 0)) || 0,
     fromExplore: (progress.novel / (progress.cells ?? 1)) * weights.exploreMap,
     fromRevisit: -(progress.revisit / (progress.cells ?? 1)) * weights.revisitMap,
     fromStuck: progress.stuck ? -weights.stuck : 0,

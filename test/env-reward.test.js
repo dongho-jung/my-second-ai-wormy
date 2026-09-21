@@ -24,6 +24,7 @@ test("a hit is credited to whoever landed it, in a crowd", () => {
     selfDamage: 20,
     killed: 0,
     died: 0,
+    suicides: 0,
   });
   assert.deepEqual(events[1], {
     damageDealt: 0,
@@ -31,6 +32,7 @@ test("a hit is credited to whoever landed it, in a crowd", () => {
     selfDamage: 0,
     killed: 0,
     died: 0,
+    suicides: 0,
   });
   assert.equal(events[2].damageDealt, 10);
   assert.equal(events[2].killed, 1, "the kill goes to the one who landed the last hit");
@@ -43,6 +45,9 @@ test("blowing yourself up is a death and nobody's kill", () => {
   assert.equal(events[0].damageDealt, 0, "hurting yourself is not dealing damage");
   assert.equal(events[0].killed, 0);
   assert.equal(events[1].killed, 0, "and it is certainly not the other one's kill");
+  assert.equal(events[0].suicides, 1, "but it is counted, so it can be charged for");
+  const fell = tallyDamage({ damage: [], kills: [1, -1] }, 2);
+  assert.equal(fell[1].suicides, 1, "a death nobody caused is the same kind of death");
 });
 
 test("hits from outside the agent list are taken but credited to nobody", () => {
@@ -62,7 +67,18 @@ test("the buffers are reused, so a step never sees the last one's hits", () => {
     selfDamage: 0,
     killed: 0,
     died: 0,
+    suicides: 0,
   });
+});
+
+test("a death by its own hand can be charged on top, and is not by default", () => {
+  const events = { damageDealt: 0, damageTaken: 100, selfDamage: 100, killed: 0, died: 1, suicides: 1 };
+  const nothing = combatReward(events, { ...still, cells: 100 });
+  assert.equal(nothing.parts.fromSuicide, 0, "off unless a run asks for it");
+  const charged = combatReward(events, { ...still, cells: 100 }, { ...DEFAULT_WEIGHTS, suicide: 3 });
+  assert.equal(charged.parts.fromSuicide, -3);
+  assert.equal(charged.parts.fromDeath, -DEFAULT_WEIGHTS.death, "on top of the death, not instead of it");
+  assert.equal(charged.reward, nothing.reward - 3);
 });
 
 test("damage pays, being hurt costs, and a kill is worth more than either", () => {
