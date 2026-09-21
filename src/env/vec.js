@@ -45,6 +45,17 @@ export const EPISODE_STATS = [
   "fromAimedShot",
   "fromGoal",
   "shaping",
+  // The only figure that answers "is it getting better" rather than "is
+  // something happening".
+  //
+  // Everything above is averaged over every worm in the match, and when all of
+  // them are the same policy that average goes up whenever the three of them
+  // get more reckless together — which looks exactly like improving. These two
+  // are the worms being trained minus the older copies they are playing, on the
+  // same map, in the same match. Zero when nobody is an older copy, because
+  // then there is nothing to be better than.
+  "killsVsPast",
+  "damageVsPast",
   "seed",
 ];
 
@@ -96,7 +107,7 @@ export const DONE = {
 export class VecWormEnv {
   constructor(
     engine,
-    { envs = 8, levelPool = 16, levelFiles = [], seed = 1, ...options } = {},
+    { envs = 8, levelPool = 16, levelFiles = [], seed = 1, opponents = 0, ...options } = {},
   ) {
     if (!Number.isInteger(envs) || envs < 1) {
       throw new Error(`envs must be a whole number of at least 1, got ${envs}`);
@@ -147,6 +158,11 @@ export class VecWormEnv {
         }),
     );
     this.agents = this.envs[0].agents;
+    // How many worms at the end of each match are older copies of the policy
+    // rather than the one being trained. The trainer decides this and drives
+    // them; all this side needs is where they sit, so that "us" and "them" can
+    // be reported apart instead of averaged into one number.
+    this.opponents = Math.max(0, Math.min(this.agents - 1, Math.trunc(opponents)));
     this.spec = this.envs[0].spec;
     const slots = envs * this.agents;
     this.vectors = new Float32Array(slots * this.spec.vectorSize);
@@ -247,11 +263,26 @@ export class VecWormEnv {
     const totals = env.info().totals;
     const mean = (field) =>
       totals.reduce((sum, one) => sum + (one[field] ?? 0), 0) / totals.length;
+    // The trained worms are the front of the match and the older copies the
+    // back, which is how the trainer seats them.
+    const split = totals.length - this.opponents;
+    const meanOf = (from, to, field) => {
+      if (to <= from) return 0;
+      let sum = 0;
+      for (let one = from; one < to; one++) sum += totals[one][field] ?? 0;
+      return sum / (to - from);
+    };
+    const versus = (field) =>
+      this.opponents
+        ? meanOf(0, split, field) - meanOf(split, totals.length, field)
+        : 0;
     const at = index * EPISODE_STATS.length;
     for (const [offset, field] of EPISODE_STATS.entries()) {
       if (field === "steps") this.stats[at + offset] = env.episodeTicks / env.frameskip;
       else if (field === "shaping") this.stats[at + offset] = env.shaping;
       else if (field === "seed") this.stats[at + offset] = env.episodeSeed;
+      else if (field === "killsVsPast") this.stats[at + offset] = versus("killed");
+      else if (field === "damageVsPast") this.stats[at + offset] = versus("damageDealt");
       else this.stats[at + offset] = mean(STAT_SOURCE[field]);
     }
   }
@@ -276,6 +307,7 @@ export class VecWormEnv {
       statFields: EPISODE_STATS,
       // Spelled out on the wire so the other side cannot drift from it.
       doneCodes: DONE,
+      opponents: this.opponents,
       frameskip: this.envs[0].frameskip,
       episodeTicks: this.envs[0].episodeTicks,
       maps: this.levels.length,

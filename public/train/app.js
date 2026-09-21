@@ -167,6 +167,18 @@ function renderRunList() {
  * record, because not every record carries every field: a note carries none, and
  * a trainer may report some things once an episode and others once an hour.
  */
+/**
+ * Whether any worm in a match is an older copy of the policy.
+ *
+ * Without one there is nothing to measure improvement against: every figure is
+ * an average over worms that are all the same weights. The figure itself is
+ * written as zero rather than left out, so what the run recorded about itself
+ * is what to ask.
+ */
+function hasOpponents() {
+  return Number(run?.meta?.opponents ?? 0) > 0;
+}
+
 function latest(key, numeric = true) {
   for (let index = records.length - 1; index >= 0; index--) {
     const value = records[index][key];
@@ -251,6 +263,45 @@ const CHANGED = 0.08;
 
 const HEADLINES = [
   {
+    // First, because it is the only one that answers "is this working".
+    //
+    // Every other figure on this page is averaged over every worm in the
+    // match, and when they are all the same policy that average rises whenever
+    // the three of them get more reckless together. This is the worms being
+    // trained minus the older copies of themselves they are playing — same map,
+    // same match, same weapons. It can only go up by actually being better.
+    title: "Is it beating its past self?",
+    good: "up",
+    track: "killsVsPast",
+    read: () => (hasOpponents() ? latest("killsVsPast") : undefined),
+    show: (value) => (value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2)),
+    unit: () => {
+      const damage = latest("damageVsPast");
+      return Number.isFinite(damage)
+        ? `kills a match more than its past self, and ${damage >= 0 ? "+" : ""}${damage.toFixed(0)} damage`
+        : "kills a match more than its past self";
+    },
+    state: (value) => (value > 0.05 ? "good" : value < -0.05 ? "bad" : "flat"),
+    say: (move, value) => {
+      if (!hasOpponents()) {
+        return "Every worm is the same policy, so there is nothing here to be better than — the averages below rise whenever all of them get busier. Start a run with --opponents 0.34 to make this mean something.";
+      }
+      if (!Number.isFinite(value)) return "Waiting for the first episodes to finish.";
+      const standing =
+        value > 0.05
+          ? "Winning against the older copies it is playing."
+          : value < -0.05
+            ? "Losing to the older copies it is playing."
+            : "Level with the older copies it is playing.";
+      if (!move) return `${standing} Not enough episodes yet to say which way it is going.`;
+      return move.change > CHANGED
+        ? `${standing} Pulling further ahead than earlier in the run.`
+        : move.change < -CHANGED
+          ? `${standing} The gap has been closing.`
+          : `${standing} No change over the last stretch.`;
+    },
+  },
+  {
     title: "Is anyone playing?",
     // The one thing the run's own numbers cannot say. A room sits empty for
     // hours, and "no new frames" looks exactly like "the watcher fell over".
@@ -296,9 +347,10 @@ const HEADLINES = [
     show: (value) => value.toFixed(2),
     unit: () => {
       const dealt = latest("damageDealt");
+      const whose = hasOpponents() ? ", every worm averaged together" : "";
       return Number.isFinite(dealt)
-        ? `kills a match, dealing ${dealt.toFixed(0)} damage`
-        : "kills a match";
+        ? `kills a match, dealing ${dealt.toFixed(0)} damage${whose}`
+        : `kills a match${whose}`;
     },
     say: (move) =>
       !move
@@ -515,6 +567,71 @@ function chartFor(name) {
   return chart;
 }
 
+/**
+ * The charts, in groups, with only the first one open.
+ *
+ * Forty panels in one column is a page that answers "how is it going" for
+ * somebody who already knows which four of them matter. The headlines above do
+ * the reading; these are for when one of them says something surprising and you
+ * want to see the shape of it. So: the few that bear on whether this is working
+ * are open, and the rest are behind a heading you can click.
+ *
+ * Anything a run starts reporting that is not named here still appears, in the
+ * last group — nothing is hidden, only sorted.
+ */
+const GROUPS = [
+  {
+    title: "Is it getting better?",
+    open: true,
+    of: ["killsVsPast", "damageVsPast", "episodeReward", "bestReward", "meanReward", "kills", "deaths"],
+  },
+  {
+    title: "What it is being paid for",
+    of: [
+      "shaping", "fromDamageDealt", "fromDamageTaken", "fromKill", "fromDeath",
+      "fromOnTarget", "fromAimedShot", "fromApproach", "fromExplore",
+      "fromRevisit", "fromStuck", "fromGoal",
+    ],
+  },
+  {
+    title: "How the fights go",
+    of: ["damageDealt", "damageTaken", "selfDamage", "damageRatio", "stuckSteps", "cellsVisited"],
+  },
+  {
+    title: "Is it still learning?",
+    of: [
+      "entropy", "entropyShare", "entropyCoef", "approxKL", "explainedVariance",
+      "clipFraction", "policyLoss", "valueLoss", "learningRate",
+    ],
+  },
+  {
+    title: "Learning from recorded play",
+    of: ["demoAgreement", "demoFrames", "demoWeight", "bcLoss"],
+  },
+  {
+    title: "How fast it is going",
+    of: ["stepsPerSecond", "ticksPerSecond", "envShare", "rolloutShare", "episodeSteps", "episodes"],
+  },
+];
+
+const openGroups = new Map();
+
+function groupFor(title, open) {
+  let group = openGroups.get(title);
+  if (group) return group;
+  const box = document.createElement("details");
+  box.className = "group";
+  box.open = open;
+  const summary = document.createElement("summary");
+  summary.textContent = title;
+  const grid = document.createElement("div");
+  grid.className = "charts";
+  box.append(summary, grid);
+  group = { box, grid, summary };
+  openGroups.set(title, group);
+  return group;
+}
+
 function renderCharts() {
   const names = seriesNames();
   const board = element("charts");
@@ -522,7 +639,25 @@ function renderCharts() {
     board.replaceChildren(empty(run ? "Charts appear as records arrive." : ""));
     return;
   }
-  board.replaceChildren(...names.map((name) => chartFor(name).panel));
+  const left = new Set(names);
+  const boxes = [];
+  for (const { title, of, open } of GROUPS) {
+    const mine = of.filter((name) => left.has(name));
+    for (const name of mine) left.delete(name);
+    if (!mine.length) continue;
+    const group = groupFor(title, Boolean(open));
+    group.summary.textContent = `${title} · ${mine.length}`;
+    group.grid.replaceChildren(...mine.map((name) => chartFor(name).panel));
+    boxes.push(group.box);
+  }
+  if (left.size) {
+    const rest = [...left];
+    const group = groupFor("Everything else", false);
+    group.summary.textContent = `Everything else · ${rest.length}`;
+    group.grid.replaceChildren(...rest.map((name) => chartFor(name).panel));
+    boxes.push(group.box);
+  }
+  board.replaceChildren(...boxes);
   for (const name of names) drawChart(name);
 }
 

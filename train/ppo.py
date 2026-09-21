@@ -310,6 +310,13 @@ def main(argv=None):
     if args.observation_foes is not None:
         config["observationFoes"] = args.observation_foes
 
+    # How many worms at the back of each match are older copies. Worked out
+    # before the workers start, because they have to be told: otherwise every
+    # figure they report is averaged over both sides and the one number that
+    # says whether this is improving averages itself away.
+    frozen_per_match = min(args.agents - 1, int(round(args.agents * args.opponents)))
+    config["opponents"] = frozen_per_match
+
     if args.shaping_decay > 0:
         # `--total-steps` counts every worm's decision; the environment counts
         # only its own. One worm's share of the run is the whole thing divided
@@ -425,6 +432,11 @@ def main(argv=None):
             "lr": args.lr,
             "targetKL": args.target_kl,
             "bcCoef": args.bc_coef,
+            # The page needs to know whether any worm is an older copy: without
+            # one, none of its averages can say whether this is improving.
+            "opponents": frozen_per_match,
+            "poolSize": args.pool_size if frozen_per_match else 0,
+            "shapingDecay": args.shaping_decay,
             "gamma": args.gamma,
             "clip": args.clip,
             "entropy": args.entropy,
@@ -456,7 +468,6 @@ def main(argv=None):
     # Taken from the end of each match's block of worms, so worm 0 of every
     # match is always the one being trained and a match is never all opponents.
     per_match = layout.agents
-    frozen_per_match = min(per_match - 1, int(round(per_match * args.opponents)))
     is_opponent = torch.zeros(slots, dtype=torch.bool, device=device)
     if frozen_per_match > 0:
         for seat in range(per_match - frozen_per_match, per_match):

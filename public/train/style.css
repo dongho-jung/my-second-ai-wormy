@@ -293,3 +293,34 @@ select {
   color: var(--dim);
   text-align: center;
 }
+
+/* The chart groups.
+ *
+ * A page of forty panels in one column is a page nobody reads. Each heading is
+ * a summary you can click; the first is open because it is the one that answers
+ * whether this is working, and the rest wait until something makes them
+ * interesting. */
+.group {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  margin-bottom: 12px;
+}
+.group > summary {
+  cursor: pointer;
+  padding: 14px 18px;
+  font-weight: 600;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.group > summary::before {
+  content: "▸";
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.group[open] > summary::before { transform: rotate(90deg); }
+.group > summary::-webkit-details-marker { display: none; }
+.group > summary:hover { color: var(--accent); }
+.group > .charts { padding: 0 14px 14px; }
