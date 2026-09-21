@@ -17,6 +17,7 @@ import {
   encodePatchBytes,
   encodeVector,
   nearestProjectiles,
+  observationSpec,
   observe,
   patchCellOf,
   patchOriginOf,
@@ -342,4 +343,25 @@ test("the previous decision is written as the engine's own keys and messages", (
   const vector = encodeVector(viewFromSnapshot(state, terrain, { lastAction }));
   const block = Array.from(vector.subarray(VECTOR_OFFSETS.lastAction, VECTOR_OFFSETS.latency));
   assert.deepEqual(block, [0, 1, 0, 0, 1, 0, 0, 0, 1, 1, -1]);
+});
+
+test("each foe's slot says how the held weapon would have to be aimed to hit it", () => {
+  const view = liveView();
+  const worm = (x, y) => ({ alive: true, position: { x, y }, velocity: { x: 0, y: 0 }, health: 50 });
+  // One in the open, up and to the right; one beyond the full-height wall.
+  view.foes = [worm(36, 20), worm(50, 26)];
+  const spec = observationSpec({ ballistics: new Map([[7, { speed: 4, gravity: 0 }]]) });
+  const vector = encodeVector(view, null, spec);
+  const width = spec.layout.find(([name]) => name === "foes")[1] / spec.foeSlots;
+  assert.equal(width, 21, "nine of state, ten of weapon, two of the shot");
+  const slot = (index) => vector.subarray(spec.offsets.foes + index * width, spec.offsets.foes + (index + 1) * width);
+  // Aim is -0.25 rad; the open foe wants atan2(-6, 4). Signed, so the policy
+  // knows which way to turn.
+  assert.ok(Math.abs(slot(0)[19] - (Math.atan2(-6, 4) + 0.25)) < 1e-3, "how far to turn");
+  assert.equal(slot(0)[20], 1, "and the arc gets there");
+  assert.ok(Math.abs(slot(1)[19] - 0.25) < 1e-3, "the other is straight ahead");
+  assert.equal(slot(1)[20], 0, "but the wall is in the way");
+  // Without ballistics there is nothing to say, and the slot says nothing.
+  const blank = encodeVector(view);
+  assert.deepEqual([blank[VECTOR_OFFSETS.foes + 19], blank[VECTOR_OFFSETS.foes + 20]], [0, 0]);
 });

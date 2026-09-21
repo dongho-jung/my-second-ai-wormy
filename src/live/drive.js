@@ -87,6 +87,7 @@ const engine = await loadEngine(config.engine);
 const spec = observationSpec({
   foeSlots,
   weaponFeatures: engine.weaponFeatures,
+  ballistics: engine.ballistics,
   patchScale: config.patchScale ?? 2,
 });
 const log = createLogger({ level: config.verbose ? "debug" : "info", scope: "live" });

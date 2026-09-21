@@ -63,6 +63,18 @@ export const PROJECTILE_SLOTS = 3;
  */
 export const DEFAULT_FOE_SLOTS = 2;
 const FOE_FIELDS = 9;
+/**
+ * Two more per foe: the shot the held weapon would have to make to hit it.
+ * How far the aim is from that, signed, and whether the shot's own arc gets
+ * there. The policy has everything needed to work this out — positions, the
+ * weapon's speed and drop, the ground in between — and working it out is the
+ * hard part of aiming; the same arithmetic already pays the aim reward, so it
+ * is handed over rather than left to be rediscovered from reward alone.
+ */
+const FOE_AIM_FIELDS = 2;
+/** How far a shot solution is looked for, and how finely its arc is checked. */
+export const AIM_RANGE_PX = 450;
+const ARC_SAMPLES = 16;
 /** Health and weapon crates worth walking to. */
 export const PICKUP_SLOTS = 3;
 const PICKUP_FIELDS = 4;
@@ -142,6 +154,9 @@ export function observationSpec({
   projectileSlots = PROJECTILE_SLOTS,
   pickupSlots = PICKUP_SLOTS,
   weaponFeatures = null,
+  // What each weapon's shot does in flight, by id, for the shot solution in
+  // every foe's slot. Null leaves those fields at zero.
+  ballistics = null,
   patchScale = DEFAULT_PATCH_SCALE,
   // A second cut of the same ground, for a match in which two policies were
   // trained at different scales: each is shown the patch it learned on.
@@ -168,7 +183,7 @@ export function observationSpec({
     ["rope", 5], //           out, attached, where it is, how long
     // Each foe: alive, where, how far, which way, health, speed — and what it
     // is pointing at you, which decides whether to close or break off.
-    ["foes", foeSlots * (FOE_FIELDS + WEAPON_FEATURE_COUNT)],
+    ["foes", foeSlots * (FOE_FIELDS + WEAPON_FEATURE_COUNT + FOE_AIM_FIELDS)],
     // The nearest shots: where, where to, and how much they are going to hurt.
     ["projectiles", projectileSlots * (4 + SHOT_WEAPON_FIELDS)],
     ["pickups", pickupSlots * PICKUP_FIELDS], // health and weapon crates nearby
@@ -211,6 +226,7 @@ export function observationSpec({
     projectileSlots,
     pickupSlots,
     weaponFeatures,
+    ballistics,
     patch: patchGeometry(patchScale),
     patch2: patchScale2 ? patchGeometry(patchScale2) : null,
     layout,
@@ -379,7 +395,7 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
     if (!foe) {
       // The whole slot, weapon and all: skipping only the first half shifts
       // every field after the foes block by ten whenever somebody is dead.
-      at += FOE_FIELDS + WEAPON_FEATURE_COUNT;
+      at += FOE_FIELDS + WEAPON_FEATURE_COUNT + FOE_AIM_FIELDS;
       continue;
     }
     const dx = foe.position.x - x;
@@ -396,6 +412,9 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
     into[at++] = foe.velocity.x;
     into[at++] = foe.velocity.y;
     at = writeWeapon(into, at, spec, foe.weapons?.[foe.selectedWeapon]?.id);
+    const solution = shotSolution(view, foe, spec.ballistics);
+    into[at++] = solution ? solution.off : 0;
+    into[at++] = solution?.clear ? 1 : 0;
   }
 
   // Own shots are in here too: a worm's own explosion is most of the damage it
@@ -459,6 +478,48 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
   for (let slot = 0; slot < spec.foeSlots; slot++) into[at++] = held(foes[slot]);
 
   return into;
+}
+
+/**
+ * The shot the held weapon would have to make to hit `foe`.
+ *
+ * Nearly everything in this mod arcs, so the angle that hits somebody is not
+ * the angle that points at them: it is higher by however far the shot falls
+ * on the way. `off` is how far the current aim is from that angle, signed and
+ * wrapped, and `clear` says whether the arc itself gets there — an arc clears
+ * a low wall a straight line does not, and dives into a ceiling the line
+ * misses. Null when there is nothing to say: no foe, no ballistics for what
+ * is held, or the foe out of range.
+ */
+export function shotSolution(view, foe, ballistics, rangePx = AIM_RANGE_PX) {
+  const self = view.self;
+  if (!self?.alive || !foe?.alive || !ballistics) return null;
+  const dx = foe.position.x - self.position.x;
+  const dy = foe.position.y - self.position.y;
+  const range = Math.hypot(dx, dy);
+  if (range < 1 || range > rangePx) return null;
+  const shot = ballistics.get(self.weapons?.[self.selectedWeapon]?.id);
+  if (!shot) return null;
+  const flight = range / shot.speed;
+  const fall = 0.5 * shot.gravity * flight * flight;
+  const wanted = Math.atan2(dy - fall, dx);
+  const off = Math.atan2(
+    Math.sin(wanted - self.aimRadians),
+    Math.cos(wanted - self.aimRadians),
+  );
+  const vx = Math.cos(wanted) * shot.speed;
+  const vy = Math.sin(wanted) * shot.speed;
+  let clear = true;
+  for (let mark = 1; mark <= ARC_SAMPLES; mark++) {
+    const when = (flight * mark) / ARC_SAMPLES;
+    const px = Math.round(self.position.x + vx * when);
+    const py = Math.round(self.position.y + vy * when + 0.5 * shot.gravity * when * when);
+    if (solidAt(view.terrain, px, py)) {
+      clear = false;
+      break;
+    }
+  }
+  return { off, clear, range, wanted };
 }
 
 /**

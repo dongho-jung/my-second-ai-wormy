@@ -124,6 +124,7 @@ const engine = await loadEngine({ mod: values.mod });
 const spec = observationSpec({
   foeSlots: Number(values["observation-foes"]),
   weaponFeatures: engine.weaponFeatures,
+  ballistics: engine.ballistics,
   patchScale: Number(values["patch-scale"]),
 });
 
