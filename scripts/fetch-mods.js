@@ -7,6 +7,7 @@
 //
 //     npm run mods                 # every mod listed below
 //     npm run mods -- cs_rewormed  # just the one
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { MODS_DIR } from "../src/env/engine.js";
 
@@ -29,7 +30,14 @@ for (const name of wanted) {
   }
   const into = new URL(`${name}/`, MODS_DIR);
   await mkdir(into, { recursive: true });
+  let already = 0;
   for (const file of mod.files) {
+    // The mod is in the repository, and so is room-weapons.txt beside it, which
+    // is not the mod's to publish: it is what the watched room allows.
+    if (existsSync(new URL(file, into))) {
+      already++;
+      continue;
+    }
     const response = await fetch(`${mod.from}/${file}`);
     if (!response.ok) {
       // readme is a courtesy; the other two are the mod.
@@ -38,5 +46,8 @@ for (const name of wanted) {
     }
     await writeFile(new URL(file, into), Buffer.from(await response.arrayBuffer()));
   }
-  console.log(`${name} -> ${new URL(into).pathname}`);
+  console.log(
+    `${name} -> ${new URL(into).pathname}` +
+      (already ? ` (${already} already here)` : ""),
+  );
 }

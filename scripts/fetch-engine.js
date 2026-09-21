@@ -13,7 +13,7 @@
 // the bundle's SHA-256 is checked against the one `src/adapter-v20.js` carries.
 // A mismatch means the site has moved to another build, and the right answer is
 // to read the new one rather than to trust the old field mapping — so it fails.
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { CLIENT_SHA256 } from "../src/adapter-v20.js";
@@ -33,6 +33,22 @@ const into = new URL(process.argv[2] ? `${process.argv[2]}/` : DEFAULT_ENGINE_DI
 await mkdir(into, { recursive: true });
 
 for (const [name, path] of Object.entries(REMOTE)) {
+  const here = new URL(name, into);
+  // The engine is in the repository, so the usual answer is that it is already
+  // here. Check the bytes and move on: a build should not need webliero.com to
+  // be up, and should never quietly swap the bundle underneath a field mapping
+  // that was read off one exact build.
+  const have = await readFile(here).catch(() => null);
+  if (have) {
+    const sha256 = createHash("sha256").update(have).digest("hex");
+    if (name === ASSETS.bundle && sha256 !== CLIENT_SHA256) {
+      throw new Error(
+        `${name} here is ${sha256}, not the ${CLIENT_SHA256} this project reads.`,
+      );
+    }
+    console.log(`${name.padEnd(18)} ${have.length.toLocaleString().padStart(9)} bytes  ${sha256.slice(0, 12)}  (already here)`);
+    continue;
+  }
   const from = new URL(path, BASE);
   const response = await fetch(from);
   if (!response.ok) {

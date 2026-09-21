@@ -1,6 +1,10 @@
-# artifacts/ is fetched and built inside the image, never copied from here: a
-# laptop's venv is the wrong architecture and its runs are not this run's.
-artifacts/
+# The venv is built inside the image — a laptop's is the wrong architecture —
+# and a laptop's runs are not this run's. The game, the mod and the maps do
+# come from here: they are in the repository so a build needs no network.
+artifacts/*
+!artifacts/headless-sim
+!artifacts/mods
+!artifacts/maps
 node_modules/
 .git/
 .ai-memory

@@ -6,7 +6,7 @@
 //
 //     npm run maps                 # every pool below
 //     npm run maps -- dsds-cs      # just the one
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { MAPS_DIR } from "../src/env/engine.js";
 
 const PROJECT = "webliero%2Fwebliero-maps";
@@ -26,6 +26,15 @@ for (const pool of wanted) {
     process.exitCode = 1;
     continue;
   }
+  const into = new URL(`${pool}/`, MAPS_DIR);
+  // The maps are in the repository. When they are all here there is nothing to
+  // ask GitLab, so a build works with the network unplugged and always gets the
+  // maps the policy was trained on.
+  const already = (await readdir(into).catch(() => [])).filter(spec.keep);
+  if (already.length) {
+    console.log(`${pool}: ${already.length} maps already here -> ${new URL(into).pathname}`);
+    continue;
+  }
   const listing = await fetch(
     `https://gitlab.com/api/v4/projects/${PROJECT}/repository/tree` +
       `?path=${encodeURIComponent(spec.path)}&ref=master&per_page=500`,
@@ -34,7 +43,6 @@ for (const pool of wanted) {
   const names = (await listing.json())
     .filter((entry) => entry.type === "blob" && spec.keep(entry.name))
     .map((entry) => entry.name);
-  const into = new URL(`${pool}/`, MAPS_DIR);
   await mkdir(into, { recursive: true });
   let written = 0;
   for (const name of names) {

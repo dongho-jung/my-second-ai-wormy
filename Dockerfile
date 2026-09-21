@@ -42,12 +42,14 @@ COPY public ./public
 
 # The game, its mod and the maps the room plays, fetched at build time.
 #
-# None of this is in the repository — `artifacts/` is gitignored, and the game
-# bundle belongs to WebLiero rather than to this project. It is downloaded here
-# from https://www.webliero.com/v/20/ , and `fetch-engine` checks the bundle's
-# SHA-256 against the one `src/adapter-v20.js` was read off. A build against a
-# moved version fails rather than training on a field mapping that no longer
-# means what it says.
+# The game, the mod and the maps come in with the repository, so this build
+# needs no network and every build gets the same bytes. The three scripts find
+# them already here and check rather than download: `fetch-engine` reads the
+# bundle's SHA-256 against the one `src/adapter-v20.js` was read off, so a
+# bundle that has moved fails the build rather than training on a field mapping
+# that no longer means what it says. They still fetch whatever is missing, which
+# is how a new map pool or mod arrives.
+COPY artifacts ./artifacts
 RUN node scripts/fetch-engine.js \
  && node scripts/fetch-mods.js \
  && node scripts/fetch-maps.js

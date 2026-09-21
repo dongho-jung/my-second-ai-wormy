@@ -1,6 +1,12 @@
 node_modules/
 .ai-memory
-artifacts/
+# Runs, demos and the venv are made here and are nobody else's business.
+artifacts/*
+# The game, the mod and the maps are. They are kept so a build needs no
+# network and every build gets the same bytes.
+!artifacts/headless-sim/
+!artifacts/mods/
+!artifacts/maps/
 *.log
 
 # Python leaves these beside the trainer; they are not source.
