@@ -106,13 +106,14 @@ async function refreshDriven() {
   }
 }
 
+// Not this tab's own name. A spectator has no worm, so it is skipped anyway by
+// the only test that matters; excluding the name as well meant that the moment
+// somebody sat down and played under it — which is the whole point of having a
+// name in this room — their play was thrown away. The watcher stays out of the
+// game because the driver leaves its tab alone, not because of a list.
 const excluded = new Set(
-  [
-    // Whatever this tab is called. It is here to watch, and a recording of the
-    // watcher is a recording of somebody sitting still in the spectator seat.
-    values.nickname,
-    ...values.exclude.split(","),
-  ]
+  values.exclude
+    .split(",")
     .map((name) => name.trim())
     .filter(Boolean),
 );
