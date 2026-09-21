@@ -206,7 +206,8 @@ npm run train -- --help
 - The observation is **mixed**, as designed: state in a vector, the terrain
   through two convolutions — the worm's own view, and the whole level small —
   and a **GRU** on top of the joined features, because a decision that takes
-  longer than one frame has to be carried. 1.59M parameters.
+  longer than one frame has to be carried. 1.86M parameters at two pixels a
+  patch cell, 1.25M at four.
 - **A rollout is 128 decisions and the gradient runs through 32 of them.** The
   two are not the same knob. How far a reward can be from the action that
   earned it and still reach it is the first; how far back the memory learns is
