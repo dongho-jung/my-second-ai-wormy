@@ -97,7 +97,11 @@ def main(argv=None):
     policy.load_state_dict(checkpoint["policy"])
     policy.eval()
 
+    # Whatever the policy actually learned in. The viewer adds only the things
+    # that are about watching — where to serve it, how fast to run — and
+    # overrides the rest only when asked on the command line.
     config = {
+        **(shape.get("world") or {}),
         "agents": agents,
         # The vector keeps the width the policy was trained on however many
         # worms are actually playing, so a three-way policy can be watched in a
@@ -106,21 +110,13 @@ def main(argv=None):
         "speed": args.speed,
         "port": args.port,
         "episodeTicks": args.episode_ticks or shape.get("episodeTicks", 3600),
-        "frameskip": shape.get("frameskip", 4),
-        "levelFiles": [
-            path for path in (args.levels or shape.get("levels") or []) if Path(path).exists()
-        ],
-        # Whatever the policy was trained under. Watching it play a different
-        # game than it learned is worse than not watching it at all: the
-        # weapons it never trained with are the ones it handles worst.
-        "weaponPool": shape.get("weaponPool", "all"),
-        "banStart": shape.get("banStart", []),
-        "rules": (
-            {"bonusDrops": 3, "bonusSpawnTicks": 480, "weaponChangeDelay": 45}
-            if shape.get("rules", "room") == "room"
-            else {"bonusDrops": 0}
-        ),
     }
+    if args.levels:
+        config["levelFiles"] = [path for path in args.levels if Path(path).exists()]
+    config["levelFiles"] = [
+        path for path in (config.get("levelFiles") or []) if Path(path).exists()
+    ]
+
     if args.seed is not None:
         config["seed"] = args.seed
 

@@ -276,16 +276,19 @@ def main(argv=None):
     ).to(device)
     # What a checkpoint has to carry for a viewer or a resume to rebuild it.
     shape_of = {
-        # So a viewer replays the maps the policy knows rather than inventing
-        # its own — the difference between watching it play and watching it
-        # flounder somewhere it has never been.
-        "levels": stock_levels(args),
-        # The same for the weapons and the bonus rules: a viewer that spawns
-        # worms holding the weapons training bars is showing a game nobody is
-        # learning, and BARRACUDA turning up every round is how that looked.
-        "weaponPool": args.weapons,
-        "banStart": [name.strip() for name in args.ban_start.split(",") if name.strip()],
-        "rules": args.rules,
+        # The whole world this policy learned in, verbatim — not a hand-picked
+        # few of its settings. Every time one was added to training it had to be
+        # threaded to the viewer by hand as well, and each time one was missed
+        # the viewer quietly showed a different game: generated dirt instead of
+        # the room's maps, weapons the policy was never given, five random guns
+        # where training hands out one, no input delay where training has three
+        # hundred milliseconds of it. Carrying the lot ends that class of bug.
+        "world": {
+            key: value
+            for key, value in config.items()
+            # Not the seed, or how many copies were run in parallel.
+            if key not in ("seed", "envs")
+        },
         "usePatch": use_patch,
         "patchShape": list(patch_shape),
         "weaponIdsAt": layout.weapon_ids_at,
