@@ -205,7 +205,7 @@ def main(argv=None):
     def evaluate(index):
         policy.eval()
         with torch.no_grad():
-            logits, _ = policy(
+            logits, _, _ = policy(
                 to(vectors, index, torch.float32),
                 to(patches, index, torch.uint8) if meta["patchCells"] else None,
                 to(maps, index, torch.uint8) if meta["mapCells"] else None,
@@ -225,7 +225,7 @@ def main(argv=None):
         batches = 0
         for start in range(0, len(train), args.batch):
             index = train[start : start + args.batch]
-            logits, _ = policy(
+            logits, _, _ = policy(
                 to(vectors, index, torch.float32),
                 to(patches, index, torch.uint8) if meta["patchCells"] else None,
                 to(maps, index, torch.uint8) if meta["mapCells"] else None,

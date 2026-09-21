@@ -25,13 +25,15 @@ import {
   tallyDamage,
 } from "./reward.js";
 import { viewFromWorld } from "./view.js";
-import { reach } from "./terrain.js";
+import { solidAt } from "./terrain.js";
 
 /** How far a worm is paid for aiming at somebody, and how wide the cone is. */
 const AIM_RANGE_PX = 450;
 const AIM_CONE = Math.PI / 8;
 /** A step bigger than this was a respawn, not a walk. */
 const APPROACH_LIMIT_PX = 60;
+/** How many points along a shot's arc are checked against the terrain. */
+const ARC_SAMPLES = 16;
 
 // Stock Liero weapons that give a worm something to do at every range: shotgun,
 // rifle, bazooka, mine, crackler. Pass "random" instead to draw five per worm
@@ -309,12 +311,36 @@ export class WormEnv {
         ? was.range - range
         : 0;
     if (range < 1 || range > AIM_RANGE_PX) return { ...nothing, approach };
-    // How far off the aim is, as an angle, wrapped to [-PI, PI].
-    let off = Math.atan2(dy, dx) - self.aimRadians;
-    off = Math.atan2(Math.sin(off), Math.cos(off));
+
+    // The shot this weapon would actually have to make.
+    //
+    // Nearly everything here arcs, so the angle that hits somebody is not the
+    // angle that points at them: it is higher by however far the shot falls on
+    // the way. Paying for the straight line would have taught the wrong aim for
+    // thirty-seven of the forty-five weapons a worm starts with.
+    const held = self.weapons?.[self.selectedWeapon]?.id;
+    const shot = this.engine.ballistics?.get(held);
+    if (!shot) return { ...nothing, approach };
+    const flight = range / shot.speed;
+    const fall = 0.5 * shot.gravity * flight * flight;
+    const wanted = Math.atan2(dy - fall, dx);
+    let off = Math.atan2(
+      Math.sin(wanted - self.aimRadians),
+      Math.cos(wanted - self.aimRadians),
+    );
     if (Math.abs(off) > AIM_CONE) return { ...nothing, approach };
-    const blocked = reach(view.terrain, self.position.x, self.position.y, dx / range, dy / range, Math.round(range));
-    if (blocked !== null) return { ...nothing, approach };
+
+    // And the path that shot would take, followed, rather than the straight
+    // line between the two worms: an arc clears a low wall the line does not,
+    // and dives into a ceiling the line misses.
+    const vx = Math.cos(wanted) * shot.speed;
+    const vy = Math.sin(wanted) * shot.speed;
+    for (let mark = 1; mark <= ARC_SAMPLES; mark++) {
+      const when = (flight * mark) / ARC_SAMPLES;
+      const px = Math.round(self.position.x + vx * when);
+      const py = Math.round(self.position.y + vy * when + 0.5 * shot.gravity * when * when);
+      if (solidAt(view.terrain, px, py)) return { ...nothing, approach };
+    }
     // Closer to the middle of the cone is worth more, so there is a gradient to
     // climb rather than a cliff to find.
     const onTarget = 1 - Math.abs(off) / AIM_CONE;

@@ -173,6 +173,18 @@ class WormPolicy(nn.Module):
             nn.Linear(width, width),
             nn.ReLU(),
         )
+        # Memory.
+        #
+        # Everything above answers "what is in front of me this instant", and a
+        # policy built only of that can walk toward what it can see and shoot at
+        # what is in range. It cannot hold a decision: a worm that sets off for
+        # the crate on the far ledge has forgotten it by the next frame, a wall
+        # that has to be gone around the long way is a wall it walks into again
+        # and again, and a rope throw is the first third of a move whose other
+        # two thirds are never reached. Those are not things a bigger trunk
+        # fixes; they need something carried from one decision to the next.
+        self.memory = nn.GRUCell(width, width)
+        self.memory_width = width
         self.actor = nn.Linear(width, sum(self.head_sizes))
         self.critic = nn.Linear(width, 1)
         # Small last layers: a policy that starts out nearly uniform explores,
@@ -203,18 +215,45 @@ class WormPolicy(nn.Module):
             parts.append(self.map_conv(expand_map(maps, self.map_side)))
         return self.trunk(torch.cat(parts, dim=1) if len(parts) > 1 else parts[0])
 
-    def forward(self, vectors, patches=None, maps=None):
-        hidden = self.features(vectors, patches, maps)
-        return torch.split(self.actor(hidden), self.head_sizes, dim=1), self.critic(hidden).squeeze(-1)
+    def remember(self, seen, carried=None, restart=None):
+        """One step of memory: what is seen now, on top of what was carried.
 
-    def act(self, vectors, patches=None, maps=None, heads=None, want_entropy=True):
-        """Sample (or score) one action per head, and value the state.
+        `restart` is 1 where an episode has just begun, and clears what was
+        carried for that worm alone — a new match must not start out believing
+        it is halfway through the last one.
+        """
+        if carried is None:
+            carried = seen.new_zeros(seen.shape[0], self.memory_width)
+        elif restart is not None:
+            carried = carried * (1.0 - restart.to(carried.dtype).view(-1, 1))
+        return self.memory(seen, carried)
+
+    def forward(self, vectors, patches=None, maps=None, carried=None, restart=None):
+        seen = self.features(vectors, patches, maps)
+        kept = self.remember(seen, carried, restart)
+        return (
+            torch.split(self.actor(kept), self.head_sizes, dim=1),
+            self.critic(kept).squeeze(-1),
+            kept,
+        )
+
+    def act(
+        self,
+        vectors,
+        patches=None,
+        maps=None,
+        heads=None,
+        want_entropy=True,
+        carried=None,
+        restart=None,
+    ):
+        """Sample (or score) one action per head, value the state, and remember.
 
         Collecting a rollout does not need the entropy, and seven distributions'
         worth of it is seven more kernels per step on a batch small enough that
         the launch is most of the cost.
         """
-        logits, value = self(vectors, patches, maps)
+        logits, value, kept = self(vectors, patches, maps, carried, restart)
         distributions = [Categorical(logits=head) for head in logits]
         if heads is None:
             heads = torch.stack([one.sample() for one in distributions], dim=1)
@@ -227,4 +266,4 @@ class WormPolicy(nn.Module):
             if want_entropy
             else None
         )
-        return heads, log_prob, entropy, value
+        return heads, log_prob, entropy, value, kept

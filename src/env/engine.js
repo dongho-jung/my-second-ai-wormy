@@ -588,6 +588,23 @@ export class Engine {
     this.mod = mod;
     this.weaponFeatures = profiles.features;
     this.weaponsMeasured = profiles.measured;
+    /**
+     * What each weapon's shot actually does, by id: how fast it leaves, and
+     * the gravity it falls under, worked out from the measured drop over the
+     * measured range. Most weapons in this mod arc — thirty-seven of the forty
+     * five a worm starts with — so "point at them and fire" is the wrong shot
+     * for nearly all of them, and anything reasoning about aim needs this.
+     */
+    this.ballistics = new Map(
+      (profiles.weapons ?? []).map((weapon) => {
+        const speed = Math.max(0.01, weapon.speed ?? 0);
+        const range = Math.max(1, weapon.rangePx ?? 1);
+        return [
+          weapon.id,
+          { speed, gravity: (2 * (weapon.dropPx ?? 0) * speed * speed) / (range * range) },
+        ];
+      }),
+    );
   }
 
   /** What every weapon id in a loadout means. */

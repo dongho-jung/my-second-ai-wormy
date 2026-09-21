@@ -229,6 +229,9 @@ def main(argv=None):
         playing_step = int(checkpoint.get("step", 0))
         anyone_alive = True
         looked_at = 0.0
+        # Carried from one decision to the next: without this the policy is
+        # handed a blank memory every frame and can hold nothing at all.
+        carried = None
         while True:
             frame = _read_frame(driver.stdout)
             vectors = torch.from_numpy(
@@ -272,10 +275,12 @@ def main(argv=None):
                         )
             with torch.no_grad():
                 if args.greedy:
-                    logits, _ = policy(vectors, patches, maps)
+                    logits, _, carried = policy(vectors, patches, maps, carried)
                     heads = torch.stack([head.argmax(dim=1) for head in logits], dim=1)
                 else:
-                    heads, _, _, _ = policy.act(vectors, patches, maps, want_entropy=False)
+                    heads, _, _, _, carried = policy.act(
+                        vectors, patches, maps, want_entropy=False, carried=carried
+                    )
             block = heads.to(torch.uint8).cpu().numpy().tobytes()
             driver.stdin.write(struct.pack("<I", heads_count * layout["agents"]) + block)
             driver.stdin.flush()

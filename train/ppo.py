@@ -394,6 +394,10 @@ def main(argv=None):
     vals = torch.zeros(args.steps, slots, device=device)
     rews = torch.zeros(args.steps, slots, device=device)
     dones = torch.zeros(args.steps, slots, device=device)
+    # What the policy was remembering when each step was decided, so the update
+    # can replay the rollout from the same state the rollout actually saw.
+    carried = torch.zeros(args.steps, slots, policy.memory_width, device=device)
+    memory = torch.zeros(slots, policy.memory_width, device=device)
 
     vectors, patches, maps, _, _, _ = pool.observations()
     next_v = torch.as_tensor(vectors, device=device)
@@ -484,9 +488,11 @@ def main(argv=None):
                 if use_map:
                     obs_m[step] = next_m
                 dones[step] = next_done
+                carried[step] = memory
                 with torch.no_grad():
-                    head, logp, _, value = policy.act(
-                        next_v, next_p, next_m, want_entropy=False
+                    head, logp, _, value, memory = policy.act(
+                        next_v, next_p, next_m, want_entropy=False,
+                        carried=memory, restart=next_done,
                     )
                 acts[step] = head
                 logps[step] = logp
@@ -514,7 +520,10 @@ def main(argv=None):
             rollout_seconds_only = time.perf_counter() - rollout_started
             # Generalised advantage estimation, back through the rollout.
             with torch.no_grad():
-                _, _, _, bootstrap = policy.act(next_v, next_p, next_m, want_entropy=False)
+                _, _, _, bootstrap, _ = policy.act(
+                    next_v, next_p, next_m, want_entropy=False,
+                    carried=memory, restart=next_done,
+                )
                 advantages = torch.zeros_like(rews)
                 running = torch.zeros(slots, device=device)
                 for step in reversed(range(args.steps)):
@@ -550,23 +559,44 @@ def main(argv=None):
             names = ("policy", "value", "entropy", "clipped", "kl", "bc", "bcAgree")
             running_losses = torch.zeros(len(names), device=device)
             passes = 0
+            # Whole worms, replayed in order, rather than a shuffle of single
+            # steps. A memory only means anything in sequence: scoring step 12
+            # of a match from a blank mind is scoring a different decision than
+            # the one that was made. So a minibatch is a handful of worms and
+            # every step they took, run through the memory the way it ran the
+            # first time.
+            lanes_per_batch = max(1, slots // args.minibatches)
             for _ in range(args.epochs):
-                order = torch.randperm(batch, device=device)
-                for start in range(0, batch, minibatch):
-                    take = order[start : start + minibatch]
-                    _, logp, entropy, value = policy.act(
-                        flat_v[take],
-                        flat_p[take] if use_patch else None,
-                        flat_m[take] if use_map else None,
-                        flat_a[take],
-                    )
-                    ratio = (logp - flat_logp[take]).exp()
-                    advantage = flat_adv[take]
+                order = torch.randperm(slots, device=device)
+                for start in range(0, slots, lanes_per_batch):
+                    lanes = order[start : start + lanes_per_batch]
+                    kept = carried[0][lanes]
+                    logp_steps, entropy_steps, value_steps = [], [], []
+                    for step in range(args.steps):
+                        _, lp, ent, val, kept = policy.act(
+                            obs_v[step][lanes],
+                            obs_p[step][lanes] if use_patch else None,
+                            obs_m[step][lanes] if use_map else None,
+                            acts[step][lanes],
+                            carried=kept,
+                            restart=dones[step][lanes],
+                        )
+                        logp_steps.append(lp)
+                        entropy_steps.append(ent)
+                        value_steps.append(val)
+                    logp = torch.cat(logp_steps)
+                    entropy = torch.cat(entropy_steps)
+                    value = torch.cat(value_steps)
+                    # Flattened the same way the steps were concatenated.
+                    take_logp = logps[:, lanes].reshape(-1)
+                    take_ret = returns[:, lanes].reshape(-1)
+                    ratio = (logp - take_logp).exp()
+                    advantage = advantages[:, lanes].reshape(-1)
                     advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
                     unclipped = ratio * advantage
                     clipped = ratio.clamp(1 - args.clip, 1 + args.clip) * advantage
                     policy_loss = -torch.min(unclipped, clipped).mean()
-                    value_loss = 0.5 * (value - flat_ret[take]).pow(2).mean()
+                    value_loss = 0.5 * (value - take_ret).pow(2).mean()
                     entropy_loss = entropy.mean()
                     # Agreeing with what a person did, alongside being paid
                     # for the outcome. The reward says what is good; the
@@ -579,7 +609,9 @@ def main(argv=None):
                             0, demo_batch["count"], (min(minibatch, demo_batch["count"]),),
                             device=device,
                         )
-                        shown_logits, _ = policy(
+                        # Single frames, each from a blank memory: a recording
+                        # is not a sequence this policy ever lived through.
+                        shown_logits, _, _ = policy(
                             demo_batch["vectors"][pick],
                             demo_batch["patches"][pick] if use_patch else None,
                             demo_batch["maps"][pick] if use_map else None,
@@ -622,7 +654,7 @@ def main(argv=None):
                                 # what happened, entropy climbing while the
                                 # bonus for it was being annealed away. This is
                                 # the standard non-negative estimator instead.
-                                ((ratio - 1) - (logp - flat_logp[take])).mean(),
+                                ((ratio - 1) - (logp - take_logp)).mean(),
                                 bc_loss.detach(),
                                 bc_agree,
                             )
