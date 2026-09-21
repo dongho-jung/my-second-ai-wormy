@@ -640,6 +640,11 @@ def main(argv=None):
         # at random is a low bar, but it is a fixed one, which is the point.
         past.append({k: v.detach().cpu().clone() for k, v in policy.state_dict().items()})
 
+    # Which generation each opponent seat is currently playing, by identity, so
+    # a seat whose weights change can have its memory cleared: a hidden state
+    # written by one network means nothing to another.
+    seated = [None] * len(frozen)
+
     def draw_opponents():
         """A generation for each opponent seat, different ones where there are
         enough to go round."""
@@ -650,8 +655,12 @@ def main(argv=None):
             if len(past) >= len(frozen)
             else [random.choice(past) for _ in frozen]
         )
-        for network, weights in zip(frozen, spread):
+        for index, (network, weights) in enumerate(zip(frozen, spread)):
+            if seated[index] is weights:
+                continue
             network.load_state_dict(weights)
+            seated[index] = weights
+            memory[opponent_seats[index]] = 0.0
 
     started = time.perf_counter()
     # Every worm's observations still flatten together: they feed the running
