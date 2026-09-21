@@ -21,7 +21,7 @@ import { chromium } from "playwright";
 import { WebLieroObserver } from "../observer.js";
 import { createLogger } from "../log.js";
 import { joinRoom, spawned } from "../room.js";
-import { ACTION_HEADS } from "../env/actions.js";
+import { ACTION_HEADS, actionFromHeads } from "../env/actions.js";
 import { DEFAULT_MOD, loadEngine } from "../env/engine.js";
 import {
   MAP_SIZE,
@@ -468,7 +468,10 @@ async function sample() {
     encodeMap(view, mapTerrain, scratch.map);
     const sent = messages(player, player.worm);
     const heads = headsFromKeys(player.worm.keys, sent);
-    lastActions.set(player.id, { keys: player.worm.keys, rope: sent.rope, weapon: sent.weapon });
+    // Through the heads and back, so it is written the way a policy's own
+    // decision is: left and right held together is the engine's other way of
+    // digging, and a policy that digs says dig.
+    lastActions.set(player.id, actionFromHeads(heads));
     let at = 0;
     for (let index = 0; index < spec.vectorSize; index++) {
       record.writeFloatLE(scratch.vector[index], at);
