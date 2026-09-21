@@ -50,8 +50,12 @@ METRICS = [
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--left", required=True, help="a .pt, a run directory, or random / still")
-    parser.add_argument("--right", required=True, help="the other side, the same way")
+    parser.add_argument("--left", default=None, help="a .pt, a run directory, or random / still")
+    parser.add_argument("--right", default=None, help="the other side, the same way")
+    parser.add_argument("--history", default=None,
+                        help="a run directory: its best.pt against every policy-<steps>.pt the run "
+                             "kept (--keep-every), oldest first, so the run's progress is measured "
+                             "against its own earlier selves rather than read off the reward")
     parser.add_argument("--episodes", type=int, default=48, help="finished matches to count")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--envs", type=int, default=6, help="matches per worker, played at once")
@@ -165,13 +169,50 @@ def bootstrap(values, resamples=5000, seed=0):
 
 def main(argv=None):
     args = parse_args(argv)
+    torch.set_num_threads(args.torch_threads)
+    if args.history:
+        return history(args)
+    if not args.left or not args.right:
+        raise SystemExit("give --left and --right, or --history RUN_DIR")
+    return compare(args, args.left, args.right)
+
+
+def history(args):
+    """A run against its kept checkpoints, oldest first."""
+    run = Path(args.history)
+    kept = sorted(
+        run.glob("policy-*.pt"),
+        key=lambda path: int(path.stem.split("-", 1)[1]),
+    )
+    if not kept:
+        raise SystemExit(f"{run} kept no policy-<steps>.pt: train with --keep-every to have some")
+    final = checkpoint_path(str(run))
+    print(f"{final.name} of {run.name} against the {len(kept)} checkpoints the run kept", flush=True)
+    results = []
+    for path in kept:
+        print(f"\n--- against {path.name} ---", flush=True)
+        results.append((path, compare(args, str(final), str(path))))
+    print()
+    print(f"{'earlier self':>22s}{'kills, later - earlier':>26s}{'95% interval':>20s}{'pairs won':>12s}")
+    for path, result in results:
+        kills = result["metrics"]["kills"]
+        low, high = kills["interval"]
+        pairs = result["pairs"]
+        print(
+            f"{path.stem.split('-', 1)[1]:>22s}{kills['difference']:+26.2f}"
+            f"{'[' + f'{low:+.2f}, {high:+.2f}' + ']':>20s}"
+            f"{pairs['left_ahead']:>6d}/{result['episodes']:<5d}"
+        )
+    return results
+
+
+def compare(args, left_spec, right_spec):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    torch.set_num_threads(args.torch_threads)
     device = torch.device(args.device)
 
-    left = Side(args.left, device, args.greedy)
-    right = Side(args.right, device, args.greedy, head_sizes=left.head_sizes)
+    left = Side(left_spec, device, args.greedy)
+    right = Side(right_spec, device, args.greedy, head_sizes=left.head_sizes)
     if left.baseline and right.baseline:
         raise SystemExit("at least one side has to be a checkpoint: the match is built from its world")
     if left.baseline:

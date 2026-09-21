@@ -290,6 +290,7 @@ because a recording at the wrong scale is skipped, not used.
 npm run evaluate -- --left artifacts/runs/<a>/best.pt --right artifacts/runs/<b>/best.pt
 npm run evaluate -- --left artifacts/runs/<a> --right random      # against keys pressed at random
 npm run evaluate -- --left artifacts/runs/<a> --right still       # against a worm that does nothing
+npm run evaluate -- --history artifacts/runs/<a>                  # against its own earlier selves
 ```
 
 Nothing on the training page can compare two runs: every figure there is a
@@ -305,6 +306,11 @@ can be measured against the same thing early in a run and late in it. Both
 sides must have been trained on the same vector; two patch scales can share a
 match, because the world cuts the same ground twice and shows each side the
 cut it learned on.
+
+A run trained with `--keep-every N` also keeps a `policy-<steps>.pt` every N
+updates, and `--history` seats its best against each of them in turn: the
+progress of a run measured on the field, which the reward curve cannot give
+because the reward itself is what changes.
 
 ## Running it somewhere else
 

@@ -223,6 +223,11 @@ def parse_args(argv=None):
     where.add_argument("--resume", default=None,
                        help="a .pt to carry on from, so changing the layout does not throw away what it learned")
     where.add_argument("--save-every", type=int, default=20, help="updates between checkpoints")
+    where.add_argument("--keep-every", type=int, default=0,
+                       help="updates between checkpoints that are kept, as policy-<steps>.pt, rather "
+                            "than overwritten. best.pt and policy.pt say where a run is; these say "
+                            "where it has been, so `npm run evaluate` can seat a run against its "
+                            "own earlier selves. About 5MB each. 0 keeps none")
     where.add_argument("--torch-threads", type=int, default=2,
                        help="more than a couple is slower here, and the cores are wanted by the workers")
     return parser.parse_args(argv)
@@ -500,6 +505,7 @@ def main(argv=None):
             "entropyFinal": args.entropy_final,
             "resumedFrom": resumed_from,
             "resumedAt": resumed_at,
+            "keepEvery": args.keep_every,
         },
     )
     print(f"run {run.id} -> {run.path}", flush=True)
@@ -1063,6 +1069,8 @@ def main(argv=None):
                     run.record(step=total_steps, bestCombat=best_combat)
             if updates % args.save_every == 0:
                 save(policy, layout, shape_of, total_steps, run.path / "policy.pt")
+            if args.keep_every and updates % args.keep_every == 0:
+                save(policy, layout, shape_of, total_steps, run.path / f"policy-{total_steps}.pt")
     except KeyboardInterrupt:
         run.note("stopped by hand")
         run.close(status="stopped", steps=total_steps)
