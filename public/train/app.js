@@ -445,7 +445,15 @@ const HEADLINES = [
       return self + dealt > 0 ? self / (self + dealt) : 0;
     },
     show: percent,
-    unit: () => "of the damage it causes lands on itself",
+    unit: () => {
+      const own = latest("suicides");
+      const deaths = latest("deaths");
+      // How many of its deaths were nobody else's doing: the number the
+      // share of damage above turns into.
+      return Number.isFinite(own) && Number.isFinite(deaths) && deaths > 0
+        ? `of the damage it causes lands on itself; ${percent(own / deaths)} of its deaths are its own doing`
+        : "of the damage it causes lands on itself";
+    },
     say: (move, value) => {
       const state =
         value > 0.45
