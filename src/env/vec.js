@@ -170,6 +170,8 @@ export class VecWormEnv {
     this.maps = new Uint8Array(slots * MAP_SIZE);
     this.rewards = new Float32Array(slots);
     this.dones = new Uint8Array(envs);
+    // Per worm, not per match: which ones came back from the dead this step.
+    this.restarts = new Uint8Array(slots);
     this.stats = new Float32Array(envs * EPISODE_STATS.length);
     this.wantsPatch = this.envs[0].observationKinds.includes("patchBytes");
     this.wantsMap = this.envs[0].observationKinds.includes("map");
@@ -210,6 +212,7 @@ export class VecWormEnv {
   reset() {
     this.rewards.fill(0);
     this.dones.fill(0);
+    this.restarts.fill(0);
     this.stats.fill(0);
     for (const env of this.envs) env.reset();
     return this;
@@ -226,6 +229,7 @@ export class VecWormEnv {
       throw new Error(`expected ${expected} head choices, got ${heads.length}`);
     }
     this.dones.fill(DONE.ongoing);
+    this.restarts.fill(0);
     for (let index = 0; index < this.count; index++) {
       const env = this.envs[index];
       // A world that ended last call starts over now rather than stepping. Its
@@ -247,6 +251,7 @@ export class VecWormEnv {
       const out = env.step(this.actions);
       for (let agent = 0; agent < this.agents; agent++) {
         this.rewards[index * this.agents + agent] = out.rewards[agent];
+        this.restarts[index * this.agents + agent] = out.respawned[agent] ? 1 : 0;
       }
       if (out.truncated) {
         // Written while the totals are still this episode's; the reset that

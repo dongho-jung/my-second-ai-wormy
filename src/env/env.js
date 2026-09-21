@@ -549,7 +549,11 @@ export class WormEnv {
     }
     const killed = this.events.some((events) => events.killed > 0);
 
-    let respawned = false;
+    // Which worms came back this step. Reported alongside the observation,
+    // because whoever is learning from a memory of where it was has to be told
+    // that where it was no longer holds: it is somewhere else, with full health
+    // and a fresh loadout, and the last few seconds were somebody else's life.
+    const respawned = new Array(this.agents).fill(false);
     if (this.respawn) {
       for (const [agent, worm] of this.worms.entries()) {
         if (worm.u) continue;
@@ -557,9 +561,9 @@ export class WormEnv {
         // It is somewhere else entirely now; nothing about where it was holds.
         this.progress[agent].restart();
         this.alive[agent] = true;
-        respawned = true;
+        respawned[agent] = true;
       }
-      if (respawned) this.refreshViews();
+      if (respawned.some(Boolean)) this.refreshViews();
     }
     this.encodeObservations();
     // Nothing in this environment ever really ends. Worms respawn, the world
@@ -579,6 +583,7 @@ export class WormEnv {
       done: this.done,
       // The episode is over and this is its final state; `reset()` has not run.
       truncated: this.done,
+      respawned,
       info: { ...this.info(), events: this.events, parts },
     };
   }

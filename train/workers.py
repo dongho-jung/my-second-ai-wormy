@@ -143,7 +143,12 @@ class WorkerPool:
             self._frames[index] = _read_frame(process.stdout)
 
     def observations(self):
-        """Vectors, patches, maps, rewards, dones and finished-episode stats."""
+        """Vectors, patches, maps, rewards, dones, restarts and finished-episode stats.
+
+        `restarts` is one byte per worm: it came back from the dead on this
+        step, so a policy's memory of it should start over even though the
+        match, and its `dones` byte, carry on.
+        """
         layout = self.layout
         vectors = np.empty((self.slots, layout.vector_size), dtype=np.float32)
         patches = (
@@ -158,6 +163,7 @@ class WorkerPool:
         )
         rewards = np.empty(self.slots, dtype=np.float32)
         dones = np.empty(self.envs, dtype=np.uint8)
+        restarts = np.empty(self.slots, dtype=np.uint8)
         stats = np.empty((self.envs, len(layout.stat_fields)), dtype=np.float32)
         per_worker = layout.envs * layout.agents
         for index, frame in enumerate(self._frames):
@@ -184,8 +190,9 @@ class WorkerPool:
                 maps[agents] = take("maps", np.uint8).reshape(per_worker, -1)
             rewards[agents] = take("rewards", np.float32)
             dones[envs] = take("dones", np.uint8)
+            restarts[agents] = take("restarts", np.uint8)
             stats[envs] = take("stats", np.float32).reshape(layout.envs, -1)
-        return vectors, patches, maps, rewards, dones, stats
+        return vectors, patches, maps, rewards, dones, restarts, stats
 
     def step(self, heads: np.ndarray):
         """`heads` is (slots, head_count) of uint8 choices."""

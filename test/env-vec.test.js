@@ -194,7 +194,8 @@ test("the worker speaks the frames it says it will", { skip }, async () => {
     assert.equal(layout.agents, 3);
     assert.equal(layout.patchCells, PATCH_CELLS);
     assert.equal(layout.actionBytes, 2 * 3 * HEADS);
-    assert.deepEqual(layout.order, ["vectors", "patches", "maps", "rewards", "dones", "stats"]);
+    assert.deepEqual(layout.order, ["vectors", "patches", "maps", "rewards", "dones", "restarts",
+      "stats"]);
     assert.ok(layout.mapCells > 0, "the whole level goes on the wire too");
     // The layout is the only thing a reader needs: every block's size is in it.
     const total = Object.values(layout.bytes).reduce((sum, one) => sum + one, 0);

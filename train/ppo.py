@@ -520,16 +520,21 @@ def main(argv=None):
     vals = torch.zeros(args.steps, slots, device=device)
     rews = torch.zeros(args.steps, slots, device=device)
     dones = torch.zeros(args.steps, slots, device=device)
+    # Where a worm came back from the dead, one per slot rather than one per
+    # match. A match's memory restarts with the match; a worm's restarts here
+    # too, because what it remembers is a life that is over.
+    resets = torch.zeros(args.steps, slots, device=device)
     # What the policy was remembering when each step was decided, so the update
     # can replay the rollout from the same state the rollout actually saw.
     carried = torch.zeros(args.steps, slots, policy.memory_width, device=device)
     memory = torch.zeros(slots, policy.memory_width, device=device)
 
-    vectors, patches, maps, _, _, _ = pool.observations()
+    vectors, patches, maps, _, _, _, _ = pool.observations()
     next_v = torch.as_tensor(vectors, device=device)
     next_p = torch.as_tensor(patches, device=device) if use_patch else None
     next_m = torch.as_tensor(maps, device=device) if use_map else None
     next_done = torch.zeros(slots, device=device)
+    next_reset = torch.zeros(slots, device=device)
 
     # Recorded play, folded into every update rather than left in a file
     # nothing reads. Re-read as the run goes, so somebody playing right now is
@@ -658,8 +663,9 @@ def main(argv=None):
                 if use_map:
                     obs_m[step] = next_m
                 dones[step] = next_done
+                resets[step] = next_reset
                 carried[step] = memory
-                restart = (next_done == DONE_FIRST).float()
+                restart = ((next_done == DONE_FIRST) | (next_reset > 0)).float()
                 with torch.no_grad():
                     before = memory
                     head, logp, _, value, memory = policy.act(
@@ -687,7 +693,7 @@ def main(argv=None):
 
                 at = time.perf_counter()
                 pool.step(head.to(torch.uint8).cpu().numpy())
-                vectors, patches, maps, rewards, env_done, stats = pool.observations()
+                vectors, patches, maps, rewards, env_done, restarts, stats = pool.observations()
                 env_seconds += time.perf_counter() - at
 
                 rews[step] = torch.as_tensor(rewards, device=device)
@@ -700,6 +706,7 @@ def main(argv=None):
                 next_done = torch.as_tensor(
                     np.repeat(env_done, layout.agents).astype(np.float32), device=device
                 )
+                next_reset = torch.as_tensor(restarts.astype(np.float32), device=device)
                 # Only where an episode just closed. The stats block is not
                 # cleared between steps, so counting the restart byte as well
                 # would file every episode twice, the second time from a buffer
@@ -714,7 +721,8 @@ def main(argv=None):
             with torch.no_grad():
                 _, _, _, bootstrap, _ = policy.act(
                     next_v, next_p, next_m, want_entropy=False,
-                    carried=memory, restart=(next_done == DONE_FIRST).float(),
+                    carried=memory,
+                    restart=((next_done == DONE_FIRST) | (next_reset > 0)).float(),
                 )
                 advantages = torch.zeros_like(rews)
                 running = torch.zeros(slots, device=device)
@@ -797,7 +805,9 @@ def main(argv=None):
                                 obs_m[step][lanes] if use_map else None,
                                 acts[step][lanes],
                                 carried=kept,
-                                restart=(dones[step][lanes] == DONE_FIRST).to(kept.dtype),
+                                restart=(
+                                    (dones[step][lanes] == DONE_FIRST) | (resets[step][lanes] > 0)
+                                ).to(kept.dtype),
                             )
                             logp_steps.append(lp)
                             entropy_steps.append(ent)

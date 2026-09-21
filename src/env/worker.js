@@ -64,13 +64,16 @@ const layout = {
   engineSha256: engine.sha256,
   mod: engine.settings.name,
   statFields: EPISODE_STATS,
-  order: ["vectors", "patches", "maps", "rewards", "dones", "stats"],
+  order: ["vectors", "patches", "maps", "rewards", "dones", "restarts", "stats"],
   bytes: {
     vectors: vec.vectors.byteLength,
     patches: vec.patches.byteLength,
     maps: vec.maps.byteLength,
     rewards: vec.rewards.byteLength,
     dones: vec.dones.byteLength,
+    // One byte per worm: it came back from the dead this step, so whatever a
+    // policy remembered about its last life is about somebody else now.
+    restarts: vec.restarts.byteLength,
     stats: vec.stats.byteLength,
   },
   actionBytes: vec.count * vec.agents * HEADS,
@@ -78,7 +81,7 @@ const layout = {
 writeFrame(Buffer.from(JSON.stringify(layout), "utf8"));
 
 const send = () =>
-  writeFrame(vec.vectors, vec.patches, vec.maps, vec.rewards, vec.dones, vec.stats);
+  writeFrame(vec.vectors, vec.patches, vec.maps, vec.rewards, vec.dones, vec.restarts, vec.stats);
 
 // The first observation is the one the trainer decides on before any action.
 send();
