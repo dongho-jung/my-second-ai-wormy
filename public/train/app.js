@@ -112,6 +112,8 @@ const duration = (seconds) => {
 let runs = [];
 let run = null;
 let records = [];
+// What `npm run evaluate --history` wrote for the selected run, if anything.
+let history = null;
 let selected = new URL(location.href).searchParams.get("run") ?? null;
 let stream = null;
 const charts = new Map();
@@ -127,6 +129,7 @@ function subscribe() {
     runs = JSON.parse(event.data).runs;
     if (!selected) selected = runs[0]?.id ?? null;
     run = runs.find((one) => one.id === selected) ?? run;
+    if (history?.id !== selected) void loadHistory(selected);
     render();
   });
   stream.addEventListener("run", (event) => {
@@ -883,6 +886,52 @@ function movingAverage(values, span) {
   return out;
 }
 
+/**
+ * The run's progress measured on the field, when it has been measured.
+ *
+ * `npm run evaluate --history RUN` seats the run's best against each
+ * checkpoint it kept and writes history.json beside them; the monitor serves
+ * it and this shows it. Nothing here runs the evaluation — the page reads.
+ */
+async function loadHistory(id) {
+  if (!id) return;
+  try {
+    const response = await fetch(`runs/${encodeURIComponent(id)}/history`);
+    const found = response.ok ? await response.json() : { against: [] };
+    history = { id, against: found.against ?? [] };
+  } catch {
+    history = { id, against: [] };
+  }
+  renderHistory();
+}
+
+function renderHistory() {
+  const rows = history?.id === selected ? history.against : [];
+  element("history-panel").hidden = rows.length === 0;
+  element("history").replaceChildren(
+    ...rows.map((entry) => {
+      const kills = entry.metrics?.kills ?? {};
+      const [low, high] = kills.interval ?? [NaN, NaN];
+      const row = document.createElement("tr");
+      const cell = (text, tone) => {
+        const td = document.createElement("td");
+        td.textContent = text;
+        if (tone) td.className = tone;
+        row.append(td);
+      };
+      cell(count(entry.steps));
+      const diff = Number(kills.difference);
+      cell(
+        Number.isFinite(diff) ? `${diff >= 0 ? "+" : ""}${diff.toFixed(2)}` : "—",
+        low > 0 ? "up" : high < 0 ? "down" : undefined,
+      );
+      cell(Number.isFinite(low) ? `[${low >= 0 ? "+" : ""}${low.toFixed(2)}, ${high >= 0 ? "+" : ""}${high.toFixed(2)}]` : "—");
+      cell(entry.pairs ? `${entry.pairs.left_ahead} of ${entry.episodes}` : "—");
+      return row;
+    }),
+  );
+}
+
 function renderNotes() {
   const notes = records.filter((record) => typeof record.note === "string");
   element("notes-panel").hidden = notes.length === 0;
@@ -973,6 +1022,9 @@ element("runs").addEventListener("change", (event) => {
   selected = event.target.value;
   records = [];
   charts.clear();
+  history = null;
+  renderHistory();
+  void loadHistory(selected);
   subscribe();
 });
 

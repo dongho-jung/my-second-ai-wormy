@@ -324,3 +324,34 @@ select {
 .group > summary::-webkit-details-marker { display: none; }
 .group > summary:hover { color: var(--accent); }
 .group > .charts { padding: 0 14px 14px; }
+
+.history {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.history th,
+.history td {
+  padding: 3px 8px;
+  text-align: right;
+  border-top: 1px solid var(--edge);
+}
+
+.history th {
+  color: var(--dim);
+  font-weight: normal;
+}
+
+.history th:first-child,
+.history td:first-child {
+  text-align: left;
+}
+
+.history td.up {
+  color: var(--live);
+}
+
+.history td.down {
+  color: var(--bad);
+}

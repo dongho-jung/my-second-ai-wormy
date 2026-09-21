@@ -318,7 +318,8 @@ cut it learned on.
 A run trained with `--keep-every N` also keeps a `policy-<steps>.pt` every N
 updates, and `--history` seats its best against each of them in turn: the
 progress of a run measured on the field, which the reward curve cannot give
-because the reward itself is what changes.
+because the reward itself is what changes. The table it writes beside the
+checkpoints shows up on the training page as **Progress on the field**.
 
 ## Running it somewhere else
 

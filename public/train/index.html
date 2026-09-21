@@ -26,6 +26,19 @@
 
     <main class="charts" id="charts"></main>
 
+    <section class="panel" id="history-panel" hidden>
+      <div class="panel-head">
+        <h2>Progress on the field</h2>
+        <span class="dim">best.pt against the checkpoints this run kept, from npm run evaluate --history</span>
+      </div>
+      <table class="history">
+        <thead>
+          <tr><th>earlier self, steps</th><th>kills a match, later − earlier</th><th>95% interval</th><th>pairs won</th></tr>
+        </thead>
+        <tbody id="history"></tbody>
+      </table>
+    </section>
+
     <section class="panel" id="notes-panel" hidden>
       <div class="panel-head"><h2>Log</h2></div>
       <ul class="notes" id="notes"></ul>

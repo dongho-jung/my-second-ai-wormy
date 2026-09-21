@@ -11,7 +11,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   DEFAULT_RUNS_DIR,
   describeRun,
@@ -334,6 +334,19 @@ export async function createMonitorServer({
         }
       }
       if (url.pathname === "/runs") return json(200, { runs: await listRuns(dir) });
+      // What `npm run evaluate --history` wrote beside the run's checkpoints,
+      // when it has been run: the run's best against its own earlier selves,
+      // measured on the field rather than read off the reward.
+      const history = url.pathname.match(/^\/runs\/([A-Za-z0-9_.-]+)\/history$/);
+      if (history && !history[1].startsWith(".")) {
+        const base = dir instanceof URL ? dir : pathToFileURL(`${String(dir).replace(/\/?$/, "/")}`);
+        try {
+          const raw = await readFile(new URL(`${history[1]}/history.json`, base), "utf8");
+          return json(200, JSON.parse(raw));
+        } catch {
+          return json(404, { error: "No history for this run" });
+        }
+      }
       if (url.pathname.startsWith("/runs/")) {
         const id = decodeURIComponent(url.pathname.slice("/runs/".length));
         // The id becomes a path segment, so anything that could climb out of the
