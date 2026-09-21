@@ -232,6 +232,7 @@ def main(argv=None):
         # Carried from one decision to the next: without this the policy is
         # handed a blank memory every frame and can hold nothing at all.
         carried = None
+        last_refusal = None
         while True:
             frame = _read_frame(driver.stdout)
             vectors = torch.from_numpy(
@@ -264,15 +265,29 @@ def main(argv=None):
                     looked_at = now
                     found = best_available(runs, wants)
                     if found and found[2] > playing_step:
-                        path, carried, playing_step = found
-                        policy.load_state_dict(carried["policy"])
-                        policy.eval()
-                        print(
-                            f"now playing {path.parent.name} ({playing_step:,} steps"
-                            + (f", reward {carried['reward']:.2f}" if "reward" in carried else "")
-                            + ")",
-                            flush=True,
-                        )
+                        # Not `carried`: that name holds the policy's memory in
+                        # this loop, and reusing it here put a checkpoint dict
+                        # where the memory goes on the very next decision.
+                        path, newer, step_of = found
+                        try:
+                            policy.load_state_dict(newer["policy"])
+                        except RuntimeError as error:
+                            # A checkpoint from a different network shape. Keep
+                            # playing what we have rather than falling over.
+                            log_once = f"cannot use {path.parent.name}: {error}"
+                            if log_once != last_refusal:
+                                print(log_once.split("\n")[0], flush=True)
+                                last_refusal = log_once
+                        else:
+                            playing_step = step_of
+                            policy.eval()
+                            carried = None  # a different policy, a fresh memory
+                            print(
+                                f"now playing {path.parent.name} ({playing_step:,} steps"
+                                + (f", reward {newer['reward']:.2f}" if "reward" in newer else "")
+                                + ")",
+                                flush=True,
+                            )
             with torch.no_grad():
                 if args.greedy:
                     logits, _, carried = policy(vectors, patches, maps, carried)
