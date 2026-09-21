@@ -295,10 +295,12 @@ npm run evaluate -- --left artifacts/runs/<a> --right still       # against a wo
 Nothing on the training page can compare two runs: every figure there is a
 policy measured against itself or its own recent past, and a run that improves
 slowly and one that improves quickly can show the same **is it beating its past
-self**. This seats the two checkpoints in the same free-for-all, on the same
-maps, with the sides swapped every other match, and reports kills, deaths,
-damage dealt and damage to itself for each side with a bootstrap interval on
-the difference. `random` and `still` are two bars that never move, so a policy
+self**. This seats the two checkpoints in the same free-for-all and plays
+every map once each way — two pools of worlds on the same seeds, the sides
+swapped between them, so a seat effect and the map's own swing drop out of the
+difference — and reports kills, deaths, damage dealt, damage to itself and
+deaths of its own doing for each side, with a bootstrap interval on the
+difference. `random` and `still` are two bars that never move, so a policy
 can be measured against the same thing early in a run and late in it. Both
 sides must have been trained on the same observation; two patch scales cannot
 yet share a match.

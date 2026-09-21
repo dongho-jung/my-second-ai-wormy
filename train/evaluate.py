@@ -113,12 +113,14 @@ class Side:
     def baseline(self) -> bool:
         return self.policy is None
 
-    def start(self, slots: int, device):
+    def start(self, pools: int, slots: int, device):
         if self.policy is not None:
-            self.memory = torch.zeros(slots, self.policy.memory_width, device=device)
+            self.memory = [
+                torch.zeros(slots, self.policy.memory_width, device=device) for _ in range(pools)
+            ]
 
-    def act(self, index, vectors, patches, maps, restart):
-        """Heads for the slots in `index`, remembering only for those slots."""
+    def act(self, pool, index, vectors, patches, maps, restart):
+        """Heads for the slots in `index` of one pool, remembering only for those slots."""
         count = len(index)
         if self.name == "still":
             return torch.zeros(count, len(self.head_sizes), dtype=torch.long)
@@ -127,7 +129,7 @@ class Side:
                 [torch.randint(0, size, (count,)) for size in self.head_sizes], dim=1
             )
         with torch.no_grad():
-            carried = self.memory[index]
+            carried = self.memory[pool][index]
             take = lambda block: block[index] if block is not None else None
             if self.greedy:
                 logits, _, kept = self.policy(
@@ -139,7 +141,7 @@ class Side:
                     take(vectors), take(patches), take(maps),
                     want_entropy=False, carried=carried, restart=restart[index],
                 )
-            self.memory[index] = kept
+            self.memory[pool][index] = kept
         return heads
 
 
@@ -186,9 +188,12 @@ def main(argv=None):
     agents = args.agents or trained_agents
     if agents < 2:
         raise SystemExit("a comparison needs at least two worms in a match")
-    # The back seats of every match are one side, the front seats the other,
-    # and which side that is alternates from match to match, so a seat effect —
-    # spawn order, worm colour — cancels instead of accumulating.
+    # The back seats of every match are one side, the front seats the other.
+    # Two pools of worlds play the same seeds — the same maps, spawns, loadouts
+    # and delays, in the same order — with the sides swapped between them, so
+    # every map is played once each way and the pair is one sample: a seat
+    # effect cancels, and the map's own swing (a cramped map is a bloodbath
+    # for everybody) drops out of the difference instead of widening it.
     back = agents // 2
     front = agents - back
 
@@ -204,6 +209,7 @@ def main(argv=None):
         # No ladder: what is counted is what the game scores, and the reward
         # terms are not read anyway.
         "shapingFullAt": 0,
+        "decisionsDone": 0,
         "opponents": back,
         "levelPool": args.maps,
         "levelFiles": stock_levels(args),
@@ -211,104 +217,123 @@ def main(argv=None):
     if args.episode_ticks:
         config["episodeTicks"] = args.episode_ticks
 
-    pool = WorkerPool(args.workers, config)
-    layout = pool.layout
+    pools = [WorkerPool(args.workers, config) for _ in range(2)]
+    layout = pools[0].layout
     if layout.vector_size != shape["vectorSize"] or layout.head_sizes != list(shape["headSizes"]):
-        pool.close()
+        for pool in pools:
+            pool.close()
         raise SystemExit(
             f"the checkpoint wants a vector of {shape['vectorSize']} with heads {shape['headSizes']} "
             f"and the match gives {layout.vector_size} with heads {layout.head_sizes}"
         )
-    slots = pool.slots
+    slots = pools[0].slots
     per_match = layout.agents
-    matches = pool.envs
+    matches = pools[0].envs
     use_patch = bool(shape.get("usePatch", True)) and layout.patch_cells > 0
     use_map = bool(shape.get("useMap", False)) and layout.map_cells > 0
     at = {name: index for index, name in enumerate(layout.stat_fields)}
     DONE_FIRST = layout.done_codes["first"]
     DONE_LAST = layout.done_codes["last"]
 
-    # Who sits where. Even matches: left in front. Odd matches: right in front.
-    left_slots, right_slots, left_in_front = [], [], []
-    for match in range(matches):
-        base = match * per_match
-        front_slots = list(range(base, base + front))
-        back_slots = list(range(base + front, base + per_match))
-        if match % 2 == 0:
-            left_slots += front_slots
-            right_slots += back_slots
-            left_in_front.append(True)
-        else:
-            left_slots += back_slots
-            right_slots += front_slots
-            left_in_front.append(False)
-    left_index = torch.tensor(left_slots, dtype=torch.long)
-    right_index = torch.tensor(right_slots, dtype=torch.long)
-    left.start(slots, device)
-    right.start(slots, device)
+    # Pool 0 seats the left side in front, pool 1 seats it behind.
+    front_slots = [slot for match in range(matches) for slot in range(match * per_match, match * per_match + front)]
+    back_slots = [slot for match in range(matches) for slot in range(match * per_match + front, (match + 1) * per_match)]
+    seating = [
+        {"left": torch.tensor(front_slots), "right": torch.tensor(back_slots), "left_front": True},
+        {"left": torch.tensor(back_slots), "right": torch.tensor(front_slots), "left_front": False},
+    ]
+    for side in (left, right):
+        side.start(2, slots, device)
 
     print(
         f"{left.name} (left) against {right.name} (right): {agents} worms a match, "
-        f"{front} in front and {back} behind, sides swapped every other match, "
-        f"{matches} matches at once on {layout.maps} maps"
+        f"{front} in front and {back} behind, every map played once each way, "
+        f"2 x {matches} matches at once on {layout.maps} maps"
         + (", greedy" if args.greedy else ""),
         flush=True,
     )
 
-    vectors, patches, maps, _, _, _, _ = pool.observations()
-    next_v = torch.as_tensor(vectors, device=device)
-    next_p = torch.as_tensor(patches, device=device) if use_patch else None
-    next_m = torch.as_tensor(maps, device=device) if use_map else None
-    next_done = torch.zeros(slots, device=device)
-    next_reset = torch.zeros(slots, device=device)
+    class Stream:
+        """One pool's latest observation, as tensors."""
 
-    # Per finished episode, per metric: the left side's mean and the right's.
+        def __init__(self, pool):
+            self.pool = pool
+            vectors, patches, maps, _, _, _, _ = pool.observations()
+            self.v = torch.as_tensor(vectors, device=device)
+            self.p = torch.as_tensor(patches, device=device) if use_patch else None
+            self.m = torch.as_tensor(maps, device=device) if use_map else None
+            self.done = torch.zeros(slots, device=device)
+            self.reset = torch.zeros(slots, device=device)
+            self.heads = torch.zeros(slots, len(layout.head_sizes), dtype=torch.long)
+
+        def step(self, index):
+            restart = ((self.done == DONE_FIRST) | (self.reset > 0)).float()
+            seats = seating[index]
+            self.heads[seats["left"]] = left.act(index, seats["left"], self.v, self.p, self.m, restart)
+            self.heads[seats["right"]] = right.act(index, seats["right"], self.v, self.p, self.m, restart)
+            self.pool.step(self.heads.to(torch.uint8).numpy())
+            vectors, patches, maps, _, env_done, restarts, stats = self.pool.observations()
+            self.v = torch.as_tensor(vectors, device=device)
+            if use_patch:
+                self.p = torch.as_tensor(patches, device=device)
+            if use_map:
+                self.m = torch.as_tensor(maps, device=device)
+            self.done = torch.as_tensor(np.repeat(env_done, per_match).astype(np.float32), device=device)
+            self.reset = torch.as_tensor(restarts.astype(np.float32), device=device)
+            return env_done, stats
+
+    streams = [Stream(pool) for pool in pools]
+
+    def sides_of(row, left_front):
+        """A stats row's all-worm mean and front-minus-back difference, as the
+        left side's mean and the right side's."""
+        out = {}
+        n_left = front if left_front else back
+        n_right = per_match - n_left
+        sign = 1.0 if left_front else -1.0
+        for label, mean_field, versus_field in METRICS:
+            mean = float(row[at[mean_field]])
+            diff = sign * float(row[at[versus_field]])
+            out[label] = (mean + n_right * diff / per_match, mean - n_left * diff / per_match)
+        return out
+
+    # Per finished pair of episodes, per metric: the left side's mean and the
+    # right's, each averaged over the two seatings.
     rows = {label: {"left": [], "right": []} for label, _, _ in METRICS}
     finished = 0
     started = time.perf_counter()
     steps = 0
-    heads = torch.zeros(slots, len(layout.head_sizes), dtype=torch.long)
     try:
         while finished < args.episodes:
-            restart = ((next_done == DONE_FIRST) | (next_reset > 0)).float()
-            heads[left_index] = left.act(left_index, next_v, next_p, next_m, restart)
-            heads[right_index] = right.act(right_index, next_v, next_p, next_m, restart)
-            pool.step(heads.to(torch.uint8).numpy())
-            vectors, patches, maps, _, env_done, restarts, stats = pool.observations()
-            next_v = torch.as_tensor(vectors, device=device)
-            if use_patch:
-                next_p = torch.as_tensor(patches, device=device)
-            if use_map:
-                next_m = torch.as_tensor(maps, device=device)
-            next_done = torch.as_tensor(np.repeat(env_done, per_match).astype(np.float32), device=device)
-            next_reset = torch.as_tensor(restarts.astype(np.float32), device=device)
+            outcomes = [stream.step(index) for index, stream in enumerate(streams)]
             steps += 1
-            for match in np.nonzero(env_done == DONE_LAST)[0]:
+            closed = [np.nonzero(done == DONE_LAST)[0] for done, _ in outcomes]
+            if not np.array_equal(closed[0], closed[1]):
+                raise RuntimeError(
+                    "the two pools have drifted apart: an episode closed in one and not the "
+                    f"other at step {steps} ({closed[0].tolist()} against {closed[1].tolist()})"
+                )
+            for match in closed[0]:
                 if finished >= args.episodes:
                     break
-                row = stats[match]
-                n_left = front if left_in_front[match] else back
-                n_right = per_match - n_left
-                sign = 1.0 if left_in_front[match] else -1.0
-                for label, mean_field, versus_field in METRICS:
-                    mean = float(row[at[mean_field]])
-                    # front minus back, turned into left minus right, then the
-                    # two sides recovered from the mean and the difference.
-                    diff = sign * float(row[at[versus_field]])
-                    rows[label]["left"].append(mean + n_right * diff / per_match)
-                    rows[label]["right"].append(mean - n_left * diff / per_match)
+                once = sides_of(outcomes[0][1][match], seating[0]["left_front"])
+                twice = sides_of(outcomes[1][1][match], seating[1]["left_front"])
+                for label, _, _ in METRICS:
+                    rows[label]["left"].append((once[label][0] + twice[label][0]) / 2)
+                    rows[label]["right"].append((once[label][1] + twice[label][1]) / 2)
                 finished += 1
                 if finished % 8 == 0 or finished == args.episodes:
                     kills_left = np.mean(rows["kills"]["left"])
                     kills_right = np.mean(rows["kills"]["right"])
                     print(
-                        f"{finished:4d}/{args.episodes} episodes | kills a match "
+                        f"{finished:4d}/{args.episodes} paired episodes | kills a match "
                         f"left {kills_left:5.2f} right {kills_right:5.2f} | "
-                        f"{steps * slots / (time.perf_counter() - started):,.0f} steps/s",
+                        f"{steps * slots * 2 / (time.perf_counter() - started):,.0f} steps/s",
                         flush=True,
                     )
     finally:
-        pool.close()
+        for pool in pools:
+            pool.close()
 
     result = {
         "left": left.name,
@@ -318,6 +343,7 @@ def main(argv=None):
         "front": front,
         "back": back,
         "maps": layout.maps,
+        "paired": True,
         "greedy": args.greedy,
         "seed": args.seed,
         "metrics": {},
@@ -346,7 +372,7 @@ def main(argv=None):
     elif high < 0:
         verdict = f"{right.name} is ahead on kills"
     else:
-        verdict = "no difference on kills that these episodes can tell apart"
+        verdict = "no difference on kills that these paired episodes can tell apart"
     result["verdict"] = verdict
     print()
     print(verdict, flush=True)
