@@ -203,6 +203,17 @@ def history(args):
             f"{'[' + f'{low:+.2f}, {high:+.2f}' + ']':>20s}"
             f"{pairs['left_ahead']:>6d}/{result['episodes']:<5d}"
         )
+    # Kept beside the checkpoints it is about, so the measurement is not lost
+    # in a terminal: each entry is one comparison, oldest self first.
+    out = Path(args.json) if args.json else run / "history.json"
+    out.write_text(json.dumps(
+        {"final": final.name, "against": [
+            {"checkpoint": path.name, "steps": int(path.stem.split("-", 1)[1]), **result}
+            for path, result in results
+        ]},
+        indent=2,
+    ) + "\n")
+    print(f"written to {out}")
     return results
 
 
