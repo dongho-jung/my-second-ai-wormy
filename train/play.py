@@ -93,8 +93,8 @@ def compatible(shape, wants) -> bool:
 def best_available(runs: Path, wants):
     """The most-trained checkpoint that still fits this room, and its shape.
 
-    `best.pt` is each run's own high-water mark, kept on smoothed episode
-    reward, so it is the one to take from whichever run is furthest along.
+    `best.pt` is each run's own high-water mark, kept on the learners' smoothed
+    combat score, so it is the one to take from whichever run is furthest along.
     Reward cannot be compared across runs — the weights and the opponent both
     change — so "furthest along" is decided on steps, among the checkpoints
     that match the observation. Matching is what stops a run from before an

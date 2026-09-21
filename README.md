@@ -220,11 +220,24 @@ npm run train -- --help
   manages a tenth of that per worm. What a run costs is a property of the node
   it lands on, so start one, read `stepsPerSecond` off the training page, and
   divide.
+- **The mod's weapons have to be measured first.** `npm run weapons` fires every
+  weapon in a controlled world and writes `artifacts/weapons.<mod>.json`: how
+  fast a shot goes, how far it drops, what it does to a target and to whoever
+  fired it. That file is where the policy's weapon features and the aim reward's
+  ballistics come from. Without it the engine has neither — 72 fields of the
+  vector stay zero and the aim rewards pay nothing — and every chart still looks
+  healthy, which is how the first cluster run spent two and a half hours blind.
+  So the trainer now refuses to start without it, the file is committed, and the
+  image build copies it in. If the mod changes, the engine refuses the stale
+  file too; measure again.
 - PyTorch lives in `artifacts/.venv` (gitignored). `npm run train` says how to
   make it if it is not there.
 
 Checkpoints and metrics land together in `artifacts/runs/<id>/`. The best policy
-so far is kept separately from the latest one, because self-play wanders.
+so far is kept separately from the latest one, because self-play wanders. "Best"
+is the learners' combat score — damage, kills and deaths, with none of the ladder
+in it — because the ladder fades over a run, and on the total reward a later,
+better policy reads lower than an earlier one.
 
 ## Watching a policy play
 
@@ -257,18 +270,20 @@ docker build -t wormy .
 docker run --rm wormy node scripts/train.js --total-steps 50000
 ```
 
-**`artifacts/` is not in the repository and not in the build context.** The
-game, its mod and the maps the room plays are fetched during the build, from
-the game's own versioned path and from the community pools, and the bundle's
-SHA-256 is checked against the one `src/adapter-v20.js` was read off. A build
-against a moved version fails rather than training on a field mapping that no
-longer means what it says. The same fetch is a script now, so a fresh clone can
-do it too:
+**Most of `artifacts/` is not in the repository, and the build copies in only
+what is.** The game, its mod, the maps the room plays and the measured weapon
+profile are committed, so a build needs no network and every build gets the
+same bytes; runs, recordings and the venv are not. The three fetch scripts run
+during the build and check what is there — the bundle's SHA-256 against the one
+`src/adapter-v20.js` was read off, so a build against a moved version fails
+rather than training on a field mapping that no longer means what it says — and
+fetch whatever is missing. A fresh clone can run them too:
 
 ```bash
 npm run engine     # the four files the headless engine is
 npm run mods       # the game the room runs
 npm run maps       # the maps it runs them on
+npm run weapons    # measure the mod's weapons; training refuses to start without this
 ```
 
 `.github/workflows/image.yml` builds and pushes to `ghcr.io`. A published
