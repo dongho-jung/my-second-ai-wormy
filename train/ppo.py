@@ -594,8 +594,11 @@ def main(argv=None):
     finished = []          # episodes that ended since the last update
     # The last policy is not the best one: self-play wanders, and a run watched
     # afterwards should be the best it ever played, not wherever it happened to
-    # stop. Kept on a smoothed episode reward so one lucky batch cannot win it.
-    best_reward = None
+    # stop. Kept on a smoothed score so one lucky batch cannot win it — and the
+    # score is the learners' combat reward with no ladder in it, because the
+    # ladder fades over a run: on the total reward a later, better policy reads
+    # lower than an earlier one, and "best" freezes halfway through.
+    best_combat = None
     smoothed = None
     # An episode is longer than a rollout, so most updates end with none of them
     # finished. The last numbers stay on the line rather than reading as zero.
@@ -1015,17 +1018,17 @@ def main(argv=None):
                 f"stuck {latest.get('stuckSteps', 0):5.1f} | entropy {line['entropy']:.2f}",
                 flush=True,
             )
-            if "episodeReward" in line:
+            if "combat" in line:
                 smoothed = (
-                    line["episodeReward"]
+                    line["combat"]
                     if smoothed is None
-                    else 0.9 * smoothed + 0.1 * line["episodeReward"]
+                    else 0.9 * smoothed + 0.1 * line["combat"]
                 )
-                if best_reward is None or smoothed > best_reward:
-                    best_reward = smoothed
+                if best_combat is None or smoothed > best_combat:
+                    best_combat = smoothed
                     save(policy, layout, shape_of, total_steps, run.path / "best.pt",
-                         reward=best_reward)
-                    run.record(step=total_steps, bestReward=best_reward)
+                         combat=best_combat, reward=line.get("episodeReward"))
+                    run.record(step=total_steps, bestCombat=best_combat)
             if updates % args.save_every == 0:
                 save(policy, layout, shape_of, total_steps, run.path / "policy.pt")
     except KeyboardInterrupt:
@@ -1041,7 +1044,7 @@ def main(argv=None):
         status="done",
         steps=total_steps,
         updates=updates,
-        bestReward=best_reward,
+        bestCombat=best_combat,
     )
 
 

@@ -56,6 +56,12 @@ export const EPISODE_STATS = [
   // then there is nothing to be better than.
   "killsVsPast",
   "damageVsPast",
+  // What the match is actually scored on — damage, kills and deaths, with no
+  // ladder in it — averaged over the worms being trained only. The best
+  // checkpoint is picked on this rather than on `reward`: with the ladder
+  // fading over a run, the total reward of a later, better policy reads lower
+  // than an earlier one's, and "best" would freeze halfway through.
+  "combat",
   "seed",
 ];
 
@@ -313,6 +319,13 @@ export class VecWormEnv {
       else if (field === "seed") this.stats[at + offset] = env.episodeSeed;
       else if (field === "killsVsPast") this.stats[at + offset] = versus("killed");
       else if (field === "damageVsPast") this.stats[at + offset] = versus("damageDealt");
+      else if (field === "combat") {
+        this.stats[at + offset] =
+          meanOf(0, split, "fromDamageDealt") +
+          meanOf(0, split, "fromDamageTaken") +
+          meanOf(0, split, "fromKill") +
+          meanOf(0, split, "fromDeath");
+      }
       else this.stats[at + offset] = mean(STAT_SOURCE[field]);
     }
   }
