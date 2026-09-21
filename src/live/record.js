@@ -25,8 +25,6 @@ import { ACTION_HEADS } from "../env/actions.js";
 import { DEFAULT_MOD, loadEngine } from "../env/engine.js";
 import {
   MAP_SIZE,
-  PATCH_CELLS,
-  PATCH_SHAPE,
   encodeMap,
   encodeMapTerrain,
   observationSpec,
@@ -47,6 +45,8 @@ it needs. Stop it with Ctrl+C.
   --hz 15             samples a second; 15 is the rate the policy decides at
   --map-ms 2000       how often the whole level is re-read
   --observation-foes  size the vector for this many foes (default 2)
+  --patch-scale 2     pixels per patch cell. Match the run that will learn from
+                      this: a recording at the wrong scale is skipped, not used
   --out PATH          where the demonstration goes (default artifacts/demos)
   --exclude NAMES     comma-separated player names to ignore, e.g. the driven ones
   --idle-seconds 10   after this long with nobody playing, close the recording
@@ -65,6 +65,7 @@ const { values } = parseArgs({
     hz: { type: "string", default: "15" },
     "map-ms": { type: "string", default: "2000" },
     "observation-foes": { type: "string", default: "2" },
+    "patch-scale": { type: "string", default: "2" },
     out: { type: "string" },
     exclude: { type: "string", default: "" },
     "idle-seconds": { type: "string", default: "10" },
@@ -123,6 +124,7 @@ const engine = await loadEngine({ mod: values.mod });
 const spec = observationSpec({
   foeSlots: Number(values["observation-foes"]),
   weaponFeatures: engine.weaponFeatures,
+  patchScale: Number(values["patch-scale"]),
 });
 
 const browser = await chromium.connectOverCDP(`http://127.0.0.1:${values["cdp-port"]}`, {
@@ -213,7 +215,7 @@ const directory = new URL(
   values.out ? `file://${process.cwd()}/` : import.meta.url,
 );
 await mkdir(directory, { recursive: true });
-const RECORD_BYTES = spec.vectorSize * 4 + PATCH_CELLS + MAP_SIZE + ACTION_HEADS.length + 1;
+const RECORD_BYTES = spec.vectorSize * 4 + spec.patch.cells + MAP_SIZE + ACTION_HEADS.length + 1;
 /**
  * A frame sink that compresses as it writes.
  *
@@ -298,8 +300,8 @@ const describe = () =>
       startedAt: started.toISOString(),
       vectorSize: spec.vectorSize,
       foeSlots: spec.foeSlots,
-      patchCells: PATCH_CELLS,
-      patchShape: PATCH_SHAPE,
+      patchCells: spec.patch.cells,
+      patchShape: spec.patch.shape,
       mapCells: MAP_SIZE,
       heads: ACTION_HEADS.map(([name, choices]) => ({ name, choices: choices.length })),
       recordBytes: RECORD_BYTES,
@@ -323,7 +325,7 @@ console.log(
 
 const scratch = {
   vector: new Float32Array(spec.vectorSize),
-  patchBytes: new Uint8Array(PATCH_CELLS),
+  patchBytes: new Uint8Array(spec.patch.cells),
   map: new Uint8Array(MAP_SIZE),
 };
 const record = Buffer.alloc(RECORD_BYTES);
@@ -463,7 +465,7 @@ async function sample() {
       record.writeFloatLE(scratch.vector[index], at);
       at += 4;
     }
-    at += Buffer.from(scratch.patchBytes.buffer, scratch.patchBytes.byteOffset, PATCH_CELLS).copy(record, at);
+    at += Buffer.from(scratch.patchBytes.buffer, scratch.patchBytes.byteOffset, spec.patch.cells).copy(record, at);
     at += Buffer.from(scratch.map.buffer, scratch.map.byteOffset, MAP_SIZE).copy(record, at);
     for (const choice of heads) record.writeUInt8(choice, at++);
     record.writeUInt8(player.id & 0xff, at);
