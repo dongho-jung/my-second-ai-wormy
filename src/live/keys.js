@@ -178,7 +178,7 @@ export function pressesForAction({ rope = 0, weapon = 0 } = {}) {
 }
 
 /**
- * A held bitmask read back as the seven choices a policy emits.
+ * A held bitmask read back as the eight choices a policy emits.
  *
  * This is how a person's play becomes something to learn from: the game
  * replicates every player's input to everyone in the room, so what somebody
@@ -198,6 +198,10 @@ export function headsFromKeys(keys, { rope = 0, weapon = 0 } = {}) {
     keys & KEY_BITS.jump ? 1 : 0,
     both || keys & KEY_BITS.dig ? 1 : 0,
     rope > 0 ? 1 : rope < 0 ? 2 : 0,
+    // The rope's two length keys are the seventh head. Without it this was
+    // seven bytes written into an eight-byte slot: the recorded weapon choice
+    // landed in the rope-length column and the player id in the weapon column.
+    keys & KEY_BITS.ropeShorter ? 1 : keys & KEY_BITS.ropeLonger ? 2 : 0,
     weapon > 0 ? 1 : weapon < 0 ? 2 : 0,
   ]);
 }

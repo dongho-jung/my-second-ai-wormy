@@ -1,9 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ACTION_SIZES, KEYS, actionFromHeads } from "../src/env/actions.js";
-import { ACTIONS, bitsFromKeys, keysForBits, pressesForAction } from "../src/live/keys.js";
+import { ACTION_HEADS, ACTION_SIZES, KEYS, actionFromHeads } from "../src/env/actions.js";
+import {
+  ACTIONS,
+  bitsFromKeys,
+  headsFromKeys,
+  keysForBits,
+  pressesForAction,
+} from "../src/live/keys.js";
 
-/** Every action the policy's seven heads can produce. */
+/** Every action the policy's eight heads can produce. */
 function* everyAction() {
   const counters = new Array(ACTION_SIZES.length).fill(0);
   for (;;) {
@@ -96,4 +102,17 @@ test("the bindings cover every action a policy can ask for", async () => {
   const broken = { ...BINDINGS };
   delete broken.KeyC;
   assert.deepEqual(missingBindings(broken), ["Dig"]);
+});
+
+test("a person's keys read back as every one of the policy's heads", () => {
+  // The recording is the policy's own action space, or it teaches nothing:
+  // one head short and the weapon choice lands in the rope-length column.
+  for (const action of everyAction()) {
+    const heads = headsFromKeys(action.keys, action);
+    assert.equal(heads.length, ACTION_HEADS.length);
+    assert.deepEqual(actionFromHeads(heads), action);
+  }
+  assert.equal(headsFromKeys(KEYS.ropeShorter)[6], 1, "shorten is the seventh head");
+  assert.equal(headsFromKeys(KEYS.ropeLonger)[6], 2);
+  assert.equal(headsFromKeys(KEYS.left | KEYS.right)[4], 1, "both is dig, not a contradiction");
 });
