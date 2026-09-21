@@ -955,7 +955,12 @@ def main(argv=None):
             latest.update({key: value for key, value in line.items() if key in SHOWN})
             print(
                 f"update {updates:4d} | {total_steps:>10,} steps | "
-                f"{line['stepsPerSecond']:>7,.0f}/s | reward "
+                f"{line['stepsPerSecond']:>7,.0f}/s | "
+                # Where the update's time went, so a slow run can be read
+                # straight from the log instead of guessed at.
+                f"sim {line['envShare']:>3.0%} act "
+                f"{line['rolloutShare'] - line['envShare']:>3.0%} learn "
+                f"{1 - line['rolloutShare']:>3.0%} | reward "
                 f"{latest.get('episodeReward', float('nan')):7.3f} | "
                 f"k/d {latest.get('kills', 0):.2f}/{latest.get('deaths', 0):.2f} | "
                 f"dealt {latest.get('damageDealt', 0):6.1f} self {latest.get('selfDamage', 0):6.1f} | "
