@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import struct
 import subprocess
 import sys
@@ -52,6 +53,12 @@ def parse_args(argv=None):
                         help="worms in the match; the number it was trained with by default")
     parser.add_argument("--speed", type=float, default=1.0, help="1 is the speed the game runs at")
     parser.add_argument("--port", type=int, default=8769)
+    parser.add_argument("--host", default=os.environ.get("WORMY_HOST", "127.0.0.1"),
+                        help="what the viewer binds. Loopback by default; 0.0.0.0 in a container")
+    parser.add_argument("--public-origin", default=os.environ.get("WORMY_PUBLIC_ORIGIN", ""),
+                        help="where a browser actually reaches it, when that is not where it bound")
+    parser.add_argument("--base-path", default=os.environ.get("WORMY_VIEWER_BASE_PATH", ""),
+                        help="a path it is mounted under, such as /ai-worm/watch")
     parser.add_argument("--levels", nargs="*", default=None,
                         help="map files to play on; by default the ones the checkpoint was trained on")
     parser.add_argument("--episode-ticks", type=int, default=None)
@@ -109,6 +116,13 @@ def main(argv=None):
         "observationFoes": trained_agents - 1,
         "speed": args.speed,
         "port": args.port,
+        # Where to serve it and what to answer to. The viewer prints the
+        # address it can be reached at, and the monitor's Watch button opens
+        # whatever it printed — so these are what make that button work from
+        # somewhere that is not this machine.
+        "host": args.host,
+        "publicOrigin": args.public_origin or None,
+        "basePath": args.base_path or "",
         "episodeTicks": args.episode_ticks or shape.get("episodeTicks", 3600),
     }
     if args.levels:

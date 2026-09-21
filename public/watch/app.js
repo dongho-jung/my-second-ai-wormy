@@ -43,7 +43,7 @@ function paintTerrain(level) {
 
 async function pullLevel() {
   try {
-    const response = await fetch("/level");
+    const response = await fetch("level");
     if (!response.ok) return;
     const level = await response.json();
     paintTerrain(level);
@@ -117,7 +117,7 @@ function renderWorms() {
 }
 
 function subscribe() {
-  const stream = new EventSource("/events");
+  const stream = new EventSource("events");
   stream.addEventListener("state", (event) => {
     state = JSON.parse(event.data);
     if (state.levelVersion !== levelVersion) void pullLevel();

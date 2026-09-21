@@ -28,10 +28,68 @@ const POLL_MS = 500;
 // grow the server's memory without limit.
 const MAX_CACHED_RECORDS = 20_000;
 
+/**
+ * The path this is served under, and the request path with it taken off.
+ *
+ * Served at `dashboard.example.com/ai-worm/`, every request arrives with that
+ * in front of it and none of the routes below know the name. Taking it off
+ * here means the routing is the same wherever it is mounted, and the pages ask
+ * for their own files by relative path, so they resolve against whatever the
+ * document's address turned out to be.
+ *
+ * Returns null when the prefix is set and the request is not under it — that is
+ * somebody else's request arriving on this port.
+ */
+/**
+ * The names this server answers to.
+ *
+ * The check is against DNS rebinding: an attacker's domain resolving to
+ * 127.0.0.1 still arrives with its own name in `Host`, and is refused. Adding
+ * the loopback spellings does not weaken that — `localhost` and `127.0.0.1`
+ * are the same machine either way — and it is the difference between the page
+ * working and not when somebody publishes the port and types the other one.
+ */
+function reachableAs(port, publicOrigin) {
+  const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
+  const origins = new Set([...hosts].map((host) => `http://${host}`));
+  if (publicOrigin) {
+    hosts.add(new URL(publicOrigin).host);
+    origins.add(publicOrigin);
+  }
+  return { hosts, origins };
+}
+
+function underBase(pathname, base) {
+  if (!base) return pathname;
+  if (pathname === base) return "";            // wants the trailing slash
+  if (!pathname.startsWith(`${base}/`)) return null;
+  return pathname.slice(base.length) || "/";
+}
+
+/** `/ai-worm/` from `/ai-worm`, or null when it is already right. */
+function needsSlash(pathname, base) {
+  return base && pathname === base ? `${base}/` : null;
+}
+
 export async function createMonitorServer({
   port = 8767,
   dir = DEFAULT_RUNS_DIR,
+  // Loopback by default: on a laptop this page is a window onto your own
+  // machine. In a pod it has to bind the pod's interface and answer to the
+  // hostname a browser out there actually asks for, which is not the one it
+  // bound. The host check stays in both cases — it is what stops a page on
+  // another site from driving this one through a browser that can reach it.
+  host = "127.0.0.1",
+  publicOrigin = null,
+  // What the Watch button's viewer should bind and be reached at. A viewer
+  // that binds loopback inside a pod is a viewer nobody outside can open.
+  viewerHost = null,
+  viewerOrigin = null,
+  viewerBasePath = "",
+  // A path this is mounted under, such as "/ai-worm". No trailing slash.
+  basePath = "",
 } = {}) {
+  const base = basePath.replace(/\/+$/, "");
   const assets = new Map(
     await Promise.all(
       [
@@ -60,7 +118,17 @@ export async function createMonitorServer({
       stopWatching();
       const child = spawn(
         process.execPath,
-        [WATCHER, "--run", id, "--port", String(WATCH_PORT)],
+        [
+          WATCHER,
+          "--run", id,
+          "--port", String(WATCH_PORT),
+          // Passed down so the viewer this starts is reachable from wherever
+          // the page asking for it is. Its printed address is what the button
+          // opens, so telling it the public one is the whole of the fix.
+          ...(viewerHost ? ["--host", viewerHost] : []),
+          ...(viewerOrigin ? ["--public-origin", viewerOrigin] : []),
+          ...(viewerBasePath ? ["--base-path", viewerBasePath] : []),
+        ],
         { cwd: fileURLToPath(new URL("../../", import.meta.url)), stdio: ["ignore", "pipe", "pipe"] },
       );
       let said = "";
@@ -195,12 +263,21 @@ export async function createMonitorServer({
     );
     if (closing) return json(503, { error: "Server is shutting down" });
     if (
-      request.headers.host !== new URL(origin).host ||
-      (request.headers.origin && request.headers.origin !== origin)
+      !allowedHosts.has(request.headers.host) ||
+      (request.headers.origin && !allowedOrigins.has(request.headers.origin))
     ) {
-      return json(403, { error: "Use the local monitor origin" });
+      return json(403, { error: "Use the monitor's own origin" });
     }
     const url = new URL(request.url, origin);
+    // Everything below routes as though it were mounted at the root.
+    const slash = needsSlash(url.pathname, base);
+    if (slash) {
+      response.writeHead(308, { Location: `${slash}${url.search}` });
+      return response.end();
+    }
+    const routed = underBase(url.pathname, base);
+    if (routed === null) return json(404, { error: "Not found" });
+    url.pathname = routed;
     if (request.method === "POST") {
       const watch = url.pathname.match(/^\/runs\/([A-Za-z0-9_.-]+)\/watch$/);
       if (watch) {
@@ -312,9 +389,13 @@ export async function createMonitorServer({
   });
   await new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", resolve);
+    server.listen(port, host, resolve);
   });
   origin = `http://127.0.0.1:${server.address().port}`;
+  const { hosts: allowedHosts, origins: allowedOrigins } = reachableAs(
+    server.address().port,
+    publicOrigin,
+  );
   let polling = false;
   const timer = setInterval(() => {
     // Skip a beat rather than stack reads when the disk is slow.

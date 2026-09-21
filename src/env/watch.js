@@ -36,6 +36,21 @@ console.debug = toStderr;
 
 const config = JSON.parse(process.argv[2] ?? "{}");
 const port = config.port ?? 8769;
+// What to bind, and what to answer to.
+//
+// Loopback by default: on a laptop this is a window onto your own machine and
+// has no business being reachable from the network. Somewhere else — a pod
+// behind an ingress — it has to bind the pod's interface and accept the
+// hostname the browser actually asks for, which is not the one it bound.
+//
+// The host check stays either way. It is what stops a page on another site
+// from pointing a script at this viewer through the browser that can reach it,
+// so opening the bind address widens what may connect without widening what
+// may pretend to be it.
+const host = config.host ?? "127.0.0.1";
+const publicOrigin = config.publicOrigin ?? null;
+// A path this is mounted under, such as "/ai-worm/watch". No trailing slash.
+const base = (config.basePath ?? "").replace(/\/+$/, "");
 const speed = config.speed ?? 1;
 const agents = config.agents ?? 3;
 
@@ -142,6 +157,62 @@ const assets = new Map(
 const clients = new Set();
 let origin;
 
+/**
+ * The path this is served under, and the request path with it taken off.
+ *
+ * Served at `dashboard.example.com/ai-worm/`, every request arrives with that
+ * in front of it and none of the routes below know the name. Taking it off
+ * here means the routing is the same wherever it is mounted, and the pages ask
+ * for their own files by relative path, so they resolve against whatever the
+ * document's address turned out to be.
+ *
+ * Returns null when the prefix is set and the request is not under it — that is
+ * somebody else's request arriving on this port.
+ */
+function underBase(pathname, base) {
+  if (!base) return pathname;
+  if (pathname === base) return "";            // wants the trailing slash
+  if (!pathname.startsWith(`${base}/`)) return null;
+  return pathname.slice(base.length) || "/";
+}
+
+/** `/ai-worm/` from `/ai-worm`, or null when it is already right. */
+function needsSlash(pathname, base) {
+  return base && pathname === base ? `${base}/` : null;
+}
+
+/**
+ * Whether this request is for this viewer, rather than for whatever a page on
+ * another site hoped would answer on this port.
+ *
+ * Both the bound address and the public one count: a pod binds 0.0.0.0 and is
+ * reached at an ingress hostname, and both are this viewer.
+ */
+/**
+ * The names this server answers to.
+ *
+ * The check is against DNS rebinding: an attacker's domain resolving to
+ * 127.0.0.1 still arrives with its own name in `Host`, and is refused. Adding
+ * the loopback spellings does not weaken that — `localhost` and `127.0.0.1`
+ * are the same machine either way — and it is the difference between the page
+ * working and not when somebody publishes the port and types the other one.
+ */
+function reachableAs(port, publicOrigin) {
+  const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
+  const origins = new Set([...hosts].map((host) => `http://${host}`));
+  if (publicOrigin) {
+    hosts.add(new URL(publicOrigin).host);
+    origins.add(publicOrigin);
+  }
+  return { hosts, origins };
+}
+
+function allowed(request) {
+  const { hosts, origins } = reachableAs(server.address().port, publicOrigin);
+  if (!hosts.has(request.headers.host)) return false;
+  return !request.headers.origin || origins.has(request.headers.origin);
+}
+
 const server = createServer((request, response) => {
   const json = (status, body) => {
     response.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
@@ -153,17 +224,21 @@ const server = createServer((request, response) => {
     "Content-Security-Policy",
     "default-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
   );
-  if (
-    request.headers.host !== new URL(origin).host ||
-    (request.headers.origin && request.headers.origin !== origin)
-  ) {
-    return json(403, { error: "Use the local viewer origin" });
+  if (!allowed(request)) {
+    return json(403, { error: "Use the viewer's own origin" });
   }
   if (request.method !== "GET") {
     response.setHeader("Allow", "GET");
     return json(405, { error: "Read-only viewer: GET is required" });
   }
-  const path = new URL(request.url, origin).pathname;
+  const asked = new URL(request.url, origin).pathname;
+  const slash = needsSlash(asked, base);
+  if (slash) {
+    response.writeHead(308, { Location: slash });
+    return response.end();
+  }
+  const path = underBase(asked, base);
+  if (path === null) return json(404, { error: "Not found" });
   if (path === "/health") return json(200, { ok: true, clients: clients.size });
   if (path === "/state") return json(200, state());
   // The terrain is dug through as they play, so it is re-read rather than sent
@@ -194,7 +269,7 @@ await new Promise((resolve, reject) => {
   const bind = (on, then) => {
     server.removeAllListeners("error");
     server.once("error", then);
-    server.listen(on, "127.0.0.1", resolve);
+    server.listen(on, host, resolve);
   };
   // A viewer left behind by a monitor that has since restarted still holds the
   // port, and the new one cannot see it to stop it. Rather than fail, take any
@@ -207,7 +282,11 @@ await new Promise((resolve, reject) => {
   });
 });
 origin = `http://127.0.0.1:${server.address().port}`;
-process.stderr.write(`viewer ${origin}\n`);
+// Where somebody can actually reach it, which behind an ingress is not where
+// it bound. The monitor reads this line to know what to open, so this is the
+// address the Watch button ends up pointing at.
+const reachableAt = publicOrigin ?? origin;
+process.stderr.write(`viewer ${reachableAt}\n`);
 
 /* --- the match ---------------------------------------------------------- */
 

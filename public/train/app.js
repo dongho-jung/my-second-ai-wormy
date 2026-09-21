@@ -104,7 +104,7 @@ function subscribe() {
   subscribe.observerTimer = setInterval(pollObserver, 3000);
   stream?.close();
   const query = selected ? `?run=${encodeURIComponent(selected)}` : "";
-  stream = new EventSource(`/events${query}`);
+  stream = new EventSource(`events${query}`);
   stream.addEventListener("runs", (event) => {
     runs = JSON.parse(event.data).runs;
     if (!selected) selected = runs[0]?.id ?? null;
@@ -239,7 +239,7 @@ let observer = { live: false, watching: null };
 
 async function pollObserver() {
   try {
-    const response = await fetch("/observer");
+    const response = await fetch("observer");
     observer = await response.json();
   } catch {
     observer = { live: false, watching: null };
@@ -695,7 +695,7 @@ async function watchSelected() {
   button.disabled = true;
   button.textContent = "starting…";
   try {
-    const response = await fetch(`/runs/${encodeURIComponent(wanted)}/watch`, {
+    const response = await fetch(`runs/${encodeURIComponent(wanted)}/watch`, {
       method: "POST",
     });
     const body = await response.json();
