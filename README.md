@@ -221,6 +221,100 @@ physics are identical — the same bundle, checked by the same checksum — but
 putting a policy into a live online room needs the key-input path this
 repository does not have yet.
 
+## Running it somewhere else
+
+The learning half goes in a container. The watching half does not — it drives a
+real browser and has nothing to do in a cluster — so `playwright`, the one npm
+dependency this project has, is never installed and nothing under `src/env/`,
+`train/` or `scripts/train.js` imports anything outside Node's own builtins.
+
+```bash
+docker build -t wormy .
+docker run --rm wormy node scripts/train.js --total-steps 50000
+```
+
+**`artifacts/` is not in the repository and not in the build context.** The
+game, its mod and the maps the room plays are fetched during the build, from
+the game's own versioned path and from the community pools, and the bundle's
+SHA-256 is checked against the one `src/adapter-v20.js` was read off. A build
+against a moved version fails rather than training on a field mapping that no
+longer means what it says. The same fetch is a script now, so a fresh clone can
+do it too:
+
+```bash
+npm run engine     # the four files the headless engine is
+npm run mods       # the game the room runs
+npm run maps       # the maps it runs them on
+```
+
+`.github/workflows/image.yml` builds and pushes to `ghcr.io`. A published
+package is **private by default even when the repository is public** — opening
+it is one manual step on the package's settings page, and nothing in a workflow
+can do it for you.
+
+### Trying it locally first
+
+The defaults are the local case, so nothing has to be set:
+
+```bash
+docker build -t wormy .
+
+# A short run, to see that it trains at all.
+docker run --rm wormy node scripts/train.js --total-steps 20000 \
+  --workers 2 --envs 4 --episode-ticks 1200
+
+# The training page and the viewer, on a volume the two of them share.
+docker volume create wormy-runs
+docker run -d --name wormy-train -v wormy-runs:/app/artifacts/runs wormy \
+  node scripts/train.js --workers 2 --envs 4 --total-steps 2000000
+docker run -d --name wormy-pages -v wormy-runs:/app/artifacts/runs \
+  -p 8768:8768 -p 8769:8769 wormy node scripts/monitor.js
+```
+
+Then <http://localhost:8768> — or `127.0.0.1`, both answer — and the **Watch**
+button opens the match on 8769. No `WORMY_PUBLIC_ORIGIN` and no
+`WORMY_BASE_PATH`: unset, the pages serve at the root and answer to loopback,
+which is exactly what they did before any of this.
+
+To rehearse the deployment instead, set them to whatever the ingress will be
+and send the `Host` header by hand:
+
+```bash
+docker run --rm -p 8768:8768 \
+  -e WORMY_PUBLIC_ORIGIN=https://dashboard.example.com \
+  -e WORMY_BASE_PATH=/ai-worm \
+  wormy node scripts/monitor.js
+
+curl -H 'Host: dashboard.example.com' http://127.0.0.1:8768/ai-worm/
+```
+
+A browser cannot send that header, so for clicking around use a hosts-file
+entry pointing the name at `127.0.0.1`, or just leave both unset.
+
+### The two pages, from somewhere that is not this machine
+
+Both bind loopback and refuse a request whose `Host` is not their own, which is
+right on a laptop and useless behind an ingress. Three settings move them,
+each with an environment variable of its own:
+
+| | | |
+| --- | --- | --- |
+| `--host` | `WORMY_HOST` | what to bind; `0.0.0.0` in the image |
+| `--public-origin` | `WORMY_PUBLIC_ORIGIN` | where a browser actually reaches it |
+| `--base-path` | `WORMY_BASE_PATH` | a path it is mounted under, like `/ai-worm` |
+
+The host check stays: a request claiming to be somewhere neither of those is
+refused, so opening the bind address widens what may connect without widening
+what may pretend to be this. The pages ask for their own files by relative
+path, so one prefix moves the whole thing, and `/ai-worm` redirects to
+`/ai-worm/` so that resolving works.
+
+The training page is 8768. The match viewer the **Watch** button starts is
+8769, and it is told the same origin one path along — route `/ai-worm` to the
+first and `/ai-worm/watch` to the second, same hostname, and the button opens
+something that works. `deploy/train-job.yaml` is an example of the pod; the
+Service and the ingress are yours.
+
 ## The training monitor
 
 A **separate page on a separate port** from the game dashboard. Training runs

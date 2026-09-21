@@ -1,0 +1,16 @@
+# artifacts/ is fetched and built inside the image, never copied from here: a
+# laptop's venv is the wrong architecture and its runs are not this run's.
+artifacts/
+node_modules/
+.git/
+.ai-memory
+*.log
+__pycache__/
+*.pyc
+# The watching half's own dashboard, its tests and its prose. The two pages
+# that ARE served here — public/train and public/watch — stay.
+public/app.js
+public/index.html
+public/style.css
+test/
+docs/

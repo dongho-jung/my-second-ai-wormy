@@ -15,7 +15,7 @@ import {
   actionFromHeads,
 } from "../src/env/actions.js";
 import { ASSETS, DEFAULT_ENGINE_DIR, loadEngine } from "../src/env/engine.js";
-import { EPISODE_STATS, HEADS, VecWormEnv } from "../src/env/vec.js";
+import { DONE, EPISODE_STATS, HEADS, VecWormEnv } from "../src/env/vec.js";
 import { PATCH_CELLS } from "../src/env/observation.js";
 
 const absent = Object.values(ASSETS).filter(
@@ -103,12 +103,26 @@ test("a row of worlds writes into one buffer per kind", { skip }, async () => {
   assert.throws(() => vec.step(new Uint8Array(3)), /expected/);
 
   // Run past the end of an episode: the world restarts itself and says so.
-  let restarts = 0;
+  // An episode ends on a clock, not on anything the game did, so its last
+  // observation is handed over to be valued and the world restarts on the next
+  // call. That shows up as two bytes a step apart: `last`, then `first`.
+  let closed = 0;
+  let opened = 0;
+  let heldAtClose = null;
   for (let step = 0; step < 60; step++) {
     vec.step(heads);
-    restarts += vec.dones.reduce((sum, one) => sum + one, 0);
+    for (const one of vec.dones) {
+      if (one === DONE.last) closed++;
+      if (one === DONE.first) opened++;
+    }
+    if (vec.dones[0] === DONE.last) {
+      // Not reset yet: what was just sent is the end of the old episode.
+      heldAtClose = vec.envs[0].done;
+    }
   }
-  assert.equal(restarts, 4, "each of the four matches ended once");
+  assert.equal(closed, 4, "each of the four matches ended once");
+  assert.equal(opened, 4, "and opened its next one a step later");
+  assert.equal(heldAtClose, true, "the closing observation is sent before the reset");
   const stats = Object.fromEntries(
     EPISODE_STATS.map((field, index) => [field, vec.stats[index]]),
   );

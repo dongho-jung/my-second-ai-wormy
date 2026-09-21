@@ -1,0 +1,71 @@
+# Build the training image and push it to this repository's registry.
+#
+# The image is not the repository. `artifacts/` is gitignored — the game, its
+# mod and the maps are fetched during the build, from the game's own site and
+# from the community pools — so this is the only place the whole thing exists
+# assembled.
+#
+# A published package is **private by default, even when the repository is
+# public**. To let a cluster pull it without credentials, open it once by hand:
+# the repository's Packages page -> the package -> Package settings -> Change
+# visibility -> Public. Nothing in a workflow can do that for you.
+name: image
+
+on:
+  push:
+    branches: [main]
+    # Only when something the image is made of changes. The pages and the
+    # documentation ride along in the same commits and do not need a rebuild of
+    # torch to reach a cluster.
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "package.json"
+      - "src/**"
+      - "train/**"
+      - "scripts/**"
+      - "public/**"
+      - ".github/workflows/image.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Lowercased by the action, which matters: the registry rejects an
+          # upper-case path and this owner's name has one.
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Torch is most of the image and changes almost never; without a cache
+          # every run downloads it again.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

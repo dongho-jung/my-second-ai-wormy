@@ -16,6 +16,7 @@
     "train": "node scripts/train.js",
     "watch": "node scripts/watch.js",
     "levels": "node scripts/fetch-levels.js",
+    "engine": "node scripts/fetch-engine.js",
     "play": "node scripts/play.js",
     "weapons": "node scripts/profile-weapons.js",
     "record": "node src/live/record.js",

@@ -1,0 +1,99 @@
+# One training run, as a Job. An example, not the deployment: the Service and
+# the ingress that put the two pages on a hostname are somebody else's file.
+#
+# What matters here is which container serves what. The trainer writes runs to
+# the volume; the monitor sidecar reads them, serves the training page on 8768,
+# and starts the match viewer on 8769 when the Watch button is pressed. Route
+# both: /ai-worm to 8768 and /ai-worm/watch to 8769, same hostname.
+#
+# A run ends: it is `--total-steps` and then a checkpoint, not a service. So a
+# Job rather than a Deployment, and `restartPolicy: Never` — a run that dies
+# halfway should be looked at, not silently started again from the beginning
+# with a fresh run id.
+#
+#   kubectl apply -f deploy/pvc.yaml
+#   kubectl apply -f deploy/train-job.yaml
+#   kubectl logs -f job/wormy-train
+#
+# The training page, which is on loopback inside the pod:
+#   kubectl port-forward job/wormy-train 8768:8768
+#   open http://127.0.0.1:8768
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wormy-train
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: { app: wormy-train }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: train
+          image: ghcr.io/dongho-jung/my-second-ai-wormy:latest
+          imagePullPolicy: Always
+          # Eight Node workers and one Python process. `--workers` is the one
+          # number to match to the node: each worker is its own process running
+          # its own row of worlds, and asking for more of them than there are
+          # cores to run them on makes a run slower, not wider.
+          #
+          # `--envs 12` is not independent of `--steps 128`: the rollout buffers
+          # are steps x workers x envs x worms, and most of that is the 25,773
+          # byte terrain patch per worm per step. At these numbers it is about
+          # 1.1GB. Raising --steps without lowering --envs is how a run runs out
+          # of memory.
+          args:
+            - node
+            - scripts/train.js
+            - --workers=8
+            - --envs=12
+            - --total-steps=20000000
+            - --device=cpu
+            - --label=k8s
+          env:
+            # Torch would otherwise start a thread per core in every process and
+            # spend the run fighting the eight Node workers for them.
+            - name: OMP_NUM_THREADS
+              value: "2"
+          resources:
+            requests: { cpu: "8", memory: "6Gi" }
+            limits: { cpu: "10", memory: "12Gi" }
+          volumeMounts:
+            # Only the runs directory. The engine, the mod and the maps are
+            # baked into the image in sibling directories and must not be
+            # covered over by an empty volume.
+            - { name: runs, mountPath: /app/artifacts/runs }
+        # Reads what the trainer writes and serves the page. A separate process
+        # by design — training runs for hours and the trainer does not need to
+        # know whether anyone is watching — and a sidecar here because the two
+        # of them only have to share a filesystem and a network namespace.
+        - name: monitor
+          image: ghcr.io/dongho-jung/my-second-ai-wormy:latest
+          imagePullPolicy: Always
+          args: ["node", "scripts/monitor.js"]
+          ports:
+            - { name: monitor, containerPort: 8768 }
+            - { name: viewer, containerPort: 8769 }
+          env:
+            # Where a browser actually reaches the page, and the path it is
+            # mounted under. The pages ask for their own files by relative
+            # path, so these two move the whole thing — and the host check
+            # refuses anything claiming to be somewhere else.
+            - name: WORMY_PUBLIC_ORIGIN
+              value: https://dashboard.thecapelabs.com
+            - name: WORMY_BASE_PATH
+              value: /ai-worm
+            # The Watch button starts the match viewer on 8769. It is told the
+            # same origin one path further along, so route /ai-worm/watch there.
+            - name: WORMY_VIEWER_BASE_PATH
+              value: /ai-worm/watch
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+          volumeMounts:
+            - { name: runs, mountPath: /app/artifacts/runs, readOnly: true }
+      volumes:
+        - name: runs
+          persistentVolumeClaim:
+            claimName: wormy-runs
