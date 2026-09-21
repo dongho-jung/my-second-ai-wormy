@@ -140,7 +140,11 @@ const run = values.record
         weights: env.weights,
         episodeTicks,
         inputLatencyTicks: env.inputLatencyTicks,
-        loadout: env.loadouts[0].map((id) => engine.weaponNames[id]).join(", "),
+        // Drawn afresh each episode, so what can be written down is the rule.
+        loadout:
+          typeof env.loadout === "string"
+            ? `${env.loadout}, from ${env.weaponPool?.length ?? engine.settings.O.length} weapons`
+            : "fixed",
         levels: poolSize ? `${poolSize} generated, cycled` : "one generated per episode",
         observation: observations
           .map((kind) =>
