@@ -271,8 +271,11 @@ docker run -d --name wormy-pages -v wormy-runs:/app/artifacts/runs \
   -p 8768:8768 -p 8769:8769 wormy node scripts/monitor.js
 ```
 
-Then <http://localhost:8768> — or `127.0.0.1`, or any port you published them
-on — and the **Watch** button opens the match on 8769. No
+Then <http://localhost:8768> — or `127.0.0.1`, or any port you published the
+page on — and the **Watch** button opens the match it is playing. The link that
+button follows is the address the viewer says it is reachable at, so publish
+the viewer as `8769:8769` locally; remap it and the page still works but the
+button points at a port nothing is on. No
 `WORMY_PUBLIC_ORIGIN` and no `WORMY_BASE_PATH`: unset, the pages serve at the
 root and answer to loopback under any name and any port, which is exactly what
 they did before any of this.

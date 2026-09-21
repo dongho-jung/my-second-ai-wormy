@@ -294,7 +294,7 @@ origin = `http://127.0.0.1:${server.address().port}`;
 // Where somebody can actually reach it, which behind an ingress is not where
 // it bound. The monitor reads this line to know what to open, so this is the
 // address the Watch button ends up pointing at.
-const reachableAt = publicOrigin ?? origin;
+const reachableAt = `${publicOrigin ?? origin}${base}/`;
 process.stderr.write(`viewer ${reachableAt}\n`);
 
 /* --- the match ---------------------------------------------------------- */

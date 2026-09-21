@@ -158,7 +158,7 @@ export async function createMonitorServer({
         said += chunk;
         // The viewer prints its own address once it is listening; waiting for
         // it means the button never opens a tab onto nothing.
-        const found = said.match(/viewer (http:\/\/\S+)/);
+        const found = said.match(/viewer (https?:\/\/\S+)/);
         if (found) {
           if (watching) watching.reply = { ...watching.reply, url: found[1] };
           settle(watching.reply);
