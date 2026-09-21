@@ -85,13 +85,20 @@ export function normalizeAction(action = 0) {
 }
 
 /**
- * What a policy actually emits: seven small choices, not one number out of 648.
+ * What a policy actually emits: eight small choices, not one number out of 1,944.
  *
  * Left and right at once is the engine doing nothing, so the two of them are one
- * three-way choice rather than two bits — and the same for aiming. The rest are
- * the keys and messages that are genuinely independent. Seven heads is eighteen
- * logits, against the 648 a single flat distribution would need, and a policy
- * that has learned to walk right keeps that when it learns to fire.
+ * three-way choice rather than two bits — and the same for aiming, and for the
+ * rope's two length keys. The rest are the keys and messages that are genuinely
+ * independent. Eight heads is twenty-one logits, against the 1,944 a single flat
+ * distribution would need, and a policy that has learned to walk right keeps
+ * that when it learns to fire.
+ *
+ * `ropeLength` is the one that was missing. Throwing the rope is a message and
+ * was already here; reeling it in and paying it out are held keys — bits 64 and
+ * 128, which `src/live/keys.js` already turns back into the game's own
+ * shortenRope / lengthenRope bindings. Without this head a worm can fire the
+ * rope and hang off it, and cannot swing, which is most of what the rope is for.
  */
 export const ACTION_HEADS = [
   ["move", ["none", "left", "right"]],
@@ -100,6 +107,7 @@ export const ACTION_HEADS = [
   ["jump", ["no", "yes"]],
   ["dig", ["no", "yes"]],
   ["rope", ["none", "throw", "release"]],
+  ["ropeLength", ["none", "shorter", "longer"]],
   ["weapon", ["none", "next", "previous"]],
 ];
 
@@ -108,6 +116,7 @@ export const ACTION_SIZES = ACTION_HEADS.map(([, choices]) => choices.length);
 const MOVE_KEYS = [0, KEYS.left, KEYS.right];
 const AIM_KEYS = [0, KEYS.aimUp, KEYS.aimDown];
 const ROPE_CHOICES = [ROPE.none, ROPE.throw, ROPE.release];
+const ROPE_LENGTH_KEYS = [0, KEYS.ropeShorter, KEYS.ropeLonger];
 const WEAPON_CHOICES = [0, 1, -1];
 
 /**
@@ -121,9 +130,10 @@ export function actionFromHeads(heads, at = 0) {
       AIM_KEYS[heads[at + 1]] |
       (heads[at + 2] ? KEYS.fire : 0) |
       (heads[at + 3] ? KEYS.jump : 0) |
-      (heads[at + 4] ? KEYS.dig : 0),
+      (heads[at + 4] ? KEYS.dig : 0) |
+      (ROPE_LENGTH_KEYS[heads[at + 6]] ?? 0),
     rope: ROPE_CHOICES[heads[at + 5]] ?? ROPE.none,
-    weapon: WEAPON_CHOICES[heads[at + 6]] ?? 0,
+    weapon: WEAPON_CHOICES[heads[at + 7]] ?? 0,
   };
 }
 

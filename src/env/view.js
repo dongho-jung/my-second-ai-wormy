@@ -11,6 +11,15 @@
 // obvious place.
 import { terrainOf } from "./terrain.js";
 
+/**
+ * What a live room is assumed to be running at, in ticks.
+ *
+ * The room this project watches sits about 300 milliseconds behind, which at
+ * sixty ticks a second is eighteen of them. A caller that has measured the
+ * actual round trip should pass it instead.
+ */
+export const LIVE_LATENCY_TICKS = 18;
+
 const vector = (x, y) => ({ x, y });
 
 function decodeTerrainBytes(data) {
@@ -23,10 +32,14 @@ function decodeTerrainBytes(data) {
  * read from `world.za`, because a worm that died this tick has already been
  * dropped from there and an agent still has to see that it is gone.
  */
-export function viewFromWorld(world, self, foes = []) {
+export function viewFromWorld(world, self, foes = [], inputLatencyTicks = 0) {
   const level = world.level;
   return {
     tick: world.qb,
+    // How late this worm's keys land. Drawn once per episode by the
+    // environment and passed in, because the world does not know: the delay is
+    // the connection's, not the game's.
+    inputLatencyTicks,
     map: { name: level.name, width: level.width, height: level.height },
     terrain: terrainOf({
       data: level.data,
@@ -119,7 +132,14 @@ function poolFromEngine(pool, kind) {
  * `/map` read. The terrain changes far more slowly than the state, so the two
  * are read on different clocks and passed in together here.
  */
-export function viewFromSnapshot(state, terrain, { playerId = null } = {}) {
+export function viewFromSnapshot(
+  state,
+  terrain,
+  // The live game has a real delay and no way to ask it what it is, so it is
+  // told: eighteen ticks is the 300ms the watched room measures. Left at the
+  // default, a policy plays as though the room behaved the way it usually does.
+  { playerId = null, inputLatencyTicks = LIVE_LATENCY_TICKS } = {},
+) {
   // Any player, not only the one at this keyboard: the game replicates
   // everybody's state, so a person's match can be watched and learned from
   // through a tab that is not theirs.
@@ -134,6 +154,7 @@ export function viewFromSnapshot(state, terrain, { playerId = null } = {}) {
       : { alive: false, playerId: player.id };
   return {
     tick: state.tick,
+    inputLatencyTicks,
     map: state.map,
     terrain: terrainOf({
       data: decodeTerrainBytes(terrain.data),

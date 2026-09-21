@@ -523,6 +523,7 @@ export class WormEnv {
         this.world,
         worm,
         this.worms.filter((_, other) => other !== agent),
+        this.latency[agent] ?? 0,
       ),
     );
     return this.views;

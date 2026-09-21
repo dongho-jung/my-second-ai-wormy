@@ -36,7 +36,17 @@ const RAY_DIRECTIONS = Array.from({ length: RAY_COUNT }, (_, k) => {
 // is roughly as far as a worm can act in one move.
 const REACH_PX = 300;
 const HEALTH_MAX = 100;
-const WEAPON_SLOTS = 5;
+export const WEAPON_SLOTS = 5;
+/**
+ * What a delay is measured against, in ticks.
+ *
+ * The room this plays in runs about 300ms behind — eighteen ticks — and
+ * training draws from a range around that. Dividing by a fixed number rather
+ * than by the range actually in use keeps the field meaning the same thing
+ * across runs, so a policy trained at 6-21 and played at a measured 24 reads
+ * "later than anything I saw" instead of "the usual".
+ */
+export const LATENCY_SCALE_TICKS = 30;
 /** Only the closest few shots go in the vector; the patch carries the rest. */
 export const PROJECTILE_SLOTS = 3;
 /**
@@ -93,13 +103,27 @@ export function observationSpec({
     // The nearest shots: where, where to, and how much they are going to hurt.
     ["projectiles", projectileSlots * (4 + SHOT_WEAPON_FIELDS)],
     ["pickups", pickupSlots * PICKUP_FIELDS], // health and weapon crates nearby
+    // How far behind this worm is playing, as a share of the longest delay the
+    // environment will hand out. A worm that has to lead its shots by twenty
+    // ticks is playing a different game from one that acts immediately, and
+    // until now nothing said which it was: the delay is drawn once per episode
+    // and then never mentioned, so the policy had to infer it from how late
+    // the world kept reacting.
+    ["latency", 1],
     // Which weapon, not just what it does. Twelve names in this mod belong to
     // two different weapons — the ordinary one and the strange crate-only
     // version — and ten measured numbers do not say how a VIRUS spreads or
     // what a FORCE FIELD is for. These are indices for the network to embed,
     // so they are kept out of the running normaliser, which would average them
-    // into nonsense. Self first, then each foe; -1 for nobody.
-    ["weaponIds", 1 + foeSlots],
+    // into nonsense.
+    //
+    // All five of my slots, then each foe's held one. Only the held weapon used
+    // to be in here, which left the policy choosing "next" and "previous"
+    // through five slots it could not see the contents of — it knew a slot had
+    // four rounds and was ready to fire, and not whether it was a shotgun or a
+    // bazooka. Spawning and picking up a crate both change slots with nothing
+    // to notice it by, so no amount of memory recovers it. -1 for an empty slot.
+    ["weaponIds", WEAPON_SLOTS + foeSlots],
   ];
   const offsets = {};
   const vectorSize = layout.reduce((at, [name, size]) => {
@@ -351,8 +375,13 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
   // which would otherwise average weapon 31 and weapon 108 into weapon 70 —
   // and those two are a VIRUS that spreads a little and one that spreads twice
   // as far. Ten measured numbers cannot say that; an identity can.
+  // How late this worm's keys arrive, against the longest delay there is.
+  into[at++] = clamp((view.inputLatencyTicks ?? 0) / LATENCY_SCALE_TICKS, 0, 1);
+
   const held = (worm) => worm?.weapons?.[worm.selectedWeapon]?.id ?? -1;
-  into[at++] = held(self);
+  for (let slot = 0; slot < WEAPON_SLOTS; slot++) {
+    into[at++] = self.weapons?.[slot]?.id ?? -1;
+  }
   for (let slot = 0; slot < spec.foeSlots; slot++) into[at++] = held(foes[slot]);
 
   return into;

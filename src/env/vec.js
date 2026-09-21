@@ -12,7 +12,7 @@
 // told where the boundary was.
 import { readFileSync } from "node:fs";
 import { actionFromHeads, ACTION_HEADS } from "./actions.js";
-import { MAP_SIZE, PATCH_CELLS, PATCH_SHAPE } from "./observation.js";
+import { MAP_SIZE, PATCH_CELLS, PATCH_SHAPE, WEAPON_SLOTS } from "./observation.js";
 import { WormEnv } from "./env.js";
 
 /**
@@ -227,13 +227,15 @@ export class VecWormEnv {
       // to tell apart. The network embeds them; nothing else should normalise
       // or interpolate them.
       weaponIdsAt: this.spec.offsets.weaponIds,
-      weaponIdsCount: 1 + this.spec.foeSlots,
+      weaponIdsCount: WEAPON_SLOTS + this.spec.foeSlots,
       weaponCount: this.engine.settings.O.length,
       patchCells: this.wantsPatch ? PATCH_CELLS : 0,
       patchShape: this.wantsPatch ? PATCH_SHAPE : null,
       mapCells: this.wantsMap ? MAP_SIZE : 0,
       mapShape: this.wantsMap ? [4, 32, 32] : null,
       statFields: EPISODE_STATS,
+      // Spelled out on the wire so the other side cannot drift from it.
+      doneCodes: DONE,
       frameskip: this.envs[0].frameskip,
       episodeTicks: this.envs[0].episodeTicks,
       maps: this.levels.length,

@@ -26,29 +26,48 @@ const skip = absent.length
   : false;
 
 test("the heads are the keys a person would press, factorised", () => {
-  assert.equal(HEADS, 7);
-  assert.deepEqual(ACTION_SIZES, [3, 3, 2, 2, 2, 3, 3]);
+  assert.equal(HEADS, 8);
+  assert.deepEqual(ACTION_SIZES, [3, 3, 2, 2, 2, 3, 3, 3]);
   // Left and right together is the engine doing nothing, so they share a head
   // rather than being two bits that can contradict each other.
-  assert.deepEqual(actionFromHeads([1, 0, 0, 0, 0, 0, 0]), {
+  assert.deepEqual(actionFromHeads([1, 0, 0, 0, 0, 0, 0, 0]), {
     keys: KEYS.left,
     rope: ROPE.none,
     weapon: 0,
   });
-  assert.deepEqual(actionFromHeads([2, 2, 1, 1, 1, 2, 2]), {
+  assert.deepEqual(actionFromHeads([2, 2, 1, 1, 1, 2, 0, 2]), {
     keys: KEYS.right | KEYS.aimDown | KEYS.fire | KEYS.jump | KEYS.dig,
     rope: ROPE.release,
     weapon: -1,
   });
+  // Reeling the rope in and paying it out are held keys, like moving and
+  // aiming, and share a head for the same reason: both at once is nothing.
+  // Throwing the rope is a separate message and can happen in the same tick.
+  assert.deepEqual(actionFromHeads([0, 0, 0, 0, 0, 1, 1, 0]), {
+    keys: KEYS.ropeShorter,
+    rope: ROPE.throw,
+    weapon: 0,
+  });
+  assert.deepEqual(actionFromHeads([0, 0, 0, 0, 0, 0, 2, 0]), {
+    keys: KEYS.ropeLonger,
+    rope: ROPE.none,
+    weapon: 0,
+  });
   // Read out of the middle of a batch, which is how they arrive.
-  const batch = Uint8Array.from([0, 0, 0, 0, 0, 0, 0, 2, 1, 1, 0, 0, 1, 1]);
-  assert.equal(actionFromHeads(batch, 7).keys, KEYS.right | KEYS.aimUp | KEYS.fire);
-  assert.equal(actionFromHeads(batch, 7).rope, ROPE.throw);
-  assert.equal(actionFromHeads(batch, 7).weapon, 1);
+  const batch = Uint8Array.from([
+    0, 0, 0, 0, 0, 0, 0, 0,
+    2, 1, 1, 0, 0, 1, 2, 1,
+  ]);
+  assert.equal(
+    actionFromHeads(batch, 8).keys,
+    KEYS.right | KEYS.aimUp | KEYS.fire | KEYS.ropeLonger,
+  );
+  assert.equal(actionFromHeads(batch, 8).rope, ROPE.throw);
+  assert.equal(actionFromHeads(batch, 8).weapon, 1);
   assert.equal(
     ACTION_HEADS.reduce((all, [, choices]) => all * choices.length, 1),
-    648,
-    "648 combinations, described by 18 numbers",
+    1944,
+    "1,944 combinations, described by 21 numbers",
   );
 });
 

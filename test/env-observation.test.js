@@ -9,6 +9,7 @@ import {
   PATCH_KIND,
   PATCH_PROJECTILE,
   PATCH_SIZE,
+  LATENCY_SCALE_TICKS,
   VECTOR_OFFSETS,
   VECTOR_SIZE,
   encodePatch,
@@ -19,7 +20,7 @@ import {
   patchCellOf,
   patchOriginOf,
 } from "../src/env/observation.js";
-import { viewFromSnapshot } from "../src/env/view.js";
+import { LIVE_LATENCY_TICKS, viewFromSnapshot } from "../src/env/view.js";
 import { contactsAt, reach, walkProbe } from "../src/env/terrain.js";
 
 // The live game is the other source an observation is built from, so the whole
@@ -118,6 +119,49 @@ test("the vector puts every field where the layout says", () => {
     span("projectiles", 24).slice(8),
     new Array(16).fill(0),
     "the two empty shot slots stay empty",
+  );
+
+  // Every slot's identity, not only the one in hand. The policy chooses "next"
+  // and "previous" through these five, and without them it was picking a slot
+  // it could see the ammo of and not the weapon in.
+  assert.deepEqual(
+    span("weaponIds", 5),
+    [7, -1, -1, -1, -1],
+    "the fixture's one weapon, then four empty slots as -1",
+  );
+  assert.deepEqual(
+    Array.from(vector.subarray(VECTOR_OFFSETS.weaponIds + 5)),
+    new Array(DEFAULT_SPEC.foeSlots).fill(-1),
+    "a dead foe holds nothing",
+  );
+});
+
+test("how late the keys land is something the worm is told", () => {
+  const controller = fixture();
+  const snapshot = snapshotV20.call(controller);
+  const terrain = snapshotV20.call(controller, { terrain: true });
+  const latencyOf = (view) => encodeVector(view)[VECTOR_OFFSETS.latency];
+
+  // Drawn once an episode and never mentioned, the delay was something the
+  // policy had to infer from how late the world kept reacting to it.
+  assert.equal(
+    latencyOf(viewFromSnapshot(snapshot, terrain, { inputLatencyTicks: 0 })),
+    0,
+  );
+  assert.equal(
+    latencyOf(viewFromSnapshot(snapshot, terrain, { inputLatencyTicks: 15 })),
+    0.5,
+    "against a fixed thirty ticks, so the field means the same across runs",
+  );
+  assert.equal(
+    latencyOf(viewFromSnapshot(snapshot, terrain)),
+    Math.fround(LIVE_LATENCY_TICKS / LATENCY_SCALE_TICKS),
+    "a live room is assumed to run at the 300ms the watched one measures",
+  );
+  assert.equal(
+    latencyOf(viewFromSnapshot(snapshot, terrain, { inputLatencyTicks: 90 })),
+    1,
+    "later than anything trained on still reads as late, not as wrapped round",
   );
 });
 

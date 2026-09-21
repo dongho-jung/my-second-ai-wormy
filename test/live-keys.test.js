@@ -30,7 +30,7 @@ test("every action the policy can take is one a player could press", () => {
     checked++;
   }
   assert.equal(checked, ACTION_SIZES.reduce((all, size) => all * size, 1));
-  assert.equal(checked, 648);
+  assert.equal(checked, 1944);
 });
 
 test("the two ways of reaching dig do not collide", () => {
