@@ -40,6 +40,9 @@ export const EPISODE_STATS = [
   "fromExplore",
   "fromRevisit",
   "fromStuck",
+  "fromApproach",
+  "fromOnTarget",
+  "fromAimedShot",
   "fromGoal",
   "seed",
 ];
@@ -62,10 +65,32 @@ const STAT_SOURCE = {
   fromExplore: "fromExplore",
   fromRevisit: "fromRevisit",
   fromStuck: "fromStuck",
+  fromApproach: "fromApproach",
+  fromOnTarget: "fromOnTarget",
+  fromAimedShot: "fromAimedShot",
   fromGoal: "fromGoal",
 };
 
 export const HEADS = ACTION_HEADS.length;
+
+/**
+ * What the `dones` byte says about the observation sent beside it.
+ *
+ * Three states rather than two, because an episode here ends on a clock this
+ * project set and not on anything the game did. Whoever is learning from this
+ * has to be able to tell "the match is over, this state is worth nothing" from
+ * "we stopped watching, this state is worth whatever it was worth" — and only
+ * the second one ever happens here. So the last observation of an episode is
+ * sent and marked, and the world restarts on the next call.
+ */
+export const DONE = {
+  /** Mid-episode. The usual. */
+  ongoing: 0,
+  /** The first observation of a new episode; whatever came before it is gone. */
+  first: 1,
+  /** The last observation of an episode. Value it; do not treat it as an end. */
+  last: 2,
+};
 
 export class VecWormEnv {
   constructor(

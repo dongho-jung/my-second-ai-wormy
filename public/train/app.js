@@ -36,6 +36,7 @@ const SERIES = {
   fromRevisit: { label: "reward from: doubling back", good: "up" },
   fromStuck: { label: "reward from: being stuck", good: "up" },
   fromGoal: { label: "reward from: the goal", good: "up" },
+  fromApproach: { label: "reward from: closing on somebody", good: "up" },
   fromOnTarget: { label: "reward from: aiming at somebody", good: "up" },
   fromAimedShot: { label: "reward from: firing while aimed", good: "up" },
   reward: { label: "reward per step", good: "up" },

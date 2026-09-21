@@ -435,14 +435,28 @@ export class WormEnv {
    */
   step(actions) {
     if (this.done) throw new Error("the episode is over: call reset() first");
+    this.ending = false;
     if (actions.length !== this.agents) {
       throw new Error(`expected ${this.agents} actions, got ${actions.length}`);
     }
     for (const [agent, action] of actions.entries()) {
       const normalized = normalizeAction(action);
-      // Whether it pulled the trigger this decision, for the aim reward: firing
-      // while lined up is the thing worth paying for, and the view does not say.
-      this.firing[agent] = (normalized.keys & KEYS.fire) !== 0;
+      // Whether it pulled the trigger this decision AND had something to fire,
+      // for the aim reward. Firing while lined up is the thing worth paying
+      // for, and the view does not say. The gun has to be loaded: the term was
+      // paid for holding the key down, so a worm with an empty slot could stand
+      // lined up on somebody with the trigger held and collect the whole term
+      // for the rest of the episode without a shot leaving the barrel. Read
+      // before the step, which is when the decision was made — with input
+      // latency the shot itself lands some ticks later, so this is "it could
+      // have fired", not "it did".
+      const holding = this.views[agent]?.self;
+      const loaded = holding?.weapons?.[holding.selectedWeapon];
+      this.firing[agent] =
+        (normalized.keys & KEYS.fire) !== 0 &&
+        Boolean(loaded) &&
+        loaded.ammo > 0 &&
+        loaded.cooldownTicksRemaining <= 0;
       const queue = this.queues[agent];
       // Held keys last the whole decision; the rope and weapon messages are
       // sent once, so only the first tick of the decision carries them.
