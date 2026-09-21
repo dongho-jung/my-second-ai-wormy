@@ -15,7 +15,7 @@
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { createGzip, constants as zlibConstants } from "node:zlib";
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { chromium } from "playwright";
 import { WebLieroObserver } from "../observer.js";
@@ -85,6 +85,27 @@ if (values.help) {
 }
 
 const log = createLogger({ scope: "record" });
+/**
+ * The names the policy driver is using, refreshed from the file it writes.
+ *
+ * Learning from our own worms would be learning from the thing being trained,
+ * which is noise at best. Read rather than configured so the two cannot drift
+ * apart the way a hand-kept list did.
+ */
+const DRIVEN = new URL("../../artifacts/players.json", import.meta.url);
+let driven = new Set();
+async function refreshDriven() {
+  try {
+    const raw = JSON.parse(await readFile(DRIVEN, "utf8"));
+    // A stale file from a driver that stopped hours ago should not go on
+    // hiding a person who happens to share the name.
+    const fresh = Date.now() - Date.parse(raw.at ?? 0) < 60_000;
+    driven = new Set(fresh ? (raw.names ?? []) : []);
+  } catch {
+    driven = new Set();
+  }
+}
+
 const excluded = new Set(
   [
     // Whatever this tab is called. It is here to watch, and a recording of the
@@ -134,6 +155,14 @@ if (!pages.length) {
   process.exit(1);
 }
 // One tab is enough: it can see everybody.
+// Marked, so the policy driver does not take this tab over and turn the watcher
+// into a player — which is exactly what it did, and the recording then filled
+// with the policy's own worms.
+await pages[0]
+  .evaluate(() => {
+    window.__wormyWatcher = true;
+  })
+  .catch(() => {});
 const observer = new WebLieroObserver(pages[0], { log });
 
 const idleMs = Number(values["idle-seconds"]) * 1000;
@@ -381,6 +410,7 @@ async function sample() {
       player.alive &&
       player.worm &&
       !excluded.has(player.name) &&
+      !driven.has(player.name) &&
       // A replicated worm that has never carried an input cannot be learned from.
       Number.isFinite(player.worm.keys),
   );
@@ -482,6 +512,10 @@ const timer = setInterval(() => {
 }, periodMs);
 
 let reported = 0;
+await refreshDriven();
+const drivenWatch = setInterval(() => void refreshDriven(), 5000);
+drivenWatch.unref?.();
+
 const status = setInterval(() => {
   if (samples === reported) return;
   reported = samples;

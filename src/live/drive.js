@@ -13,6 +13,7 @@
 // CAPTCHA to create one — that is an anti-automation control on someone else's
 // service, so it is reported and waited out in the window, never worked around.
 import { parseArgs } from "node:util";
+import { writeFile } from "node:fs/promises";
 import { WebLieroObserver } from "../observer.js";
 import { createLogger } from "../log.js";
 import {
@@ -33,6 +34,7 @@ import {
   roomUrl,
   setNickname,
   spawned,
+  spectate,
 } from "../room.js";
 import { ACTION_HEADS, actionFromHeads } from "../env/actions.js";
 import {
@@ -128,7 +130,16 @@ function handleDialogs(page) {
 // that ends leaves its players seated, and WebLiero asks for a CAPTCHA to make
 // a room — so opening three more tabs beside them would cost a seat each and a
 // CAPTCHA, for nothing.
-const existing = (await findGamePages(browser)).filter((found) => found.inGame);
+const watcherTab = async (page) =>
+  Boolean(await page.evaluate(() => window.__wormyWatcher === true).catch(() => false));
+const inRoomPages = (await findGamePages(browser)).filter((found) => found.inGame);
+const existing = [];
+for (const found of inRoomPages) {
+  // The recorder sits in this room too, in the spectator seat. Taking its tab
+  // would put the watcher in the game and leave nobody watching.
+  if (await watcherTab(found.page)) continue;
+  existing.push(found);
+}
 const reused = config.fresh ? [] : existing.slice(0, players);
 if (reused.length) say(`taking over ${reused.length} tab(s) already in a room`);
 
@@ -239,6 +250,30 @@ let mapTerrain = null;
  */
 /** The room as the first seat last saw it: who is in it, and whether it ended. */
 let room = null;
+
+/**
+ * Who this process is driving, published for the recorder to skip.
+ *
+ * The recorder used to be told the names by hand, and the day the worms were
+ * renamed it went on excluding the old ones — which would have filed the
+ * policy's own play as a person's. Saying it here means the two cannot drift.
+ */
+const DRIVEN = new URL("../../artifacts/players.json", import.meta.url);
+async function publishDriven(playing) {
+  await writeFile(
+    DRIVEN,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        at: new Date().toISOString(),
+        names: seats.map((seat) => seat.nickname),
+        playing,
+      },
+      null,
+      2,
+    )}\n`,
+  ).catch(() => {});
+}
 
 async function look(seat, now) {
   const read = await seat.observer.read().catch(() => null);
@@ -405,6 +440,91 @@ async function chatter() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Taking a seat, and giving it back.
+//
+// A quiet room is more fun with somebody in it and a busy one is not: the point
+// of sitting down is to give whoever is there an opponent, and the moment there
+// are enough people the seat is worth more to them than to us. So the worms
+// play while the room is short of players and spectate as soon as it is not.
+
+/** At least this long between sitting down and standing up again. */
+const SEATING_PAUSE_MS = 20_000;
+
+/** How many people the room should hold before the worms give their seats up. */
+const yieldTo = Number(config.yieldTo ?? 0);
+/** Names to treat as not-people: the watcher sitting in the spectator seat. */
+const watching = new Set(config.watching ?? []);
+
+/** How many people are actually playing, not counting anything we drive. */
+function playersPresent() {
+  const ours = new Set(seats.map((seat) => seat.nickname));
+  let count = 0;
+  for (const player of room?.players ?? []) {
+    if (ours.has(player.name)) continue;
+    if (watching.has(player.name)) continue;
+    // On a team at all, whether or not their worm is alive this second.
+    if (player.team > 0 || player.alive) count++;
+  }
+  return count;
+}
+
+let seating = false;
+let seatedSaid = null;
+
+/**
+ * Seat or unseat the driven worms to leave room for people.
+ *
+ * Only ever one at a time, and never while the frame loop is mid-decision —
+ * joining a team walks through the game's own menus, which takes seconds.
+ */
+let seatedAt = 0;
+
+async function takeSeats() {
+  if (seating || !room) return;
+  // Joining and spectating both walk the game's menus and take seconds, and the
+  // count flickers as people die and respawn. Without a pause between changes
+  // the worms spend the match standing up and sitting down.
+  if (Date.now() - seatedAt < SEATING_PAUSE_MS) return;
+  const people = playersPresent();
+  const wanted = Math.max(0, Math.min(seats.length, yieldTo - people));
+  const seated = [];
+  for (const seat of seats) {
+    const spectating = await seat.page
+      .locator(SPECTATING)
+      .isVisible()
+      .catch(() => false);
+    if (!spectating) seated.push(seat);
+  }
+  if (seated.length === wanted) return;
+  seating = true;
+  try {
+    if (seated.length > wanted) {
+      for (const seat of seated.slice(wanted)) {
+        await seat.controls?.release().catch(() => {});
+        await spectate(seat.page).catch(() => {});
+      }
+    } else {
+      for (const seat of seats.filter((s) => !seated.includes(s)).slice(0, wanted - seated.length)) {
+        await joinTeam(seat.page, "any", { timeoutMs: 8000 }).catch(() => {});
+      }
+    }
+    seatedAt = Date.now();
+    const now = `${wanted} of ${seats.length} playing, ${people} people in the room`;
+    if (now !== seatedSaid) {
+      say(now);
+      seatedSaid = now;
+    }
+    await publishDriven(wanted);
+  } finally {
+    seating = false;
+  }
+}
+
+// Said before the first frame, not only when the seating changes: the recorder
+// needs the names from the moment there is anything to record.
+await publishDriven(seats.length);
+
 playing = true;
 await sample();
 
@@ -430,7 +550,7 @@ async function act(heads) {
   // box while `apply` is holding ArrowLeft hands the held key to a text field.
   // The frame still has to go out: the policy is waiting on one, and a decision
   // skipped is a worm that coasts, while a frame skipped is a hung run.
-  if (talking) {
+  if (talking || seating) {
     await sample();
     return;
   }
@@ -445,6 +565,7 @@ async function act(heads) {
   );
   await sample();
   void chatter().catch((error) => log.warn("chatter_failed", { message: error.message }));
+  void takeSeats().catch((error) => log.warn("seating_failed", { message: error.message }));
 }
 
 const stop = async () => {

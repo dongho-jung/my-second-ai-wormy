@@ -38,8 +38,11 @@ def parse_args(argv=None):
                        help="size the vector for this many other worms, so one policy can play any count")
     world.add_argument("--episode-ticks", type=int, default=3600)
     world.add_argument("--frameskip", type=int, default=4)
-    world.add_argument("--input-latency", type=str, default="0-3",
-                       help="ticks between deciding and acting, for the move to a live game")
+    world.add_argument("--input-latency", type=str, default="6-21",
+                       help="ticks between deciding and acting. The room this plays in runs about "
+                            "300ms behind, which is eighteen ticks; training at the old 0-3 taught "
+                            "reflexes that do not survive the trip. A range rather than a number "
+                            "so the policy does not learn one particular delay")
     world.add_argument("--maps", type=int, default=12,
                        help="generated levels to mix in alongside the pool, as a random room would")
     world.add_argument("--map-width", type=int, default=504,

@@ -224,6 +224,29 @@ export async function joinTeam(page, preference = "any", { timeoutMs = 30_000 } 
  * this ticks its own "don't show again" box and presses Ok — what a player
  * does. The checkbox hook is unique to that dialog, so nothing else is clicked.
  */
+/**
+ * Give the seat back.
+ *
+ * Spectating is an entry in the game's own menu, the same place the room link
+ * lives. A seat held by a bot is a seat a person cannot have, and this room
+ * holds a handful of people at a time.
+ */
+export async function spectate(page, { timeoutMs = 8000 } = {}) {
+  if (await page.locator(SPECTATING).isVisible().catch(() => false)) return true;
+  await clickThrough(page.locator('.game-view [data-hook="menu"]'));
+  const menu = page.locator(".dropmenu-view");
+  await menu.first().waitFor({ state: "visible", timeout: timeoutMs });
+  const entry = menu.getByText("Spectate", { exact: true });
+  if (!(await entry.count())) {
+    // No entry means it is already watching, or the menu changed shape.
+    await page.keyboard.press("Escape").catch(() => {});
+    return false;
+  }
+  await clickThrough(entry.first());
+  await page.waitForSelector(SPECTATING, { timeout: timeoutMs }).catch(() => {});
+  return true;
+}
+
 export async function dismissHowToPlay(page, { timeoutMs = 4000 } = {}) {
   const popups = page.locator('.game-view [data-hook="popups"]');
   const remember = popups.locator('input[data-hook="dont-show-again"]');
