@@ -249,7 +249,14 @@ def stock_levels(args):
         if path.suffix.lower() in LEVEL_SUFFIXES and path.is_file()
     )[: args.stock_levels]
     if not found:
-        print(f"no maps in {args.levels_dir}: training on generated ones alone", flush=True)
+        if getattr(args, "maps", 0) <= 0:
+            # Falling through here gave a run one generated dirt field to play
+            # on while its own log still named the room's map pool.
+            raise SystemExit(
+                f"no maps in {args.levels_dir} and --maps is 0: there would be one generated "
+                "dirt field to play on. Run `npm run maps`, or pass --maps N to play generated levels"
+            )
+        print(f"no maps in {args.levels_dir}: playing generated ones alone", flush=True)
     return [str(path) for path in found]
 
 
