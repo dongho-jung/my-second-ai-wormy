@@ -436,7 +436,7 @@ official v20 bundle (same file, same checksum)
   ↓ node vm, no browser
 src/env/     engine · actions · view · observation · progress · reward · env
   ↓ vec.js (many worlds) → worker.js (binary frames)
-train/       ppo.py · policy.py  (PyTorch, MPS)
+train/       ppo.py · policy.py · evaluate.py  (PyTorch, MPS)
   ↓
 artifacts/runs/<id>/  metrics.jsonl · best.pt · policy.pt
   ↓ src/train/monitor.js            ↓ src/env/watch.js
