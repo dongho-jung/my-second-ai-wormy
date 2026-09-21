@@ -148,11 +148,16 @@ def main(argv=None):
     policy.load_state_dict(checkpoint["policy"])
     policy.eval()
 
+    world = shape.get("world") or {}
     config = {
         "players": args.players,
         # The vector keeps the width the policy was trained on, however many
         # worms are in the room.
         "observationFoes": trained_agents - 1,
+        # And the rest of what it trained on: the mod, whose weapons the vector
+        # describes, and the patch scale it looked at the ground through.
+        **({"engine": world["engine"]} if world.get("engine") else {}),
+        "patchScale": world.get("patchScale", 2),
         "roomUrl": args.room_url,
         "roomName": args.room_name,
         "roomSize": args.room_size,

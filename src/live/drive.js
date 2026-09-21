@@ -37,10 +37,9 @@ import {
   spectate,
 } from "../room.js";
 import { ACTION_HEADS, actionFromHeads } from "../env/actions.js";
+import { loadEngine } from "../env/engine.js";
 import {
   MAP_SIZE,
-  PATCH_CELLS,
-  PATCH_SHAPE,
   encodeMapTerrain,
   observationSpec,
   observe,
@@ -78,7 +77,18 @@ const players = config.players ?? 3;
 const decideMs = 1000 / (config.decideHz ?? 15);
 const mapMs = config.mapMs ?? 1000;
 const foeSlots = config.observationFoes ?? players - 1;
-let spec = observationSpec({ foeSlots });
+// The observation a policy trained on, not a default one. The engine is loaded
+// for its measured weapon profile: without it every weapon feature in the
+// vector is zero, which is 72 numbers the policy has never seen at zero, and
+// the patch has to be cut at the scale the checkpoint was trained at or it
+// reshapes into nonsense. Both used to be left at defaults here, which is a
+// policy meeting a different world on its first real match.
+const engine = await loadEngine(config.engine);
+const spec = observationSpec({
+  foeSlots,
+  weaponFeatures: engine.weaponFeatures,
+  patchScale: config.patchScale ?? 2,
+});
 const log = createLogger({ level: config.verbose ? "debug" : "info", scope: "live" });
 
 // stdout carries frames and nothing else; anything to say goes to stderr.
@@ -250,11 +260,11 @@ for (const seat of seats) {
 /* --- the loop ----------------------------------------------------------- */
 
 const vectors = new Float32Array(players * spec.vectorSize);
-const patches = new Uint8Array(players * PATCH_CELLS);
+const patches = new Uint8Array(players * spec.patch.cells);
 const maps = new Uint8Array(players * MAP_SIZE);
 const scratch = seats.map((_, index) => ({
   vector: vectors.subarray(index * spec.vectorSize, (index + 1) * spec.vectorSize),
-  patchBytes: patches.subarray(index * PATCH_CELLS, (index + 1) * PATCH_CELLS),
+  patchBytes: patches.subarray(index * spec.patch.cells, (index + 1) * spec.patch.cells),
   map: maps.subarray(index * MAP_SIZE, (index + 1) * MAP_SIZE),
 }));
 // The level is the same for every seat and changes only where somebody digs,
@@ -295,9 +305,35 @@ async function publishDriven(playing) {
   ).catch(() => {});
 }
 
+/**
+ * Whether the room is running the game the policy trained under.
+ *
+ * Checked once the first snapshot arrives. The failure is silent otherwise:
+ * the same vector comes out either way, and only the weapon ids and features
+ * are quietly describing somebody else's weapons.
+ */
+let roomMod = null;
+function roomIsOurs(game) {
+  if (roomMod !== null) return roomMod;
+  const theirs = game.room?.mod ?? null;
+  const ours = engine.settings.name;
+  roomMod = theirs === null || theirs === ours;
+  if (!roomMod) {
+    say(
+      `This room is running ${theirs} and the policy trained under ${ours}. ` +
+        "The weapons are not the same weapons, so it would be playing a game it " +
+        "never learned. Train a policy for this mod, or find a room running the other.",
+    );
+    process.exit(1);
+  }
+  log.info("room_mod", { mod: theirs ?? "unreported", trained: ours });
+  return roomMod;
+}
+
 async function look(seat, now) {
   const read = await seat.observer.read().catch(() => null);
   if (seat.index === 0 && read?.game) room = read.game;
+  if (read?.game) roomIsOurs(read.game);
   // Which player this tab is, by the id the game gave it. Names are not ours
   // alone: somebody in this room is playing under the watcher's name right now.
   if (read?.game?.localPlayerId != null) seat.playerId = read.game.localPlayerId;
@@ -320,8 +356,8 @@ writeFrame(
       envs: 1,
       agents: players,
       vectorSize: spec.vectorSize,
-      patchCells: PATCH_CELLS,
-      patchShape: PATCH_SHAPE,
+      patchCells: spec.patch.cells,
+      patchShape: spec.patch.shape,
       mapCells: MAP_SIZE,
       mapShape: [4, 32, 32],
       heads: ACTION_HEADS.map(([name, choices]) => ({ name, choices: choices.length })),
