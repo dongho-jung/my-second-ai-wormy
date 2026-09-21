@@ -8,6 +8,15 @@ Every path in this document is relative to this repository
 (`my-second-ai-wormy`). The earlier one is referred to by its absolute path,
 `/Users/dongho/projects/my-first-ai-wormy`.
 
+> **This is the state on 2026-09-20 and it is kept as a record, not as the
+> current numbers.** The observation, the network and the reward weights have
+> all moved since: the patch is the worm's whole 213x121 view rather than
+> 32x32, there is a picture of the whole level as well, weapons go in as
+> measured behaviour and as a learned identity, the features run through a GRU,
+> and the reward is no longer symmetric. For what is true now read
+> `src/env/observation.js`, `src/env/reward.js` and `train/policy.py`, which
+> carry their reasoning in comments, or `docs/network.html` for the drawing.
+
 ## 0. Where this repository stands
 
 **Against a running game it still only looks.** State collection, terrain
@@ -234,6 +243,9 @@ damage it takes, so there is nothing to gain by hiding them.
 
 ### The terrain patch — 1,024 bytes stored, 4 × 32 × 32 into the convolution
 
+*Superseded: six channels of 121 × 213, the worm's whole view. Worms show up in
+the picture as well as in the vector. See `PATCH` in `src/env/observation.js`.*
+
 Rock / dirt / free space / projectile. One cell stands for 2×2 real pixels and
 answers for **the hardest thing in them**, so a wall one pixel thick cannot fall
 between two samples and read as open air. Off the level reads as rock, which is
@@ -322,6 +334,13 @@ The terms and their default weights:
 | `revisit` | −0.02 | back to a cell it was recently in: going in circles |
 | `stuck` | −0.01/step | under 14 px of movement across 60 steps (four seconds) |
 | `goalProgress` / `reachedGoal` | +0.02/px, +2 | only when a goal is set |
+
+*Superseded.* Dealing damage now pays twice what taking it costs and a kill
+twice what a death costs, because at equal weights combat sums to exactly zero
+between worms sharing one policy and the run duly learned to stop firing.
+Covering ground pays as a share of the map rather than a flat amount per cell,
+and pointing at somebody you could hit pays a little. `DEFAULT_WEIGHTS` in
+`src/env/reward.js` is the list, with the measurement behind each one.
 
 **Being stuck and going in circles are different failures and need different
 measurements.** Standing still is a displacement across a window of time. Going

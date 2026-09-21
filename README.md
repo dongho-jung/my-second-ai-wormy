@@ -126,9 +126,9 @@ setting: solo, a duel and a five-way brawl all run on the same code.
 | `engine.js` | Patches the bundle in memory, evaluates it, and checks its SHA-256 against the one the adapter locked. Also seed-reproducible level generation, random weapon loadouts, and the instrument that records **who hit whom**. |
 | `actions.js` | The key bitmask (`1 left … 256 dig`), the rope and weapon-change messages that are not bits, and the seven heads a policy emits. Exactly how a real room passes input. |
 | `view.js` | Turns a headless world and a live snapshot into **one shape**. The observation encoders read only that. |
-| `observation.js` | The vector (67-130 numbers, depending on how many worms are playing) and the terrain patch. Either can be left out. |
+| `observation.js` | The vector (127-187 numbers, depending on how many worms are playing), the worm's own 213x121 view of the terrain, and the whole level on a 32x32 grid. Any of them can be left out. |
 | `progress.js` | Whether a worm is stuck, going in circles, or closing on a goal. |
-| `reward.js` | Damage dealt minus damage taken, kills and deaths, and the movement terms. Blowing yourself up costs the same as being shot. |
+| `reward.js` | Damage dealt minus damage taken, kills and deaths, the movement terms, and the ladder up to aiming. Blowing yourself up costs the same as being shot. |
 | `env.js` | `reset()` / `step()`, frameskip, respawn, input latency. |
 | `vec.js`, `worker.js` | Many worlds in one process, and the binary frames the trainer talks over. |
 
@@ -153,11 +153,21 @@ dealt.
 
 On top of that, **being stuck or going in circles costs**. Failing to move 14
 pixels in four seconds is stuck; coming back to a cell you were recently in is a
-circle. They are different failures and are measured differently. Set a goal
-position and closing on it pays.
+circle. They are different failures and are measured differently. Ground you
+have never covered pays, as a **share of the map** rather than a count of cells,
+and only the first time: a route walked twice earns nothing the second time. Set
+a goal position and closing on it pays.
 
-The weights and the reasoning behind them are in
-`docs/local-learning-2026-09-20.md`, section 4-0.
+Aiming pays too, in small amounts, because it has to. Nothing in this game
+rewards pointing a gun — the payoff arrives later as damage, if the shot lands —
+so a policy that cannot aim never fires well enough to discover that aiming was
+the point. Pointing at somebody you could actually hit pays per decision, and
+firing while lined up pays more. These are the ladder, not the destination, and
+they do not anneal on their own.
+
+The weights are `DEFAULT_WEIGHTS` in `src/env/reward.js`, and the reasoning
+behind each one — including the run that learned to stand still — is in the
+comments beside them. `docs/network.html` draws the whole policy in Korean.
 
 ## Training
 
@@ -172,8 +182,10 @@ npm run train -- --help
 - The engine is JavaScript and the training is **PyTorch on Apple MPS**. They
   meet on a worker process's own stdin and stdout in binary frames — no port to
   pick, no socket to clean up, and the workers die with the parent.
-- The observation is **mixed**, as designed: state in a vector, terrain and
-  projectiles through a small convolution. 0.52M parameters.
+- The observation is **mixed**, as designed: state in a vector, the terrain
+  through two convolutions — the worm's own view, and the whole level small —
+  and a **GRU** on top of the joined features, because a decision that takes
+  longer than one frame has to be carried. 1.59M parameters.
 - Measured (M2 Pro, 4 workers × 8 worlds × 3 worms = 96 worms at once):
   **6,570 steps/s** with the patch, **11,200** with `--no-patch`. Ten million
   steps is 25 minutes and 15 minutes respectively.
