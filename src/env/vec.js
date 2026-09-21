@@ -208,9 +208,21 @@ export class VecWormEnv {
     if (heads.length !== expected) {
       throw new Error(`expected ${expected} head choices, got ${heads.length}`);
     }
-    this.dones.fill(0);
+    this.dones.fill(DONE.ongoing);
     for (let index = 0; index < this.count; index++) {
       const env = this.envs[index];
+      // A world that ended last call starts over now rather than stepping. Its
+      // final observation has already been sent and valued, and the action that
+      // came back for it has nowhere to go: the match it belonged to is over.
+      // One decision per episode is spent this way, out of nine hundred.
+      if (env.done) {
+        env.reset();
+        this.dones[index] = DONE.first;
+        for (let agent = 0; agent < this.agents; agent++) {
+          this.rewards[index * this.agents + agent] = 0;
+        }
+        continue;
+      }
       for (let agent = 0; agent < this.agents; agent++) {
         const at = (index * this.agents + agent) * HEADS;
         Object.assign(this.actions[agent], actionFromHeads(heads, at));
@@ -219,11 +231,12 @@ export class VecWormEnv {
       for (let agent = 0; agent < this.agents; agent++) {
         this.rewards[index * this.agents + agent] = out.rewards[agent];
       }
-      if (out.done) {
+      if (out.truncated) {
+        // Written while the totals are still this episode's; the reset that
+        // clears them does not run until the next call.
         this.writeStats(index, env);
-        this.dones[index] = 1;
+        this.dones[index] = DONE.last;
         this.episodes++;
-        env.reset();
       }
     }
     return this;

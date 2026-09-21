@@ -214,6 +214,8 @@ export class WormEnv {
     this.episodeSeed = null;
     this.episodeStartTick = 0;
     this.done = true;
+    // True on the one step whose observation is an episode's last.
+    this.ending = false;
   }
 
   /**
@@ -424,6 +426,7 @@ export class WormEnv {
     this.totals = this.worms.map(() => ({}));
     this.episodeStartTick = this.world.qb;
     this.done = false;
+    this.ending = false;
     this.refreshViews();
     this.encodeObservations();
     return { observations: this.observations, info: this.info() };
@@ -519,13 +522,23 @@ export class WormEnv {
       if (respawned) this.refreshViews();
     }
     this.encodeObservations();
+    // Nothing in this environment ever really ends. Worms respawn, the world
+    // keeps running, and what stops an episode is a clock this project set for
+    // its own convenience — so every ending here is a truncation, and the
+    // observation being returned is the last one of the episode rather than
+    // the first one of the next. Whoever is learning from this has to value
+    // that state rather than treat it as worth nothing, which is why the reset
+    // waits for the next call instead of happening here.
     this.done =
       this.world.qb - this.episodeStartTick >= this.episodeTicks ||
       (this.terminateOnKill && killed);
+    this.ending = this.done;
     return {
       observations: this.observations,
       rewards,
       done: this.done,
+      // The episode is over and this is its final state; `reset()` has not run.
+      truncated: this.done,
       info: { ...this.info(), events: this.events, parts },
     };
   }

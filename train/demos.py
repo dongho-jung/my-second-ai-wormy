@@ -133,6 +133,7 @@ def load(
     first = None
     kept = 0
     skipped_mods = set()
+    skipped_shapes = {}
     vectors, patches, maps, heads, sources = [], [], [], [], []
     for meta_path in metas:
         try:
@@ -148,6 +149,11 @@ def load(
         if shape is None:
             shape = key
         elif key != shape:
+            # Recorded against another observation or another action space.
+            # Reshaping it would be reading somebody else's numbers as this
+            # policy's, so it is left out — and said out loud, because a change
+            # to either one silently empties the pile a run was learning from.
+            skipped_shapes[key] = skipped_shapes.get(key, 0) + 1
             continue
         # Same shape is not the same game. A recording taken in a room running
         # another mod has the right number of weapon features and the wrong
@@ -183,6 +189,12 @@ def load(
         at += meta["mapCells"]
         heads.append(raw[:, at : at + len(meta["heads"])].copy())
         sources.append((meta_path.stem, count))
+    for key, files in sorted(skipped_shapes.items()):
+        print(
+            f"ignoring {files} recording(s) of a {key[0]}-number vector and "
+            f"{key[3]} action heads: this run wants {shape[0]} and {shape[3]}",
+            flush=True,
+        )
     for mod in sorted(skipped_mods):
         print(
             f"ignoring recordings from a {mod} room" if mod

@@ -96,8 +96,22 @@ def parse_args(argv=None):
     # data is nearly free and reuse is not. 576 worms over 24 steps at four
     # epochs was 10,600 steps/s; this is 19,700.
     scale.add_argument("--workers", type=int, default=8)
-    scale.add_argument("--envs", type=int, default=48, help="matches per worker")
-    scale.add_argument("--steps", type=int, default=12, help="decisions per worm per update")
+    scale.add_argument("--envs", type=int, default=12, help="matches per worker")
+    scale.add_argument("--steps", type=int, default=128,
+                       help="decisions per worm per update. This is how far ahead a reward can "
+                            "be and still reach the action that earned it: GAE only sees what "
+                            "is inside one rollout, and past the end it has to trust the value "
+                            "head instead. At 12 — 0.8 seconds — a grenade, a mine or a long "
+                            "shot landed in the next rollout, after the action that threw it "
+                            "had been learned from and discarded. 128 is eight and a half "
+                            "seconds. The buffers cost steps x worms, so raising this and "
+                            "leaving --envs alone is how a run runs out of memory")
+    scale.add_argument("--bptt", type=int, default=32,
+                       help="decisions per gradient chunk through the memory. Separate from "
+                            "--steps: the rollout is collected and valued whole, then replayed "
+                            "in chunks this long, each starting from the hidden state the "
+                            "rollout itself had there. Long rollouts do not have to mean "
+                            "backpropagating through all of them")
     scale.add_argument("--total-steps", type=int, default=2_000_000)
 
     learn = parser.add_argument_group("learning")
@@ -323,7 +337,10 @@ def main(argv=None):
         if shape["vectorSize"] != layout.vector_size or shape["headSizes"] != layout.head_sizes:
             raise RuntimeError(
                 f"{args.resume} was trained on a vector of {shape['vectorSize']} "
-                f"and this run gives {layout.vector_size}"
+                f"with heads {shape['headSizes']}, and this run gives "
+                f"{layout.vector_size} with heads {layout.head_sizes}. A policy "
+                "cannot be carried across a change to what it sees or what it "
+                "may do; start a fresh run"
             )
         seen = tuple(shape.get("patchShape") or ())
         if use_patch and seen and seen != patch_shape:
@@ -352,6 +369,8 @@ def main(argv=None):
             ),
             "rolloutSteps": args.steps,
             "batch": args.steps * slots,
+            "rolloutSteps": args.steps,
+            "bptt": args.bptt,
             "frameskip": args.frameskip,
             "episodeTicks": args.episode_ticks,
             "inputLatencyTicks": args.input_latency,
@@ -385,6 +404,15 @@ def main(argv=None):
     )
 
     heads_count = len(layout.head_sizes)
+    # What a `dones` byte means. `first` is the opening observation of a new
+    # episode — the only place the memory is cleared. `last` is the closing one
+    # of an old episode, which is worth what it is worth: the clock ran out, the
+    # match did not. The action sampled at a `last` state is spent, because the
+    # world restarts instead of applying it, so those steps are held out of the
+    # update rather than learned from as though they had consequences.
+    DONE_ONGOING = float(layout.done_codes["ongoing"])
+    DONE_FIRST = float(layout.done_codes["first"])
+    DONE_LAST = float(layout.done_codes["last"])
     obs_v = torch.zeros(args.steps, slots, layout.vector_size, device=device)
     obs_p = (
         torch.zeros(args.steps, slots, layout.patch_cells, dtype=torch.uint8, device=device)
@@ -475,7 +503,12 @@ def main(argv=None):
         )
     started = time.perf_counter()
     batch = args.steps * slots
-    minibatch = max(1, batch // args.minibatches)
+    lanes_per_batch = max(1, slots // args.minibatches)
+    span = max(1, min(args.bptt, args.steps))
+    # One update reads this many transitions at a time: a slice of the worms,
+    # over one chunk of the rollout. The cloning loss draws the same number of
+    # recorded frames, which is the proportion its weight was measured at.
+    minibatch = max(1, lanes_per_batch * span)
 
     try:
         while total_steps - resumed_at < args.total_steps:
@@ -499,7 +532,7 @@ def main(argv=None):
                 with torch.no_grad():
                     head, logp, _, value, memory = policy.act(
                         next_v, next_p, next_m, want_entropy=False,
-                        carried=memory, restart=next_done,
+                        carried=memory, restart=(next_done == DONE_FIRST).float(),
                     )
                 acts[step] = head
                 logps[step] = logp
@@ -520,8 +553,13 @@ def main(argv=None):
                 next_done = torch.as_tensor(
                     np.repeat(env_done, layout.agents).astype(np.float32), device=device
                 )
-                if env_done.any():
-                    finished.extend(stats[env_done.astype(bool)])
+                # Only where an episode just closed. The stats block is not
+                # cleared between steps, so counting the restart byte as well
+                # would file every episode twice, the second time from a buffer
+                # that had already been read.
+                closed = env_done == int(DONE_LAST)
+                if closed.any():
+                    finished.extend(stats[closed])
                 total_steps += slots
 
             rollout_seconds_only = time.perf_counter() - rollout_started
@@ -529,19 +567,34 @@ def main(argv=None):
             with torch.no_grad():
                 _, _, _, bootstrap, _ = policy.act(
                     next_v, next_p, next_m, want_entropy=False,
-                    carried=memory, restart=next_done,
+                    carried=memory, restart=(next_done == DONE_FIRST).float(),
                 )
                 advantages = torch.zeros_like(rews)
                 running = torch.zeros(slots, device=device)
                 for step in reversed(range(args.steps)):
                     if step == args.steps - 1:
-                        ahead, keep = bootstrap, 1.0 - next_done
+                        ahead, flag = bootstrap, next_done
                     else:
-                        ahead, keep = vals[step + 1], 1.0 - dones[step + 1]
-                    delta = rews[step] + args.gamma * ahead * keep - vals[step]
-                    running = delta + args.gamma * args.lam * keep * running
+                        ahead, flag = vals[step + 1], dones[step + 1]
+                    # Two different questions, and they used to share one answer.
+                    #
+                    # "Is the state ahead worth anything?" — yes, unless it is
+                    # the opening of a fresh episode, which is a state this
+                    # action did not lead to. The closing state of an old
+                    # episode is worth exactly what the value head says: the
+                    # match was still going when this project stopped watching,
+                    # and calling it worthless taught every worm that the world
+                    # ends a minute in.
+                    carry_value = (flag != DONE_FIRST).to(rews.dtype)
+                    # "Does the advantage run back past here?" — only through
+                    # the middle of an episode. Not across either boundary.
+                    carry_run = (flag == DONE_ONGOING).to(rews.dtype)
+                    delta = rews[step] + args.gamma * ahead * carry_value - vals[step]
+                    running = delta + args.gamma * args.lam * carry_run * running
                     advantages[step] = running
                 returns = advantages + vals
+                # The steps whose action was never applied.
+                valid = (dones != DONE_LAST).to(rews.dtype)
 
             flat_v = obs_v.reshape(batch, -1)
             flat_p = obs_p.reshape(batch, -1) if use_patch else None
@@ -572,101 +625,116 @@ def main(argv=None):
             # the one that was made. So a minibatch is a handful of worms and
             # every step they took, run through the memory the way it ran the
             # first time.
-            lanes_per_batch = max(1, slots // args.minibatches)
+            # How far the gradient runs through the memory, which no longer has
+            # to be how far the rollout runs. The rollout is collected and
+            # valued whole — that is what lets a reward eight seconds later
+            # reach the action that earned it — and then replayed in chunks this
+            # long. Each chunk picks up the hidden state the rollout itself had
+            # at its first step, so the memory is never scored from a blank mind
+            # in the middle of a match.
+            chunks = [(at, min(at + span, args.steps)) for at in range(0, args.steps, span)]
             for _ in range(args.epochs):
                 order = torch.randperm(slots, device=device)
                 for start in range(0, slots, lanes_per_batch):
                     lanes = order[start : start + lanes_per_batch]
-                    kept = carried[0][lanes]
-                    logp_steps, entropy_steps, value_steps = [], [], []
-                    for step in range(args.steps):
-                        _, lp, ent, val, kept = policy.act(
-                            obs_v[step][lanes],
-                            obs_p[step][lanes] if use_patch else None,
-                            obs_m[step][lanes] if use_map else None,
-                            acts[step][lanes],
-                            carried=kept,
-                            restart=dones[step][lanes],
-                        )
-                        logp_steps.append(lp)
-                        entropy_steps.append(ent)
-                        value_steps.append(val)
-                    logp = torch.cat(logp_steps)
-                    entropy = torch.cat(entropy_steps)
-                    value = torch.cat(value_steps)
-                    # Flattened the same way the steps were concatenated.
-                    take_logp = logps[:, lanes].reshape(-1)
-                    take_ret = returns[:, lanes].reshape(-1)
-                    ratio = (logp - take_logp).exp()
-                    advantage = advantages[:, lanes].reshape(-1)
-                    advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
-                    unclipped = ratio * advantage
-                    clipped = ratio.clamp(1 - args.clip, 1 + args.clip) * advantage
-                    policy_loss = -torch.min(unclipped, clipped).mean()
-                    value_loss = 0.5 * (value - take_ret).pow(2).mean()
-                    entropy_loss = entropy.mean()
-                    # Agreeing with what a person did, alongside being paid
-                    # for the outcome. The reward says what is good; the
-                    # recordings say what to try, which is the half exploration
-                    # is worst at — nothing random ever throws the rope.
-                    bc_loss = torch.zeros((), device=device)
-                    bc_agree = torch.zeros((), device=device)
-                    if demo_batch is not None:
-                        pick = torch.randint(
-                            0, demo_batch["count"], (min(minibatch, demo_batch["count"]),),
-                            device=device,
-                        )
-                        # Single frames, each from a blank memory: a recording
-                        # is not a sequence this policy ever lived through.
-                        shown_logits, _, _ = policy(
-                            demo_batch["vectors"][pick],
-                            demo_batch["patches"][pick] if use_patch else None,
-                            demo_batch["maps"][pick] if use_map else None,
-                        )
-                        target = demo_batch["heads"][pick]
-                        bc_loss = sum(
-                            nn.functional.cross_entropy(head, target[:, at])
-                            for at, head in enumerate(shown_logits)
-                        )
-                        with torch.no_grad():
-                            bc_agree = torch.stack(
-                                [
-                                    (head.argmax(dim=1) == target[:, at]).to(torch.float32).mean()
-                                    for at, head in enumerate(shown_logits)
-                                ]
-                            ).mean()
-                    loss = (
-                        policy_loss
-                        + args.value_coef * value_loss
-                        - entropy_coef * entropy_loss
-                        + bc_weight * bc_loss
-                    )
-                    optimiser.zero_grad(set_to_none=True)
-                    loss.backward()
-                    nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
-                    optimiser.step()
-                    with torch.no_grad():
-                        running_losses += torch.stack(
-                            (
-                                policy_loss.detach(),
-                                value_loss.detach(),
-                                entropy_loss.detach(),
-                                ((ratio - 1).abs() > args.clip).to(torch.float32).mean(),
-                                # The signed mean of the log-ratio is an
-                                # estimator that cancels itself out: a policy
-                                # that moved a long way in both directions
-                                # reports nearly zero, and a controller reading
-                                # it keeps raising the rate until the updates
-                                # are scrambling what was learned — which is
-                                # what happened, entropy climbing while the
-                                # bonus for it was being annealed away. This is
-                                # the standard non-negative estimator instead.
-                                ((ratio - 1) - (logp - take_logp)).mean(),
-                                bc_loss.detach(),
-                                bc_agree,
+                    for first, stop in chunks:
+                        kept = carried[first][lanes]
+                        logp_steps, entropy_steps, value_steps = [], [], []
+                        for step in range(first, stop):
+                            _, lp, ent, val, kept = policy.act(
+                                obs_v[step][lanes],
+                                obs_p[step][lanes] if use_patch else None,
+                                obs_m[step][lanes] if use_map else None,
+                                acts[step][lanes],
+                                carried=kept,
+                                restart=(dones[step][lanes] == DONE_FIRST).to(kept.dtype),
                             )
+                            logp_steps.append(lp)
+                            entropy_steps.append(ent)
+                            value_steps.append(val)
+                        logp = torch.cat(logp_steps)
+                        entropy = torch.cat(entropy_steps)
+                        value = torch.cat(value_steps)
+                        # Flattened the same way the steps were concatenated.
+                        take_logp = logps[first:stop, lanes].reshape(-1)
+                        take_ret = returns[first:stop, lanes].reshape(-1)
+                        # 1 for the steps whose action the world actually applied.
+                        take_valid = valid[first:stop, lanes].reshape(-1)
+                        counted = take_valid.sum().clamp(min=1.0)
+                        ratio = (logp - take_logp).exp()
+                        advantage = advantages[first:stop, lanes].reshape(-1)
+                        # Centred and scaled over the steps that count, so a spent
+                        # one cannot drag the whole minibatch's baseline with it.
+                        mean = (advantage * take_valid).sum() / counted
+                        var = ((advantage - mean).pow(2) * take_valid).sum() / counted
+                        advantage = (advantage - mean) / (var.sqrt() + 1e-8)
+                        unclipped = ratio * advantage
+                        clipped = ratio.clamp(1 - args.clip, 1 + args.clip) * advantage
+                        policy_loss = -(torch.min(unclipped, clipped) * take_valid).sum() / counted
+                        value_loss = 0.5 * ((value - take_ret).pow(2) * take_valid).sum() / counted
+                        entropy_loss = (entropy * take_valid).sum() / counted
+                        # Agreeing with what a person did, alongside being paid
+                        # for the outcome. The reward says what is good; the
+                        # recordings say what to try, which is the half exploration
+                        # is worst at — nothing random ever throws the rope.
+                        bc_loss = torch.zeros((), device=device)
+                        bc_agree = torch.zeros((), device=device)
+                        if demo_batch is not None:
+                            pick = torch.randint(
+                                0, demo_batch["count"], (min(minibatch, demo_batch["count"]),),
+                                device=device,
+                            )
+                            # Single frames, each from a blank memory: a recording
+                            # is not a sequence this policy ever lived through.
+                            shown_logits, _, _ = policy(
+                                demo_batch["vectors"][pick],
+                                demo_batch["patches"][pick] if use_patch else None,
+                                demo_batch["maps"][pick] if use_map else None,
+                            )
+                            target = demo_batch["heads"][pick]
+                            bc_loss = sum(
+                                nn.functional.cross_entropy(head, target[:, at])
+                                for at, head in enumerate(shown_logits)
+                            )
+                            with torch.no_grad():
+                                bc_agree = torch.stack(
+                                    [
+                                        (head.argmax(dim=1) == target[:, at]).to(torch.float32).mean()
+                                        for at, head in enumerate(shown_logits)
+                                    ]
+                                ).mean()
+                        loss = (
+                            policy_loss
+                            + args.value_coef * value_loss
+                            - entropy_coef * entropy_loss
+                            + bc_weight * bc_loss
                         )
-                    passes += 1
+                        optimiser.zero_grad(set_to_none=True)
+                        loss.backward()
+                        nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
+                        optimiser.step()
+                        with torch.no_grad():
+                            running_losses += torch.stack(
+                                (
+                                    policy_loss.detach(),
+                                    value_loss.detach(),
+                                    entropy_loss.detach(),
+                                    ((ratio - 1).abs() > args.clip).to(torch.float32).mean(),
+                                    # The signed mean of the log-ratio is an
+                                    # estimator that cancels itself out: a policy
+                                    # that moved a long way in both directions
+                                    # reports nearly zero, and a controller reading
+                                    # it keeps raising the rate until the updates
+                                    # are scrambling what was learned — which is
+                                    # what happened, entropy climbing while the
+                                    # bonus for it was being annealed away. This is
+                                    # the standard non-negative estimator instead.
+                                    ((ratio - 1) - (logp - take_logp)).mean(),
+                                    bc_loss.detach(),
+                                    bc_agree,
+                                )
+                            )
+                        passes += 1
 
             updates += 1
             wall = time.perf_counter() - started

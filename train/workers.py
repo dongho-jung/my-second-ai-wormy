@@ -65,6 +65,7 @@ class Layout:
     episode_ticks: int
     maps: int
     stock_maps: int
+    done_codes: dict
 
     @classmethod
     def parse(cls, raw: dict) -> "Layout":
@@ -96,6 +97,10 @@ class Layout:
             episode_ticks=raw["episodeTicks"],
             maps=raw["maps"],
             stock_maps=raw.get("stockMaps", 0),
+            # What the `dones` byte means. Three states, not two: an episode
+            # here ends on a clock rather than on anything the game did, so its
+            # last observation is sent to be valued rather than thrown away.
+            done_codes=raw.get("doneCodes", {"ongoing": 0, "first": 1, "last": 2}),
         )
 
 
