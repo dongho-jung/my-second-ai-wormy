@@ -51,7 +51,7 @@ export function viewFromWorld(world, self, foes = [], inputLatencyTicks = 0) {
     foes: foes.map((foe) => wormFromEngine(world, foe)),
     projectiles: [
       ...poolFromEngine(world.Ib, "weapon"),
-      ...poolFromEngine(world.Zb, "particle"),
+      ...poolFromEngine(world.Zb, "particle", { ownedOnly: true }),
     ],
     // Health and weapon crates. A worm on 20 health with a medkit two ledges
     // away is in a different situation from one with none, and until now the
@@ -110,11 +110,26 @@ function wormFromEngine(world, worm) {
   };
 }
 
-function poolFromEngine(pool, kind) {
+/**
+ * The live objects a pool holds, as things a worm might have to care about.
+ *
+ * `ownedOnly` drops the ones no weapon threw. In this engine those are the
+ * scenery: blood, spent shells, and the parts of a worm that has just come
+ * apart. Over a whole episode not one of them could hurt anybody — every
+ * particle with no weapon behind it had no hit damage, could not set off a
+ * worm and left the ground alone — while the ones a weapon did throw, its
+ * splinters and smoke, stay, because they mark where something just went off.
+ *
+ * Keeping the scenery was not free. Only the three nearest shots reach the
+ * vector, and blood sprays from the worm that was just hit, so the scenery
+ * took 83% of those slots and hid two thirds of the real incoming fire.
+ */
+function poolFromEngine(pool, kind, { ownedOnly = false } = {}) {
   const out = [];
   for (let slot = 0; slot < pool.$; slot++) {
     const entity = pool.list[slot];
     if (!entity.u) continue;
+    if (ownedOnly && entity.La === 255) continue;
     out.push({
       kind,
       position: vector(entity.x, entity.y),
@@ -164,13 +179,18 @@ export function viewFromSnapshot(
     }),
     self: worm(self),
     foes: state.players.filter((player) => player.id !== self.id).map(worm),
-    projectiles: state.projectiles.map((shot) => ({
-      kind: shot.kind,
-      position: shot.position,
-      velocity: shot.velocity,
-      ownerPlayerId: shot.ownerPlayerId,
-      weaponId: shot.weaponId ?? null,
-    })),
+    // The same scenery the headless path drops, by the same rule: if no weapon
+    // threw it, it cannot hurt anybody. A policy has to see the same world in
+    // a live game as it did while learning.
+    projectiles: state.projectiles
+      .filter((shot) => shot.kind !== "particle" || shot.weaponId != null)
+      .map((shot) => ({
+        kind: shot.kind,
+        position: shot.position,
+        velocity: shot.velocity,
+        ownerPlayerId: shot.ownerPlayerId,
+        weaponId: shot.weaponId ?? null,
+      })),
     pickups: (state.pickups ?? []).map((crate) => ({
       kind: crate.kind,
       weaponId: crate.weaponId,
