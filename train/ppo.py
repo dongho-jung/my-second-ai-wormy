@@ -217,6 +217,16 @@ def parse_args(argv=None):
                        help="updates between re-reading the directory, so a match played now is "
                             "learned from without restarting anything")
 
+    probe = parser.add_argument_group("probing")
+    probe.add_argument("--probe-every", type=int, default=50,
+                       help="updates between playing the policy, on its own, against worms that "
+                            "press nothing. Everything else on the training page is measured "
+                            "against a moving target — itself, or its recent past — so none of it "
+                            "says whether the policy can find and kill a worm that just stands "
+                            "there, or how often it kills itself trying. This does. A few matches, "
+                            "about ten seconds; the figures land on the page as probe*. 0 never")
+    probe.add_argument("--probe-episodes", type=int, default=4, help="matches per probe")
+
     where = parser.add_argument_group("where it goes")
     where.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     where.add_argument("--label", default=None, help="a name for this run on the monitor page")
@@ -284,6 +294,77 @@ def save(policy, layout, shape, step, path, **extra):
         },
         path,
     )
+
+
+def probe_against_still(policy, config, args, device):
+    """The policy alone against worms that do nothing, for a few whole matches.
+
+    A fresh pool each time, so no match is half played by the policy as it
+    was an hour ago. The policy takes the front seats and the back seats press
+    nothing; the worker's front-minus-back stats then read as the policy's own
+    figures, since a worm that does nothing kills nobody and deals no damage.
+    """
+    agents = int(config["agents"])
+    back = agents // 2
+    front = agents - back
+    pool = WorkerPool(1, dict(
+        config,
+        envs=2,
+        seed=int(config.get("seed", 1)) + 99991,
+        stagger=False,
+        opponents=back,
+        shapingFullAt=0,
+        decisionsDone=0,
+    ))
+    layout = pool.layout
+    slots = pool.slots
+    per_match = layout.agents
+    at = {name: index for index, name in enumerate(layout.stat_fields)}
+    DONE_FIRST = layout.done_codes["first"]
+    DONE_LAST = layout.done_codes["last"]
+    front_index = torch.tensor(
+        [slot for match in range(pool.envs) for slot in range(match * per_match, match * per_match + front)]
+    )
+    heads = torch.zeros(slots, len(layout.head_sizes), dtype=torch.long)
+    memory = torch.zeros(slots, policy.memory_width, device=device)
+    use_patch = layout.patch_cells > 0 and policy.use_patch
+    use_map = layout.map_cells > 0 and policy.use_map
+    vectors, patches, maps, _, _, _, _ = pool.observations()
+    done = torch.zeros(slots, device=device)
+    reset = torch.zeros(slots, device=device)
+    totals = {"kills": [], "deaths": [], "damageDealt": [], "selfDamage": [], "suicides": []}
+    versus = {"kills": "killsVsPast", "deaths": "deathsVsPast", "damageDealt": "damageVsPast",
+              "selfDamage": "selfDamageVsPast", "suicides": "suicidesVsPast"}
+    finished = 0
+    try:
+        while finished < args.probe_episodes:
+            v = torch.as_tensor(vectors, device=device)[front_index]
+            p = torch.as_tensor(patches, device=device)[front_index] if use_patch else None
+            m = torch.as_tensor(maps, device=device)[front_index] if use_map else None
+            restart = ((done == DONE_FIRST) | (reset > 0)).float()[front_index]
+            with torch.no_grad():
+                chosen, _, _, _, kept = policy.act(
+                    v, p, m, want_entropy=False, carried=memory[front_index], restart=restart
+                )
+            memory[front_index] = kept
+            heads.zero_()
+            heads[front_index] = chosen.cpu()
+            pool.step(heads.to(torch.uint8).numpy())
+            vectors, patches, maps, _, env_done, restarts, stats = pool.observations()
+            done = torch.as_tensor(np.repeat(env_done, per_match).astype(np.float32), device=device)
+            reset = torch.as_tensor(restarts.astype(np.float32), device=device)
+            for match in np.nonzero(env_done == DONE_LAST)[0]:
+                if finished >= args.probe_episodes:
+                    break
+                row = stats[match]
+                for name, field in versus.items():
+                    mean = float(row[at[name]])
+                    diff = float(row[at[field]])
+                    totals[name].append(mean + back * diff / per_match)
+                finished += 1
+    finally:
+        pool.close()
+    return {f"probe{name[0].upper()}{name[1:]}": float(np.mean(values)) for name, values in totals.items()}
 
 
 def pick_device(choice: str) -> torch.device:
@@ -506,6 +587,7 @@ def main(argv=None):
             "resumedFrom": resumed_from,
             "resumedAt": resumed_at,
             "keepEvery": args.keep_every,
+            "probeEvery": args.probe_every,
         },
     )
     print(f"run {run.id} -> {run.path}", flush=True)
@@ -1039,6 +1121,19 @@ def main(argv=None):
                 line["episodes"] = int(len(episodes))
                 line["damageRatio"] = (
                     line["damageDealt"] / line["damageTaken"] if line["damageTaken"] > 0 else 0.0
+                )
+            if args.probe_every and updates % args.probe_every == 0:
+                probed_at = time.perf_counter()
+                policy.eval()
+                line.update(probe_against_still(policy, config, args, device))
+                policy.train()
+                line["probeSeconds"] = time.perf_counter() - probed_at
+                print(
+                    f"probe | against still worms: {line['probeKills']:.2f} kills, "
+                    f"{line['probeDeaths']:.2f} deaths ({line['probeSuicides']:.2f} its own), "
+                    f"{line['probeDamageDealt']:.0f} dealt, {line['probeSelfDamage']:.0f} to itself "
+                    f"| {line['probeSeconds']:.0f}s",
+                    flush=True,
                 )
             run.record(**line)
             latest.update({key: value for key, value in line.items() if key in SHOWN})

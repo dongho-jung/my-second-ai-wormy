@@ -14,6 +14,12 @@ const SERIES = {
   deathsVsPast: { label: "deaths: learners minus their past selves", good: "down" },
   selfDamageVsPast: { label: "damage to itself: learners minus their past selves", good: "down" },
   suicidesVsPast: { label: "deaths by its own hand: learners minus their past selves", good: "down" },
+  probeKills: { label: "kills a match against worms that do nothing", good: "up" },
+  probeDeaths: { label: "deaths a match against worms that do nothing", good: "down" },
+  probeSuicides: { label: "deaths by its own hand against worms that do nothing", good: "down" },
+  probeDamageDealt: { label: "damage dealt against worms that do nothing", good: "up" },
+  probeSelfDamage: { label: "damage to itself against worms that do nothing", good: "down" },
+  probeSeconds: { label: "seconds a probe took" },
   combat: { label: "combat score: damage, kills, deaths, learners only", good: "up" },
   bestCombat: { label: "best combat score kept", good: "up" },
   bestReward: { label: "best reward kept", good: "up" },
@@ -619,7 +625,7 @@ const GROUPS = [
   {
     title: "Is it getting better?",
     open: true,
-    of: ["killsVsPast", "damageVsPast", "deathsVsPast", "selfDamageVsPast", "combat", "bestCombat", "episodeReward", "bestReward", "meanReward", "kills", "deaths"],
+    of: ["killsVsPast", "damageVsPast", "deathsVsPast", "selfDamageVsPast", "probeKills", "probeDeaths", "probeSuicides", "combat", "bestCombat", "episodeReward", "bestReward", "meanReward", "kills", "deaths"],
   },
   {
     title: "What it is being paid for",
@@ -646,7 +652,7 @@ const GROUPS = [
   },
   {
     title: "How fast it is going",
-    of: ["stepsPerSecond", "ticksPerSecond", "envShare", "rolloutShare", "episodeSteps", "episodes"],
+    of: ["stepsPerSecond", "ticksPerSecond", "envShare", "rolloutShare", "episodeSteps", "episodes", "probeSeconds"],
   },
 ];
 

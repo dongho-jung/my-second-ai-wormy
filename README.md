@@ -201,6 +201,13 @@ npm run train -- --help
   of them is two different past selves rather than one standing in two places.
   The training page's first headline, **is it beating its past self**, is that
   difference; without opponents it has nothing to compare and says so.
+- **Every fifty updates the policy is probed on its own.** It plays a few
+  whole matches against worms that press nothing, and the page charts what
+  happened as `probeKills`, `probeDeaths`, `probeSuicides` and the damage both
+  ways. Everything else on the page is measured against a moving target, the
+  policy itself or its recent past; this is the one figure that says whether it
+  can find and kill a worm that just stands there, and how often it kills
+  itself trying. `--probe-every` sets the interval, 0 turns it off.
 - **The ladder can be taken away.** Aiming, closing in and covering ground pay
   because nothing else would get a policy started, and each is also a way to
   score without playing well. `--shaping-decay 0.6` fades them over the first
