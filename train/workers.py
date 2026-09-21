@@ -161,10 +161,20 @@ class WorkerPool:
         stats = np.empty((self.envs, len(layout.stat_fields)), dtype=np.float32)
         per_worker = layout.envs * layout.agents
         for index, frame in enumerate(self._frames):
-            take = lambda name, dtype: np.frombuffer(
-                frame, dtype=dtype, count=-1,
-                offset=layout.offsets[name][0],
-            )[: (layout.offsets[name][1] - layout.offsets[name][0]) // np.dtype(dtype).itemsize]
+            # Exactly this block, rather than everything from its start and
+            # then a slice. `count=-1` reads to the end of the frame, and numpy
+            # refuses when what is left over is not a whole number of elements
+            # — which it is not whenever the one-byte `dones` block has a
+            # length that does not divide four. The defaults happened to
+            # (48 envs, then 12); `--envs 2` did not, and the run died on its
+            # first observation.
+            def take(name, dtype, frame=frame):
+                start, stop = layout.offsets[name]
+                return np.frombuffer(
+                    frame, dtype=dtype,
+                    count=(stop - start) // np.dtype(dtype).itemsize,
+                    offset=start,
+                )
             agents = slice(index * per_worker, (index + 1) * per_worker)
             envs = slice(index * layout.envs, (index + 1) * layout.envs)
             vectors[agents] = take("vectors", np.float32).reshape(per_worker, -1)
