@@ -317,6 +317,13 @@ def probe_against_still(policy, config, args, device):
         decisionsDone=0,
     ))
     layout = pool.layout
+    if layout.vector_size != policy.norm.mean.shape[0]:
+        pool.close()
+        raise RuntimeError(
+            f"the probe's world gives a vector of {layout.vector_size} and the policy "
+            f"takes {policy.norm.mean.shape[0]}: the environment code has changed under "
+            "this run"
+        )
     slots = pool.slots
     per_match = layout.agents
     at = {name: index for index, name in enumerate(layout.stat_fields)}
@@ -1125,16 +1132,24 @@ def main(argv=None):
             if args.probe_every and updates % args.probe_every == 0:
                 probed_at = time.perf_counter()
                 policy.eval()
-                line.update(probe_against_still(policy, config, args, device))
-                policy.train()
-                line["probeSeconds"] = time.perf_counter() - probed_at
-                print(
-                    f"probe | against still worms: {line['probeKills']:.2f} kills, "
-                    f"{line['probeDeaths']:.2f} deaths ({line['probeSuicides']:.2f} its own), "
-                    f"{line['probeDamageDealt']:.0f} dealt, {line['probeSelfDamage']:.0f} to itself "
-                    f"| {line['probeSeconds']:.0f}s",
-                    flush=True,
-                )
+                try:
+                    line.update(probe_against_still(policy, config, args, device))
+                    line["probeSeconds"] = time.perf_counter() - probed_at
+                    print(
+                        f"probe | against still worms: {line['probeKills']:.2f} kills, "
+                        f"{line['probeDeaths']:.2f} deaths ({line['probeSuicides']:.2f} its own), "
+                        f"{line['probeDamageDealt']:.0f} dealt, {line['probeSelfDamage']:.0f} to itself "
+                        f"| {line['probeSeconds']:.0f}s",
+                        flush=True,
+                    )
+                except Exception as error:  # noqa: BLE001 — a probe must never take the run down
+                    # It starts a fresh worker from whatever code is on disk,
+                    # and a run that has been going for a day is worth more
+                    # than the figure. Say so and carry on.
+                    print(f"probe failed, carrying on: {error}", flush=True)
+                    run.note(f"probe failed: {error}")
+                finally:
+                    policy.train()
             run.record(**line)
             latest.update({key: value for key, value in line.items() if key in SHOWN})
             print(
