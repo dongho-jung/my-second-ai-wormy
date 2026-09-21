@@ -244,7 +244,18 @@ export class WormEnv {
   #poolNamed(pool, slots) {
     if (typeof pool !== "string") return pool;
     const { settings, mod } = { settings: this.engine.settings, mod: this.engine.mod };
-    if (pool === "starter") return weaponList(settings, mod, "starter-weapons.txt");
+    if (pool === "starter") {
+      const starter = weaponList(settings, mod, "starter-weapons.txt");
+      if (starter) return starter;
+      // The same silent fall-through as the room list: a curriculum that was
+      // asked for and quietly not given is a run whose log lies about itself.
+      console.warn(
+        `no starter-weapons.txt beside ${mod}: "starter" was asked for but ` +
+          `every one of ${settings.O.length} weapons can be spawned with. ` +
+          "Write the list, or pass --weapons room.",
+      );
+      return null;
+    }
     if (pool === "room") {
       const room = roomWeapons(settings, mod);
       if (room) return room.enabled;
