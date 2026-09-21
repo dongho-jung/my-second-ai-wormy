@@ -9,6 +9,10 @@ const element = (id) => document.getElementById(id);
 
 const SERIES = {
   episodeReward: { label: "reward per episode", good: "up" },
+  killsVsPast: { label: "kills: learners minus their past selves", good: "up" },
+  damageVsPast: { label: "damage dealt: learners minus their past selves", good: "up" },
+  deathsVsPast: { label: "deaths: learners minus their past selves", good: "down" },
+  selfDamageVsPast: { label: "damage to itself: learners minus their past selves", good: "down" },
   combat: { label: "combat score: damage, kills, deaths, learners only", good: "up" },
   bestCombat: { label: "best combat score kept", good: "up" },
   bestReward: { label: "best reward kept", good: "up" },
@@ -612,7 +616,7 @@ const GROUPS = [
   {
     title: "Is it getting better?",
     open: true,
-    of: ["killsVsPast", "damageVsPast", "combat", "bestCombat", "episodeReward", "bestReward", "meanReward", "kills", "deaths"],
+    of: ["killsVsPast", "damageVsPast", "deathsVsPast", "selfDamageVsPast", "combat", "bestCombat", "episodeReward", "bestReward", "meanReward", "kills", "deaths"],
   },
   {
     title: "What it is being paid for",

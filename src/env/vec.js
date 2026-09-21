@@ -56,6 +56,11 @@ export const EPISODE_STATS = [
   // then there is nothing to be better than.
   "killsVsPast",
   "damageVsPast",
+  // The same difference for the other two things a fight is scored on, so a
+  // learner that kills more than its past self but also dies more, or hurts
+  // itself more, is not read as simply better.
+  "deathsVsPast",
+  "selfDamageVsPast",
   // What the match is actually scored on — damage, kills and deaths, with no
   // ladder in it — averaged over the worms being trained only. The best
   // checkpoint is picked on this rather than on `reward`: with the ladder
@@ -319,6 +324,8 @@ export class VecWormEnv {
       else if (field === "seed") this.stats[at + offset] = env.episodeSeed;
       else if (field === "killsVsPast") this.stats[at + offset] = versus("killed");
       else if (field === "damageVsPast") this.stats[at + offset] = versus("damageDealt");
+      else if (field === "deathsVsPast") this.stats[at + offset] = versus("died");
+      else if (field === "selfDamageVsPast") this.stats[at + offset] = versus("selfDamage");
       else if (field === "combat") {
         this.stats[at + offset] =
           meanOf(0, split, "fromDamageDealt") +
