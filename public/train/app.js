@@ -76,6 +76,7 @@ const FIGURES = [
   ["bestCombat", "best", (value) => value.toFixed(2)],
   ["kills", "kills", (value) => value.toFixed(2)],
   ["deaths", "deaths", (value) => value.toFixed(2)],
+  ["probeKills", "vs still", (value) => value.toFixed(2)],
   ["selfDamage", "self damage", (value) => value.toFixed(0)],
   ["stuckSteps", "stuck", (value) => value.toFixed(0)],
   ["demoFrames", "your frames", (value) => count(value)],
@@ -334,6 +335,42 @@ const HEADLINES = [
         ? `${standing} Pulling further ahead than earlier in the run.`
         : move.change < -CHANGED
           ? `${standing} The gap has been closing.`
+          : `${standing} No change over the last stretch.`;
+    },
+  },
+  {
+    // The one figure on the page measured against something that never
+    // moves: every --probe-every updates the policy plays a few matches on
+    // its own against worms that press nothing. Its past self gets better
+    // as it does; these do not, so this is the number that can say whether
+    // it has learned to find a worm and kill it.
+    title: "Can it kill a sitting duck?",
+    good: "up",
+    track: "probeKills",
+    read: () => latest("probeKills"),
+    show: (value) => value.toFixed(2),
+    unit: () => {
+      const own = latest("probeSuicides");
+      return Number.isFinite(own)
+        ? `kills a match against worms that never move, dying ${own.toFixed(2)} times by its own hand`
+        : "kills a match against worms that never move";
+    },
+    state: (value) => (value >= 1 ? "good" : value < 0.2 ? "bad" : "flat"),
+    say: (move, value) => {
+      if (!Number.isFinite(value)) {
+        return "No probe yet. A run probes itself every --probe-every updates; the first lands after that many.";
+      }
+      const standing =
+        value >= 1
+          ? "It finds them and kills them."
+          : value < 0.2
+            ? "It cannot yet find a worm that does not move, or kills itself first."
+            : "The odd kill on a target that never moves.";
+      if (!move) return `${standing} Not enough probes yet to say which way it is going.`;
+      return move.change > CHANGED
+        ? `${standing} Better than earlier in the run.`
+        : move.change < -CHANGED
+          ? `${standing} Worse than earlier in the run.`
           : `${standing} No change over the last stretch.`;
     },
   },
