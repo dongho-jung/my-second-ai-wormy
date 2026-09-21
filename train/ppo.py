@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import copy
 import random
+import signal
 import sys
 import time
 from pathlib import Path
@@ -997,5 +998,18 @@ def main(argv=None):
     )
 
 
+def _stop(*_):
+    """Turn a container stop into the stop that Ctrl-C already handles.
+
+    Kubernetes ends a container with SIGTERM, and Python's default handler
+    ends the process without unwinding: neither the `except` nor the `finally`
+    around the training loop runs, so the run's own file is left saying
+    "running" long after nothing is running. Raising here takes the existing
+    KeyboardInterrupt path, which closes the run as stopped.
+    """
+    raise KeyboardInterrupt
+
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, _stop)
     main()
