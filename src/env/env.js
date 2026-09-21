@@ -7,7 +7,7 @@
 // goes through a single seeded generator, so a rollout is reproducible and a
 // policy's bad episode can be replayed exactly.
 import { KEYS, applyNormalizedAction, normalizeAction } from "./actions.js";
-import { makeRng, respawnWorm, roomWeapons, watchDamage } from "./engine.js";
+import { makeRng, respawnWorm, roomWeapons, watchDamage, weaponList } from "./engine.js";
 import {
   MAP_CELLS,
   OBSERVATIONS,
@@ -91,7 +91,7 @@ export function directFire(engine) {
  * its own weapon screen; the rest of the mod still turns up in crates, which is
  * what the room's "Banned" actually means. "all" is every weapon there is.
  */
-export const WEAPON_POOL_NAMES = ["room", "direct", "all"];
+export const WEAPON_POOL_NAMES = ["starter", "room", "direct", "all"];
 
 export const DEFAULTS = {
   // Three is a free-for-all, which is the interesting case; two is a duel and
@@ -172,14 +172,7 @@ export class WormEnv {
     }
     // "all" is null, which is every weapon — so the name has to be looked up
     // rather than defaulted through, or asking for all of them reads as a typo.
-    const chosen =
-      typeof settings.weaponPool === "string"
-        ? settings.weaponPool === "room"
-          ? roomWeapons(this.engine.settings, this.engine.mod)?.enabled ?? null
-          : settings.weaponPool === "direct"
-            ? this.#directOrEverything(settings.slots ?? 5)
-            : null
-        : settings.weaponPool;
+    const chosen = this.#poolNamed(settings.weaponPool, settings.slots ?? 5);
     const barred = this.#bannedAtStart(settings.banStart);
     // Null means every weapon, so the ban has to be spelled out as a list.
     this.weaponPool = !barred.size
@@ -224,6 +217,16 @@ export class WormEnv {
    * own generator, so a worker can loop `reset()` and still replay any episode
    * from the seed the returned info reports.
    */
+  /** The ids a named weapon pool stands for, or null for every weapon. */
+  #poolNamed(pool, slots) {
+    if (typeof pool !== "string") return pool;
+    const { settings, mod } = { settings: this.engine.settings, mod: this.engine.mod };
+    if (pool === "starter") return weaponList(settings, mod, "starter-weapons.txt");
+    if (pool === "room") return roomWeapons(settings, mod)?.enabled ?? null;
+    if (pool === "direct") return this.#directOrEverything(slots);
+    return null; // "all"
+  }
+
   /**
    * The ids of weapons named in `banStart`, for dropping from a loadout.
    *

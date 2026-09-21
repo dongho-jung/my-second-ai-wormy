@@ -450,6 +450,40 @@ export function roomWeapons(settings, mod = DEFAULT_MOD) {
   return { enabled, crateOnly };
 }
 
+/**
+ * A named subset of the room's weapons, by name, one per line.
+ *
+ * Resolved against the weapons the room lets a worm spawn with, which is what
+ * makes the names unambiguous: four of them belong to two weapons each, and
+ * only one of each pair is ever spawned with. Used for a curriculum — guns
+ * first, so a policy can learn to aim before it learns what a rocket does to
+ * the worm holding it.
+ */
+export function weaponList(settings, mod, file) {
+  const path = new URL(`${mod}/${file}`, MODS_DIR);
+  if (!existsSync(path)) return null;
+  const room = roomWeapons(settings, mod);
+  const spawnable = room ? room.enabled : settings.O.map((_, id) => id);
+  const byName = new Map(
+    spawnable.map((id) => [String(settings.O[id].name).trim().toUpperCase(), id]),
+  );
+  const ids = [];
+  const missing = [];
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    const name = line.trim().toUpperCase();
+    if (!name) continue;
+    const id = byName.get(name);
+    if (id === undefined) missing.push(line.trim());
+    else ids.push(id);
+  }
+  if (missing.length) {
+    throw new Error(
+      `${mod}/${file} names weapons this mod does not spawn: ${missing.join(", ")}`,
+    );
+  }
+  return ids;
+}
+
 export function weaponKeys(settings) {
   return settings.O.map((weapon) => {
     // Everything but the id, which is the thing that moves.

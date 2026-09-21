@@ -48,8 +48,10 @@ def parse_args(argv=None):
                        help="the game's own level pool, as `npm run levels` downloads it")
     world.add_argument("--stock-levels", type=int, default=64,
                        help="how many of them to use; 0 trains on generated maps alone")
-    world.add_argument("--weapons", default="room", choices=["room", "direct", "all"],
-                       help="which weapons a worm can spawn holding. `room` is the list the "
+    world.add_argument("--weapons", default="room", choices=["starter", "room", "direct", "all"],
+                       help="which weapons a worm can spawn holding. `starter` is a hand-picked 45 for "
+                            "learning to aim before learning what a rocket does to whoever "
+                            "fired it; `room` is the list the "
                             "watched room actually allows, read off its weapon screen: 95 of the "
                             "129, with the other 34 reachable only out of a crate")
     world.add_argument("--mod", default=None,
