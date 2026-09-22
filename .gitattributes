@@ -1,0 +1,3 @@
+# A level is one palette-index byte per pixel. One with no NUL in it looks like
+# text to git, and core.autocrlf then rewrites its bytes on the way in.
+*.lev binary
