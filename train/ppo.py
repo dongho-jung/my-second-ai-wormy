@@ -876,7 +876,13 @@ def main(argv=None):
     # score is the learners' combat reward with no ladder in it, because the
     # ladder fades over a run: on the total reward a later, better policy reads
     # lower than an earlier one, and "best" freezes halfway through.
-    best_combat = None
+    # What "best" is scored on. A fight is scored on damage, kills and deaths;
+    # a movement run has none of those and is scored on destinations reached —
+    # on `combat`, which is zero throughout, best.pt was the first checkpoint
+    # ever written and a resume from a movement run carried on from nothing.
+    score_field = "goalsReached" if args.task == "movement" else "combat"
+    best_name = "bestGoals" if args.task == "movement" else "bestCombat"
+    best_score = None
     smoothed = None
     # An episode is longer than a rollout, so most updates end with none of them
     # finished. The last numbers stay on the line rather than reading as zero.
@@ -1374,17 +1380,18 @@ def main(argv=None):
                 f"kl {line['approxKL']:.4f} lr {line['learningRate']:.1e}",
                 flush=True,
             )
-            if "combat" in line:
+            if score_field in line:
                 smoothed = (
-                    line["combat"]
+                    line[score_field]
                     if smoothed is None
-                    else 0.9 * smoothed + 0.1 * line["combat"]
+                    else 0.9 * smoothed + 0.1 * line[score_field]
                 )
-                if best_combat is None or smoothed > best_combat:
-                    best_combat = smoothed
+                if best_score is None or smoothed > best_score:
+                    best_score = smoothed
                     save(policy, layout, shape_of, total_steps, run.path / "best.pt",
-                         combat=best_combat, reward=line.get("episodeReward"))
-                    run.record(step=total_steps, bestCombat=best_combat)
+                         score=best_score, reward=line.get("episodeReward"),
+                         **{score_field: best_score})
+                    run.record(step=total_steps, **{best_name: best_score})
             if updates % args.save_every == 0:
                 save(policy, layout, shape_of, total_steps, run.path / "policy.pt")
             if args.keep_every and updates % args.keep_every == 0:
@@ -1402,7 +1409,7 @@ def main(argv=None):
         status="done",
         steps=total_steps,
         updates=updates,
-        bestCombat=best_combat,
+        **{best_name: best_score},
     )
 
 
