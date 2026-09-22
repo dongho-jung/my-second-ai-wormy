@@ -196,3 +196,40 @@ Two things, both measured:
   curriculum should not depend on that. `--goal-curriculum success` moves the
   radius on the share of destinations reached instead; `a` runs it, `b` stays
   on the clock as the control.
+
+## Why no rope was ever held, traced throw by throw
+
+The local run at a fixed 120 px radius (1M steps, nine destinations a match)
+was played back with every rope throw followed, the input delay accounted for.
+Per worm and match:
+
+| | |
+| --- | ---: |
+| throw choices | 95 |
+| release choices | 275, of which with no rope out | 214 |
+| jump presses | 221 |
+| decisions with a rope out | 58 of 900, being pulled up on 11 |
+| median time a rope was out | 2 decisions (0.13 s), 8 or more on 2.4% |
+| throws aimed above 60° | 87% |
+
+Ropes were let go by the policy's own release 93% of the time, by a jump 7%.
+The release choice had to press Jump to match the client, so it became a
+second jump key: 78% of its presses were with no rope out. And even without
+that, a choice made afresh fifteen times a second keeps a rope for twelve
+decisions with probability near zero, so the pull — which needs about that
+long to move the worm a hundred pixels — was never experienced and never
+learned. The aim was not the problem: seven throws in eight went up.
+
+Changed on 2026-09-23, both runs restarted:
+
+- **No release choice.** The rope head is throw or nothing; letting go is the
+  jump head, as it is a person's Jump key.
+- **A throw is a commitment** (`--rope-hold`, `RopeHold` in actions.js): for
+  that many decisions another throw is ignored and the jump key dropped, in
+  the environment and in the live driver alike. `a` holds 12, `b` 24.
+- **The worm sees what a throw would hook** (`ropeReach` in the vector): along
+  the aim, the distance to the first ground that holds a rope and how far up
+  it is. A mechanism it can look at rather than one to find blind.
+- **Half the destinations are above the worm** (`--goal-above 0.5`, at least
+  48 px up), where a jump does not reach, so the success curriculum cannot
+  move on until the rope is used.

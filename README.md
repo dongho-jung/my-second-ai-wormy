@@ -124,7 +124,7 @@ setting: solo, a duel and a five-way brawl all run on the same code.
 | Module | What it does |
 | --- | --- |
 | `engine.js` | Patches the bundle in memory, evaluates it, and checks its SHA-256 against the one the adapter locked. Also seed-reproducible level generation, random weapon loadouts, and the instrument that records **who hit whom**. |
-| `actions.js` | The key bitmask (`1 left … 256 dig`), the rope and weapon-change messages that are not bits, and the eight heads a policy emits. Exactly how a real room passes input. |
+| `actions.js` | The key bitmask (`1 left … 256 dig`), the rope and weapon-change messages that are not bits, the eight heads a policy emits, and the hold that keeps a rope throw from being undone for a while. Exactly how a real room passes input: there is no "release" head, because letting go of the rope is a press of Jump. |
 | `view.js` | Turns a headless world and a live snapshot into **one shape**. The observation encoders read only that. |
 | `observation.js` | The vector (150-238 numbers, depending on how many worms are playing), the worm's own 213x121 view of the terrain in eight planes — rock, dirt, free, the flagless ground a rope goes through, shots, foes, itself, its destination — and the whole level on a 32x32 grid. Any of them can be left out. |
 | `progress.js` | Whether a worm is stuck, going in circles, or closing on a goal, and how long it has had the goal. |
@@ -210,6 +210,20 @@ Five of the community maps draw much of their walls in a colour that has no
 material flags: a worm walks into it and a rope flies through it. The patch
 and the map show that ground as its own kind, `ghost`, so the policy can see
 which walls hold a rope, and both show where the goal is when it is in view.
+
+**A throw is a commitment.** `--rope-hold 12` keeps a rope for twelve
+decisions after it is thrown — another throw is ignored and the jump key,
+which is how a rope is let go, is dropped — so the rope gets to pull. Without
+it a trained policy kept a rope for two decisions in the median and was pulled
+nowhere: it had a "release" choice of its own that also pressed Jump (it had
+to, to match the game), used it as a second jump key 275 times a match, and
+undid every throw with it. There is no release choice any more; the jump head
+is the Jump key, for the policy as for a person, and the live driver keeps the
+same hold. Two more things make the rope a mechanism rather than a lottery:
+the vector says what a throw would hook right now — along the aim, how far to
+the first ground that holds a rope and how far up it is — and `--goal-above
+0.5` draws half the destinations where a jump does not reach, so the success
+curriculum cannot move on until the rope is used.
 
 ## Training
 

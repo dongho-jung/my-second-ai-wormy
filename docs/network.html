@@ -104,9 +104,9 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
 </section>
 <section id="inputs">
   <span class="kicker">02 / OBSERVATION</span><h2>숫자 하나의 묶음, 두 가지 시야</h2>
-  <p class="muted">수치는 코드 기본값인 상대 슬롯 2개, 패치 셀 2픽셀, 패치와 전체 지도 입력을 모두 켠 구성 기준입니다. 6인전 실행 설정에서는 상대 슬롯이 5개라 벡터가 238로 늘어납니다.</p>
+  <p class="muted">수치는 코드 기본값인 상대 슬롯 2개, 패치 셀 2픽셀, 패치와 전체 지도 입력을 모두 켠 구성 기준입니다. 6인전 실행 설정에서는 상대 슬롯이 5개라 벡터가 241로 늘어납니다.</p>
   <div class="grid">
-    <article class="card"><h3>상태 벡터</h3><span class="shape">172 <small style="font-size:.55em;color:var(--muted)">(6인전 238)</small></span><p>체력, 탄약, 조준과 조준 각속도, 16방향 거리 센서, 상대와 투사체 정보, 상대마다 든 무기로 맞히려면 조준을 얼마나 돌려야 하는지, 직전 결정, 그리고 목적지의 방향과 거리입니다. 학습 중 누적한 평균·분산으로 정규화한 뒤 완전연결층에 넣습니다. 끝의 무기 ID 7개 — 내 다섯 슬롯과 상대 둘이 든 것 — 만은 측정값이 아니라 이름이므로 정규화에서 빼고 임베딩으로 따로 처리합니다. 6인전에서는 상대 5명 몫이 더해져 무기 ID도 10개입니다.</p></article>
+    <article class="card"><h3>상태 벡터</h3><span class="shape">175 <small style="font-size:.55em;color:var(--muted)">(6인전 241)</small></span><p>체력, 탄약, 조준과 조준 각속도, 16방향 거리 센서, 상대와 투사체 정보, 상대마다 든 무기로 맞히려면 조준을 얼마나 돌려야 하는지, 직전 결정, 목적지의 방향과 거리, 로프를 던진 뒤 잡고 있어야 할 남은 시간, 그리고 지금 조준으로 던지면 로프가 어디에 걸리는지입니다. 학습 중 누적한 평균·분산으로 정규화한 뒤 완전연결층에 넣습니다. 끝의 무기 ID 7개 — 내 다섯 슬롯과 상대 둘이 든 것 — 만은 측정값이 아니라 이름이므로 정규화에서 빼고 임베딩으로 따로 처리합니다. 6인전에서는 상대 5명 몫이 더해져 무기 ID도 10개입니다.</p></article>
     <article class="card"><h3>주변 지형 패치</h3><span class="shape">8 × 121 × 213</span><p>웜 주변 가로 426 × 세로 242픽셀을 2 × 2픽셀 셀로 읽습니다. 게임의 426 × 240 시야에 세로 여유 2픽셀을 둡니다. 셀 안의 가장 단단한 지형을 바위·흙·빈 공간·ghost 중 하나로, 투사체·상대·자기 자신·목적지를 각각 별도 채널로 표현합니다. ghost 는 재질 플래그가 없는 색으로, 웜은 막고 로프는 통과시킵니다. 이 방이 도는 커뮤니티 맵 다섯 장은 벽의 19~62%가 그 색이라, 바위로 그려 두면 정책은 걸 수 없는 벽을 걸 수 있다고 봅니다. 셀 크기는 <code>--patch-scale</code>로 고르며 4를 주면 같은 시야가 8 × 61 × 107이 됩니다. 체크포인트에 실리므로 뷰어도 학습한 배율로 재생합니다.</p></article>
     <article class="card"><h3>전체 지도</h3><span class="shape">5 × 32 × 32</span><p>맵 전체를 32 × 32 격자로 압축합니다. 빈 공간·흙·바위·ghost 의 비율과 웜과 목적지의 위치를 담습니다. 기본 학습은 방이 실제로 도는 커뮤니티 맵(<code>cs_</code> 풀)에서만 하고, 게임이 만들어 주는 504 × 350 dirt 맵은 켜야 섞입니다.</p></article>
   </div>
@@ -118,20 +118,20 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
   <p class="muted">세 갈래 입력을 각각 처리한 뒤 합치고, 공통 특징에서 행동과 가치를 읽습니다. 아래 크기는 배치 차원을 생략했습니다.</p>
   <figure class="flow">
     <div class="flow-grid">
-      <div class="lane"><div class="node input"><strong>상태 벡터</strong><code>172</code><small>6인전 238</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>누적 통계 정규화</strong><small>평균·분산 적용, 범위 제한</small><small>무기 ID 7개는 제외</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>172 → 128</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>무기 ID 임베딩 이어붙이기</strong><small>내 5슬롯과 상대 2명의 무기</small><code>7 × 8 = 56</code><small>6인전 10 × 8 = 80</small></div><span class="arrow">출력 128 + 56</span></div>
+      <div class="lane"><div class="node input"><strong>상태 벡터</strong><code>175</code><small>6인전 241</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>누적 통계 정규화</strong><small>평균·분산 적용, 범위 제한</small><small>무기 ID 7개는 제외</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>175 → 128</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>무기 ID 임베딩 이어붙이기</strong><small>내 5슬롯과 상대 2명의 무기</small><code>7 × 8 = 56</code><small>6인전 10 × 8 = 80</small></div><span class="arrow">출력 128 + 56</span></div>
       <div class="lane"><div class="node input"><strong>주변 패치</strong><code>8 × 121 × 213</code><small>25,773바이트 → 지형 4채널 + 투사체·상대·자기·목표 4채널</small><small>셀 4픽셀이면 8 × 61 × 107</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 8 → 32 + ReLU</strong><small>커널 8 × 8 · 보폭 4 · 패딩 2</small><code>32 × 30 × 53</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 32 → 64 + ReLU</strong><small>커널 4 × 4 · 보폭 2 · 패딩 1</small><code>64 × 15 × 26</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 64 → 32 + ReLU</strong><small>커널 3 × 3 · 보폭 2 · 패딩 1</small><code>32 × 8 × 13</code></div><span class="arrow">펼치기 → 3,328 <small>(셀 4픽셀이면 896)</small></span></div>
       <div class="lane"><div class="node input"><strong>전체 지도</strong><code>5 × 32 × 32</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 5 → 16 + ReLU</strong><small>커널 4 × 4 · 보폭 2</small><code>16 × 15 × 15</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 16 → 32 + ReLU</strong><small>커널 3 × 3 · 보폭 2</small><code>32 × 7 × 7</code></div><span class="arrow">펼치기 → 1,568</span></div>
     </div>
     <div class="join"><strong>특징 결합</strong> · 128 + 56 + 3,328 + 1,568 = <strong>5,080</strong> <span class="muted">(6인전 5,104 · 셀 4픽셀이면 2,672)</span></div>
     <div class="trunk"><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>5,080 → 256</code><small>전체 학습 파라미터의 약 70%</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>256 → 256</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>순환 기억 · GRU</strong><code>256 → 256</code><small>직전 결정에서 넘겨받은 은닉 상태를 함께 읽고 갱신합니다. 새 에피소드가 시작될 때와 그 웜이 리스폰할 때 0으로 지웁니다</small></div></div>
     <span class="arrow" aria-hidden="true">↓</span>
-    <div class="outputs"><div class="node"><strong>행동 정책 · actor</strong><code>8개 헤드 · 21개 로짓</code><small>헤드별 선택 확률에서 행동 추출</small></div><div class="node"><strong>가치 함수 · critic</strong><code>스칼라 1개</code><small>미래 할인 누적 보상의 추정값</small></div></div>
-    <div class="heads" aria-label="행동 헤드별 선택지 수"><span>이동 3</span><span>조준 3</span><span>발사 2</span><span>점프 2</span><span>굴착 2</span><span>로프 3</span><span>로프 길이 3</span><span>무기 3</span></div>
+    <div class="outputs"><div class="node"><strong>행동 정책 · actor</strong><code>8개 헤드 · 20개 로짓</code><small>헤드별 선택 확률에서 행동 추출</small></div><div class="node"><strong>가치 함수 · critic</strong><code>스칼라 1개</code><small>미래 할인 누적 보상의 추정값</small></div></div>
+    <div class="heads" aria-label="행동 헤드별 선택지 수"><span>이동 3</span><span>조준 3</span><span>발사 2</span><span>점프 2</span><span>굴착 2</span><span>로프 2</span><span>로프 길이 3</span><span>무기 3</span></div>
     <figcaption>주변 패치는 3층, 전체 지도는 2층의 별도 합성곱으로 처리합니다. 패치 합성곱에는 패딩을 두어 마지막 격자가 웜을 중심에 둡니다. 패딩이 없으면 층마다 아래·오른쪽의 남는 칸이 버려져, 셀 4픽셀에서는 아래 36px와 오른쪽 44px를 아무 출력도 보지 않았습니다. 합성곱은 공간의 모양을, 결합층은 지형과 전투 수치의 관계를 학습합니다. ReLU는 음수를 0으로 만드는 활성화 함수입니다. 행동과 가치는 결합층이 아니라 <strong>GRU의 출력</strong>에서 읽으므로, 같은 관측이라도 직전까지의 경과에 따라 다른 선택이 나올 수 있습니다. 과거 자신이 앉은 좌석은 같은 관측을 옛 가중치와 옛 기억으로 통과시켜 행동만 가져오고, 그 로그 확률과 가치는 버립니다. 모바일에서는 각 입력 경로를 위에서 아래로 읽은 뒤, 특징 결합 단계로 이어집니다.</figcaption>
   </figure>
 </section>
 <section id="vector">
-  <span class="kicker">04 / VECTOR</span><h2>172개 숫자에는 무엇이 들어갈까</h2>
+  <span class="kicker">04 / VECTOR</span><h2>175개 숫자에는 무엇이 들어갈까</h2>
   <p>학습으로 생성한 임베딩이 아니라, 코드가 직접 측정하는 관측값입니다. 아래 표는 인접한 일부 필드를 묶어 표시했습니다.</p>
   <details><summary>전체 필드와 오프셋 펼치기</summary>
     <p class="scroll-hint">좁은 화면에서는 표 안에서 좌우로 스크롤할 수 있습니다.</p>
@@ -153,34 +153,36 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
       <tr><td class="n">71</td><td class="n">42</td><td><code>foes</code></td><td>상대 2명 × 21개: 생존·위치·거리·방향·체력·속도·무기 특성, 그리고 <strong>사격 해</strong> 2개. 지금 든 무기의 속도와 낙차로 그 상대를 맞히려면 조준을 얼마나 돌려야 하는지(부호 있는 라디안)와 그 궤적이 지형에 막히지 않는지입니다. 조준 보상이 지급되는 것과 같은 계산이라, 보상받는 것과 보이는 것이 같습니다</td></tr>
       <tr><td class="n">113</td><td class="n">24</td><td><code>projectiles</code></td><td>가까운 투사체 3개 × 8개: 상대 위치·속도·무기 특성. 무기가 던진 것만 세고 피·탄피·파편 같은 장식 입자는 뺍니다</td></tr>
       <tr><td class="n">137</td><td class="n">12</td><td><code>pickups</code></td><td>가까운 보급품 3개 × 4개: 상대 위치·체력 또는 무기 여부</td></tr>
-      <tr><td class="n">149</td><td class="n">11</td><td><code>lastAction</code></td><td>직전 결정: 눌린 키 9개(좌·우·조준 상·하·발사·점프·로프 감기·풀기·굴착)와 로프 메시지(던지기 +1, 해제 −1), 무기 메시지(다음 +1, 이전 −1). 점프·굴착은 누르는 순간에만 작동하고, 지연 큐에 실려 가는 행동은 세계에 아직 보이지 않으므로 정책이 자기 선택을 기억해야 합니다. 매치 시작 시 0</td></tr>
+      <tr><td class="n">149</td><td class="n">11</td><td><code>lastAction</code></td><td>직전 결정: 눌린 키 9개(좌·우·조준 상·하·발사·점프·로프 감기·풀기·굴착)와 로프 메시지(던지기 +1, 점프로 놓음 −1), 무기 메시지(다음 +1, 이전 −1). 점프·굴착은 누르는 순간에만 작동하고, 지연 큐에 실려 가는 행동은 세계에 아직 보이지 않으므로 정책이 자기 선택을 기억해야 합니다. 매치 시작 시 0</td></tr>
       <tr><td class="n">160</td><td class="n">1</td><td><code>latency</code></td><td>이번 에피소드에 이 웜의 키가 얼마나 늦게 닿는지. 30틱으로 나눈 값이라 런이 달라도 같은 뜻입니다</td></tr>
       <tr><td class="n">161</td><td class="n">4</td><td><code>goal</code></td><td>가라고 받은 목적지: 있음 여부, 단위 방향 x·y, 800픽셀에서 포화하는 거리. 이동 단계에서만 채워지고 전투에서는 0 이라 벡터 크기는 두 단계가 같습니다</td></tr>
-      <tr><td class="n">165</td><td class="n">7</td><td><code>weaponIds</code></td><td>내 5슬롯과 상대 2명이 든 무기의 ID. 빈 슬롯은 −1. 측정값이 아니라 이름이므로 정규화 대상에서 빼고 임베딩으로 넘깁니다</td></tr>
-      </tbody><tfoot><tr><td class="n">합계</td><td class="n">172</td><td colspan="2">상대 슬롯을 1개로 설정하면 150, 4개면 216, 6인전의 5개면 238. 슬롯 수가 바뀌면 <code>foes</code> 뒤의 오프셋이 함께 밀립니다</td></tr></tfoot>
+      <tr><td class="n">165</td><td class="n">1</td><td><code>ropeHold</code></td><td>로프를 던진 뒤 잡고 있어야 할 남은 시간의 비율. 던지기는 <code>--rope-hold</code>결정 동안의 약속이라 그동안은 다시 던지기와 점프(놓기)가 무시되며, 정책은 세지 않고도 어디쯤인지 압니다</td></tr>
+      <tr><td class="n">166</td><td class="n">2</td><td><code>ropeReach</code></td><td>지금 조준으로 던지면 로프가 어디에 걸리는지: 조준선을 따라 로프가 붙는 첫 지형까지의 거리(250픽셀 기준, 사거리 안에 없으면 0)와 그 지점이 웜보다 얼마나 위인지. 플래그 없는 벽은 로프가 통과하므로 그 뒤까지 봅니다</td></tr>
+      <tr><td class="n">168</td><td class="n">7</td><td><code>weaponIds</code></td><td>내 5슬롯과 상대 2명이 든 무기의 ID. 빈 슬롯은 −1. 측정값이 아니라 이름이므로 정규화 대상에서 빼고 임베딩으로 넘깁니다</td></tr>
+      </tbody><tfoot><tr><td class="n">합계</td><td class="n">175</td><td colspan="2">상대 슬롯을 1개로 설정하면 153, 4개면 219, 6인전의 5개면 241. 슬롯 수가 바뀌면 <code>foes</code> 뒤의 오프셋이 함께 밀립니다</td></tr></tfoot>
     </table></div>
   </details>
   <p class="note">벡터 크기는 실제 참가자 수가 아니라 <strong>설정한 상대 슬롯 수</strong>에 따라 결정됩니다. 6인전으로 학습한 정책을 뷰어에서 3인전에 넣으면 상대 슬롯 5개 중 둘만 채워지고 나머지는 0으로 남습니다. 체크포인트가 학습 당시의 슬롯 수를 기억하므로 벡터 폭은 유지됩니다.</p>
 </section>
 <section id="parameters">
   <span class="kicker">05 / PARAMETERS</span><h2>약 186만~188만 개의 파라미터, 대부분은 결합 직후와 기억에</h2>
-  <div class="two"><div><p>코드 기본값에서는 총 <strong>1,863,766개</strong>의 학습 파라미터 중 69.8%가 <code>5,080 → 256</code> 완전연결층에, 21.2%가 GRU에 있습니다. 6인전 실행 설정은 벡터가 238, 무기 ID가 10개라 첫 완전연결층과 결합층이 조금 커져 <strong>1,878,358개</strong>가 됩니다. 패치 셀을 4픽셀로 하면 결합 입력이 2,672로 줄어 1,255,766개입니다. 아래 수치는 편향을 포함하고, 정규화의 누적 통계 버퍼는 제외합니다. 무기 임베딩은 모드가 정의한 무기 수에 따라 달라지며, 아래는 이 방이 쓰는 129개 기준입니다.</p><p class="note"><strong>크다고 곧 병목은 아닙니다.</strong> 파라미터 비중만으로 어디를 넓혀야 할지 결정할 수 없습니다. 합성곱 출력 채널을 늘리면 뒤의 결합층 입력도 커져 전체 비용이 함께 늘어납니다. 먼저 관측·보상·평가의 문제를 구분해야 합니다.</p></div>
+  <div class="two"><div><p>코드 기본값에서는 총 <strong>1,863,893개</strong>의 학습 파라미터 중 69.8%가 <code>5,080 → 256</code> 완전연결층에, 21.2%가 GRU에 있습니다. 6인전 실행 설정은 벡터가 241, 무기 ID가 10개라 첫 완전연결층과 결합층이 조금 커져 <strong>1,878,485개</strong>가 됩니다. 패치 셀을 4픽셀로 하면 결합 입력이 2,672로 줄어 1,255,893개입니다. 아래 수치는 편향을 포함하고, 정규화의 누적 통계 버퍼는 제외합니다. 무기 임베딩은 모드가 정의한 무기 수에 따라 달라지며, 아래는 이 방이 쓰는 129개 기준입니다.</p><p class="note"><strong>크다고 곧 병목은 아닙니다.</strong> 파라미터 비중만으로 어디를 넓혀야 할지 결정할 수 없습니다. 합성곱 출력 채널을 늘리면 뒤의 결합층 입력도 커져 전체 비용이 함께 늘어납니다. 먼저 관측·보상·평가의 문제를 구분해야 합니다.</p></div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="파라미터 수 표"><table><caption>층별 학습 파라미터 (코드 기본값 3인전 · 괄호는 6인전)</caption><thead><tr><th scope="col">층</th><th scope="col" class="n">개수</th><th scope="col" class="n">비중</th></tr></thead><tbody>
   <tr><td><code>5080 → 256</code><span class="bar" style="width:100%"></span></td><td class="n">1,300,736 <span class="muted">(1,306,880)</span></td><td class="n">69.8%</td></tr>
   <tr><td>순환 기억 · GRU <code>256 → 256</code><span class="bar" style="width:30%"></span></td><td class="n">394,752</td><td class="n">21.2%</td></tr>
   <tr><td><code>256 → 256</code></td><td class="n">65,792</td><td class="n">3.5%</td></tr>
   <tr><td>주변 패치 합성곱 3층</td><td class="n">67,712</td><td class="n">3.6%</td></tr>
-  <tr><td><code>172 → 128</code></td><td class="n">22,144 <span class="muted">(238 → 128: 30,592)</span></td><td class="n">1.2%</td></tr>
+  <tr><td><code>175 → 128</code></td><td class="n">22,528 <span class="muted">(241 → 128: 30,976)</span></td><td class="n">1.2%</td></tr>
   <tr><td>전체 지도 합성곱 2층</td><td class="n">5,936</td><td class="n">0.3%</td></tr>
-  <tr><td>행동 출력</td><td class="n">5,397</td><td class="n">0.3%</td></tr>
+  <tr><td>행동 출력</td><td class="n">5,140</td><td class="n">0.3%</td></tr>
   <tr><td>무기 ID 임베딩 <code>130 × 8</code></td><td class="n">1,040</td><td class="n">0.06%</td></tr>
   <tr><td>가치 출력</td><td class="n">257</td><td class="n">0.01%</td></tr>
-  </tbody><tfoot><tr><td>합계</td><td class="n">1,863,766 <span class="muted">(1,878,358)</span></td><td class="n">100%</td></tr></tfoot></table></div></div>
+  </tbody><tfoot><tr><td>합계</td><td class="n">1,863,893 <span class="muted">(1,878,485)</span></td><td class="n">100%</td></tr></tfoot></table></div></div>
 </section>
 <section id="actions">
-  <span class="kicker">06 / ACTION</span><h2>1,944개 조합을 8개의 선택으로 나눕니다</h2>
-  <p>이동·조준·발사·점프·굴착·로프·로프 길이·무기를 각각 고릅니다. <code>3 × 3 × 2 × 2 × 2 × 3 × 3 × 3 = 1,944</code>개의 행동 조합을, 각 헤드의 선택지 수를 더한 <strong>21개 로짓</strong>으로 표현합니다. 로짓은 확률로 바꾸기 전의 점수입니다.</p>
-  <p>이동은 입력 없음·왼쪽·오른쪽, 조준은 유지·위·아래 중 하나입니다. 로프는 유지·발사·해제, <strong>로프 길이는 유지·당기기·풀기</strong>, 무기는 유지·다음·이전입니다. 발사·점프·굴착은 각각 끄기·켜기입니다. 로프를 던지는 것은 메시지, 감고 푸는 것은 눌린 키라 같은 틱에 함께 일어날 수 있습니다.</p>
+  <span class="kicker">06 / ACTION</span><h2>1,296개 조합을 8개의 선택으로 나눕니다</h2>
+  <p>이동·조준·발사·점프·굴착·로프·로프 길이·무기를 각각 고릅니다. <code>3 × 3 × 2 × 2 × 2 × 2 × 3 × 3 = 1,296</code>개의 행동 조합을, 각 헤드의 선택지 수를 더한 <strong>20개 로짓</strong>으로 표현합니다. 로짓은 확률로 바꾸기 전의 점수입니다.</p>
+  <p>이동은 입력 없음·왼쪽·오른쪽, 조준은 유지·위·아래 중 하나입니다. 로프는 유지·던지기 둘뿐이고 <strong>놓기는 점프 헤드</strong>입니다. 실제 클라이언트가 Jump 키를 누르는 순간 로프를 놓기 때문인데, 별도의 놓기 선택지에 점프까지 붙여 두었더니 학습된 정책이 그것을 두 번째 점프 키로 써서(매치당 275번, 78%는 로프도 없이) 던진 로프를 두 결정 안에 전부 놓아 버렸습니다. 던지기는 <code>--rope-hold</code>결정 동안의 약속이라 그동안 다시 던지기와 점프는 무시되고, 로프가 웜을 끌어당길 시간을 얻습니다. <strong>로프 길이는 유지·당기기·풀기</strong>, 무기는 유지·다음·이전입니다. 발사·점프·굴착은 각각 끄기·켜기입니다. 로프를 던지는 것은 메시지, 감고 푸는 것은 눌린 키라 같은 틱에 함께 일어날 수 있습니다.</p>
   <p class="note"><strong>간결함의 대가도 있습니다.</strong> 현재 정책은 같은 관측 아래에서 헤드별 확률을 곱합니다. 공통 특징으로 행동을 조율할 수 있지만, 임의의 행동 간 확률적 의존성을 모두 표현하지는 못합니다. 이동의 «입력 없음»은 정지 명령이 아니므로 관성·중력·로프에 의해 계속 움직일 수 있습니다.</p>
 </section>
 <section id="movement">
