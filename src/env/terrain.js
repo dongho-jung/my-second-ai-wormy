@@ -43,6 +43,46 @@ export function diggableAt(terrain, x, y) {
   return (flags & BACKGROUND) === 0 && (flags & DIGGABLE) !== 0;
 }
 
+/** Bits 0-2: the test the rope itself makes, read off `zc.update` in the bundle. */
+export const ROPE_HOLDS = 7;
+
+/**
+ * Whether a thrown rope stops here.
+ *
+ * Not the same question as `solidAt`. The rope attaches where any of bits 0-2
+ * is set — dirt or rock — and flies on through anything else, while the worm
+ * is stopped by anything that is not background. This mod's palette has 175
+ * colours with no flags at all and nine with only bit 5, and five of the
+ * community maps draw much of their walls in them: a worm walks into such a
+ * wall and a rope goes straight through it to whatever is behind. Off the map
+ * counts as holding, which is what the engine does at the edge.
+ */
+export function ropeHoldsAt(terrain, x, y) {
+  return (flagsAt(terrain, x, y) & ROPE_HOLDS) !== 0;
+}
+
+/**
+ * The four kinds of ground an observation tells apart, by material flags.
+ *
+ * `ghost` is the fourth: solid to the worm, nothing to the rope. It used to be
+ * folded into rock, which showed the policy a wall it could hook and could not.
+ * The codes are what the patch keeps in its two low bits, so they are fixed —
+ * a recording made before `ghost` existed still reads the same.
+ */
+export const KIND = { rock: 0, dirt: 1, free: 2, ghost: 3 };
+
+export function kindOf(flags) {
+  if (flags & BACKGROUND) return KIND.free;
+  if (flags & DIGGABLE) return KIND.dirt;
+  if (flags & SHOT_STOPS) return KIND.rock;
+  return KIND.ghost;
+}
+
+/** The same for a pixel; off the map is rock, the way the boundary behaves. */
+export function kindAt(terrain, x, y) {
+  return kindOf(flagsAt(terrain, x, y));
+}
+
 // The engine's own contact test: movement on an axis is blocked only when two
 // of that direction's probes are solid, and they sit one pixel away.
 const PROBES = {

@@ -5,14 +5,20 @@ import { KEYS } from "../src/env/actions.js";
 import { fixture, LEVEL } from "./fixture.js";
 import {
   DEFAULT_SPEC,
+  MAP,
+  MAP_CELLS,
+  MAP_GOAL,
   PATCH,
   PATCH_CELLS,
+  PATCH_GOAL,
   PATCH_KIND,
   PATCH_PROJECTILE,
   PATCH_SIZE,
   LATENCY_SCALE_TICKS,
   VECTOR_OFFSETS,
   VECTOR_SIZE,
+  encodeMap,
+  encodeMapTerrain,
   encodePatch,
   encodePatchBytes,
   encodeVector,
@@ -23,7 +29,7 @@ import {
   patchOriginOf,
 } from "../src/env/observation.js";
 import { LIVE_LATENCY_TICKS, viewFromSnapshot } from "../src/env/view.js";
-import { contactsAt, reach, walkProbe } from "../src/env/terrain.js";
+import { KIND, contactsAt, kindAt, reach, ropeHoldsAt, solidAt, walkProbe } from "../src/env/terrain.js";
 
 // The live game is the other source an observation is built from, so the whole
 // encoder is exercised through it: if a mapping the adapter reports ever stops
@@ -225,12 +231,12 @@ test("the patch is one hot channel per cell, with shots on their own", () => {
   assert.equal(patch.length, PATCH_SIZE);
   const plane = PATCH.columns * PATCH.rows;
   const channel = (index) => patch.subarray(index * plane, (index + 1) * plane);
-  const [rock, dirt, free, shots] = [0, 1, 2, 3].map(channel);
+  const [rock, dirt, free, ghost, shots] = [0, 1, 2, 3, 4].map(channel);
   for (let cell = 0; cell < plane; cell++) {
     assert.equal(
-      rock[cell] + dirt[cell] + free[cell],
+      rock[cell] + dirt[cell] + free[cell] + ghost[cell],
       1,
-      `cell ${cell} must be exactly one of rock, dirt or free`,
+      `cell ${cell} must be exactly one of rock, dirt, free or ghost`,
     );
   }
   const origin = patchOriginOf(view);
@@ -243,6 +249,9 @@ test("the patch is one hot channel per cell, with shots on their own", () => {
   assert.equal(rock[cellAt(LEVEL.wallX, 26)], 1, "the rock wall");
   // Off the top of the level reads as rock, the way a wall does.
   assert.equal(rock[cellAt(32, -6)], 1);
+  // The flagless floor beyond the wall is its own kind: it stops the worm and
+  // not the rope, and it used to be drawn as rock.
+  assert.equal(ghost[cellAt(LEVEL.ghostX + 5, LEVEL.floorY)], 1, "the ghost floor");
   assert.equal(shots[cellAt(22, 28)], 1, "the one live shot");
   assert.equal(
     shots.reduce((sum, value) => sum + value, 0),
@@ -257,11 +266,11 @@ test("the byte patch and the one-hot patch are the same picture", () => {
   assert.equal(bytes.length, PATCH_CELLS);
   assert.equal(floats.length, PATCH_SIZE);
   // One byte a cell against one float per channel per cell.
+  assert.equal(PATCH.channels.length, 8, "four kinds of ground, three occupants, the goal");
   assert.equal(floats.byteLength, bytes.byteLength * PATCH.channels.length * 4);
   for (let cell = 0; cell < PATCH_CELLS; cell++) {
     const kind = bytes[cell] & PATCH_KIND;
-    assert.ok(kind <= 2, `cell ${cell} has a terrain code of ${kind}`);
-    for (let channel = 0; channel < 3; channel++) {
+    for (let channel = 0; channel < 4; channel++) {
       assert.equal(
         floats[channel * PATCH_CELLS + cell],
         channel === kind ? 1 : 0,
@@ -269,7 +278,7 @@ test("the byte patch and the one-hot patch are the same picture", () => {
       );
     }
     assert.equal(
-      floats[3 * PATCH_CELLS + cell],
+      floats[4 * PATCH_CELLS + cell],
       bytes[cell] & PATCH_PROJECTILE ? 1 : 0,
     );
   }
@@ -279,6 +288,48 @@ test("the byte patch and the one-hot patch are the same picture", () => {
   // the vector is what says the patch means anything.
   const dead = encodePatchBytes({ ...view, self: { alive: false } });
   assert.deepEqual(Array.from(dead), new Array(PATCH_CELLS).fill(0));
+});
+
+test("a wall the rope goes through is its own ground, and the goal is in the picture", () => {
+  const view = liveView();
+  const { terrain } = view;
+  const floor = LEVEL.floorY;
+  // Solid to the worm, nothing to the rope: bits 0-2 are what the rope tests.
+  assert.equal(solidAt(terrain, LEVEL.ghostX + 5, floor), true);
+  assert.equal(ropeHoldsAt(terrain, LEVEL.ghostX + 5, floor), false, "no flags, no hold");
+  assert.equal(ropeHoldsAt(terrain, 32, floor), true, "dirt holds");
+  assert.equal(ropeHoldsAt(terrain, LEVEL.wallX, 26), true, "rock holds");
+  assert.equal(ropeHoldsAt(terrain, 32, -1), true, "the edge of the map holds");
+  assert.equal(kindAt(terrain, LEVEL.ghostX + 5, floor), KIND.ghost);
+  assert.equal(kindAt(terrain, 32, floor), KIND.dirt);
+  assert.equal(kindAt(terrain, 32, 26), KIND.free);
+  assert.equal(kindAt(terrain, -1, 26), KIND.rock);
+
+  // The destination is drawn on the cell it is in, once, and only when it is
+  // in view.
+  view.goal = { x: 36, y: 26 };
+  const bytes = encodePatchBytes(view);
+  const origin = patchOriginOf(view);
+  const marked = [...bytes].filter((byte) => byte & PATCH_GOAL).length;
+  assert.equal(marked, 1);
+  assert.equal(bytes[patchCellOf(origin, 36, 26).cell] & PATCH_GOAL, PATCH_GOAL);
+  const floats = encodePatch(view);
+  assert.equal(floats[7 * PATCH_CELLS + patchCellOf(origin, 36, 26).cell], 1, "the eighth plane");
+  view.goal = { x: 5000, y: 26 };
+  assert.equal([...encodePatchBytes(view)].filter((byte) => byte & PATCH_GOAL).length, 0);
+
+  // And on the whole-level map: a ghost share of its own, and the goal among
+  // the occupants, fainter than a foe and the worm itself.
+  view.goal = { x: 36, y: 26 };
+  const ground = encodeMapTerrain(terrain);
+  assert.equal(MAP.channels.length, 5);
+  const cellOf = (x, y) =>
+    Math.floor((y * MAP.cells) / terrain.height) * MAP.cells + Math.floor((x * MAP.cells) / terrain.width);
+  assert.ok(ground[3 * MAP_CELLS + cellOf(60, floor)] > 0, "some ghost in the far floor");
+  assert.equal(ground[3 * MAP_CELLS + cellOf(32, floor)], 0, "none under the worm");
+  const map = encodeMap(view, ground);
+  assert.equal(map[4 * MAP_CELLS + cellOf(36, 26)], MAP_GOAL);
+  assert.equal(map[4 * MAP_CELLS + cellOf(32, 26)], 255, "the worm itself");
 });
 
 test("only the nearest few shots reach the vector, nearest first", () => {

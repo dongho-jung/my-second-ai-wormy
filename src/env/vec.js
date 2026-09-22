@@ -12,7 +12,7 @@
 // told where the boundary was.
 import { readFileSync } from "node:fs";
 import { actionFromHeads, ACTION_HEADS } from "./actions.js";
-import { MAP_SIZE, WEAPON_SLOTS } from "./observation.js";
+import { MAP, MAP_SIZE, PATCH, WEAPON_SLOTS } from "./observation.js";
 import { WormEnv } from "./env.js";
 
 /**
@@ -408,6 +408,10 @@ export class VecWormEnv {
       mapCells: this.wantsMap ? MAP_SIZE : 0,
       mapShape: this.wantsMap ? [4, 32, 32] : null,
       statFields: EPISODE_STATS,
+      // What a cell's byte expands to, so a trainer built for another picture
+      // refuses rather than reading four kinds of ground as three.
+      patchChannels: PATCH.channels.length,
+      mapChannels: MAP.channels.length,
       // Spelled out on the wire so the other side cannot drift from it.
       doneCodes: DONE,
       opponents: this.opponents,

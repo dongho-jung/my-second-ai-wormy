@@ -194,6 +194,12 @@ test("the worker speaks the frames it says it will", { skip }, async () => {
     assert.equal(layout.envs, 2);
     assert.equal(layout.agents, 3);
     assert.equal(layout.patchCells, PATCH_CELLS);
+    // What a byte expands to travels with the layout, so a trainer built for
+    // another picture can refuse.
+    assert.equal(layout.patchChannels, 8);
+    assert.equal(layout.patchShape[0], 8);
+    assert.equal(layout.mapChannels, 5);
+    assert.equal(layout.mapCells, 5 * 32 * 32);
     assert.equal(layout.actionBytes, 2 * 3 * HEADS);
     assert.deepEqual(layout.order, ["vectors", "patches", "patches2", "maps", "rewards", "dones",
       "restarts", "stats"]);
@@ -244,8 +250,8 @@ test("a match can cut the ground at two scales, one per side", { skip }, async (
   const engine = await loadEngine();
   const vec = new VecWormEnv(engine, { envs: 1, agents: 2, patchScale: 4, patchScale2: 2 });
   const layout = vec.describe();
-  assert.deepEqual(layout.patchShape, [6, 61, 107]);
-  assert.deepEqual(layout.patch2Shape, [6, 121, 213]);
+  assert.deepEqual(layout.patchShape, [8, 61, 107]);
+  assert.deepEqual(layout.patch2Shape, [8, 121, 213]);
   assert.equal(layout.patch2Scale, 2);
   assert.equal(vec.patches2.length, 2 * 121 * 213);
   const heads = new Uint8Array(2 * HEADS);

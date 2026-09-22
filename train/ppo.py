@@ -28,7 +28,7 @@ from torch import nn
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import demos as demo_store
-from policy import WormPolicy
+from policy import MAP_CHANNELS, PATCH_CHANNELS, WormPolicy
 from run import Run
 from workers import REPO, WorkerPool
 
@@ -601,7 +601,18 @@ def main(argv=None):
         "useMap": use_map,
         "mapSide": map_side,
         "convPadding": conv_padding,
+        # What a patch byte and a map byte expand to, so a loader built for
+        # another picture refuses rather than misreads.
+        "patchChannels": PATCH_CHANNELS,
+        "mapChannels": MAP_CHANNELS,
     }
+    if layout.patch_channels != PATCH_CHANNELS or layout.map_channels != MAP_CHANNELS:
+        pool.close()
+        raise RuntimeError(
+            f"the worlds send a {layout.patch_channels}-channel patch and a "
+            f"{layout.map_channels}-channel map; this trainer expands {PATCH_CHANNELS} "
+            f"and {MAP_CHANNELS}. src/env and train/ have drifted apart"
+        )
     # Seven independent choices, so the most undecided a policy can be is the
     # sum of each head's own maximum, not one action space's worth.
     max_entropy = float(np.log(np.array(layout.head_sizes, dtype=np.float64)).sum())
@@ -650,7 +661,7 @@ def main(argv=None):
             "observation": (
                 f"vector {layout.vector_size}"
                 + (f" + patch {layout.patch_shape[0]}x{patch_shape[0]}x{patch_shape[1]}" if use_patch else "")
-                + (f" + map 4x{map_side}x{map_side}" if use_map else "")
+                + (f" + map {layout.map_channels}x{map_side}x{map_side}" if use_map else "")
             ),
             "rolloutSteps": args.steps,
             "batch": args.steps * slots,

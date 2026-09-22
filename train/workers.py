@@ -65,6 +65,10 @@ class Layout:
     weapon_count: int
     weapons_measured: bool
     frameskip: int
+    # What a patch byte and a map byte expand to. A trainer built for another
+    # picture must refuse rather than misread.
+    patch_channels: int
+    map_channels: int
     episode_ticks: int
     maps: int
     stock_maps: int
@@ -101,6 +105,8 @@ class Layout:
             weapons_measured=bool(raw.get("weaponsMeasured", True)),
             frameskip=raw["frameskip"],
             episode_ticks=raw["episodeTicks"],
+            patch_channels=int(raw.get("patchChannels", 6)),
+            map_channels=int(raw.get("mapChannels", 4)),
             maps=raw["maps"],
             stock_maps=raw.get("stockMaps", 0),
             # What the `dones` byte means. Three states, not two: an episode

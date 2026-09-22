@@ -2,18 +2,21 @@
 // code: every field here is one this project already reads by name.
 //
 // The level is 64x48 with a dirt floor from y=30 down, a rock block on the far
-// left (x 0-5) and a full-height rock wall at x=39.
-export const LEVEL = { width: 64, height: 48, floorY: 30, wallX: 39 };
+// left (x 0-5) and a full-height rock wall at x=39. Beyond the wall, from
+// x=50 on, the floor is drawn in a colour with no material flags at all: the
+// worm stands on it and a rope flies through it, like much of the wall on
+// five of the community maps.
+export const LEVEL = { width: 64, height: 48, floorY: 30, wallX: 39, ghostX: 50 };
 
-// Palette index 0 background, 1 dirt, 2 rock. Material flags: bit 3 marks the
-// background a worm may stand in, bits 0-1 the dirt a weapon digs through and
-// bit 2 the rock it cannot.
+// Palette index 0 background, 1 dirt, 2 rock, 3 the flagless colour. Material
+// flags: bit 3 marks the background a worm may stand in, bits 0-1 the dirt a
+// weapon digs through and bit 2 the rock it cannot.
 function level() {
   const data = new Uint8Array(LEVEL.width * LEVEL.height);
   for (let y = 0; y < LEVEL.height; y++)
     for (let x = 0; x < LEVEL.width; x++) {
       const at = y * LEVEL.width + x;
-      if (y >= LEVEL.floorY) data[at] = 1;
+      if (y >= LEVEL.floorY) data[at] = x >= LEVEL.ghostX ? 3 : 1;
       if (x <= 5) data[at] = 2;
       if (x === LEVEL.wallX) data[at] = 2;
     }
@@ -21,6 +24,7 @@ function level() {
   materialFlags[0] = 8;
   materialFlags[1] = 3;
   materialFlags[2] = 4;
+  materialFlags[3] = 0;
   const paletteRgb = new Uint8Array(768);
   paletteRgb.set([10, 10, 10], 0);
   paletteRgb.set([120, 80, 40], 3);

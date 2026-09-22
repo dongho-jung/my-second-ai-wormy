@@ -12,11 +12,11 @@
 import { KEYS } from "./actions.js";
 import { WEAPON_FEATURE_COUNT } from "./engine.js";
 import {
-  BACKGROUND,
-  DIGGABLE,
+  KIND,
   MAX_CONTACTS,
   WALK,
   contactsAt,
+  kindOf,
   solidAt,
   walkProbe,
 } from "./terrain.js";
@@ -100,8 +100,17 @@ export const LAST_ACTION_FIELDS = LAST_ACTION_KEYS.length + 2;
  */
 /** Pixels per patch cell unless a run says otherwise. */
 const DEFAULT_PATCH_SCALE = 2;
-/** What a patch is made of, one plane per kind. */
-const PATCH_CHANNELS = ["rock", "dirt", "free", "projectile", "foe", "self"];
+/**
+ * What a patch is made of, one plane per kind.
+ *
+ * Four kinds of ground, not three: `ghost` is the colour with no material
+ * flags that stops a worm and lets a rope through, which used to be drawn as
+ * rock. Then whatever is standing in the cell — a shot, a foe, the worm itself
+ * — and the destination the worm has been given, when it is in view: a goal
+ * that is only a direction in the vector is one the network has to place on
+ * the ground by itself, and "the ledge up there" is a shape, not a heading.
+ */
+const PATCH_CHANNELS = ["rock", "dirt", "free", "ghost", "projectile", "foe", "self", "goal"];
 /**
  * How much ground a patch shows, in pixels: 426 wide and 242 high around the
  * worm, which on a 504 x 350 map is most of it. Every scale sees this much;
@@ -138,13 +147,13 @@ export function patchGeometry(scalePx = DEFAULT_PATCH_SCALE) {
   };
 }
 
-  // Free space gets a channel of its own instead of being the absence of the
-  // other two, so "solid" and "nothing measured" never look alike. Past the
-  // edge of the map reads as rock, which is exactly how it behaves.
-  // Worms among the terrain, not only as coordinates in the vector. Without
-  // these the policy sees the ground in front of it and is told where the enemy
-  // is in two numbers it has to reconcile with that picture itself; "he is
-  // behind that wall" is something it should be able to look at.
+// Free space gets a channel of its own instead of being the absence of the
+// others, so "solid" and "nothing measured" never look alike. Past the edge of
+// the map reads as rock, which is exactly how it behaves. Worms are drawn among
+// the terrain, not only as coordinates in the vector: without that the policy
+// sees the ground in front of it and is told where the enemy is in two numbers
+// it has to reconcile with the picture itself, and "he is behind that wall" is
+// something it should be able to look at.
 export const PATCH = patchGeometry(DEFAULT_PATCH_SCALE);
 export const PATCH_CELLS = PATCH.cells;
 export const PATCH_SIZE = PATCH.size;
@@ -284,15 +293,26 @@ export const VECTOR_SIZE = DEFAULT_SPEC.vectorSize;
  * rock". The fourth channel is where everybody is.
  */
 export const MAP = {
-  channels: ["free", "dirt", "rock", "occupants"],
+  channels: ["free", "dirt", "rock", "ghost", "occupants"],
   cells: 32,
 };
 export const MAP_CELLS = MAP.cells * MAP.cells;
 export const MAP_SIZE = MAP.channels.length * MAP_CELLS;
+/** The ground channels alone: what `encodeMapTerrain` writes and a world keeps. */
+export const MAP_TERRAIN_CHANNELS = MAP.channels.length - 1;
+export const MAP_TERRAIN_SIZE = MAP_TERRAIN_CHANNELS * MAP_CELLS;
+/** Which ground channel each `KIND` code counts toward. */
+const MAP_KIND = [];
+MAP_KIND[KIND.free] = 0;
+MAP_KIND[KIND.dirt] = 1;
+MAP_KIND[KIND.rock] = 2;
+MAP_KIND[KIND.ghost] = 3;
 /** Where the occupant channel starts, and what it writes. */
-const MAP_OCCUPANTS = 3 * MAP_CELLS;
+const MAP_OCCUPANTS = MAP_TERRAIN_SIZE;
 export const MAP_SELF = 255;
 export const MAP_FOE = 128;
+/** The destination, on the same grid as everybody's position. */
+export const MAP_GOAL = 64;
 
 const clamp = (value, low, high) => (value < low ? low : value > high ? high : value);
 
@@ -602,33 +622,34 @@ export function nearestPickups(view, count = PICKUP_SLOTS) {
  * it reads every pixel — so a caller keeps the result and refreshes it on a
  * clock of its own rather than every decision.
  */
-export function encodeMapTerrain(terrain, into = new Uint8Array(3 * MAP_CELLS)) {
+export function encodeMapTerrain(terrain, into = new Uint8Array(MAP_TERRAIN_SIZE)) {
   into.fill(0);
   const { data, width, height, materialFlags } = terrain;
   const { cells } = MAP;
-  const counts = new Uint32Array(3 * MAP_CELLS);
+  const counts = new Uint32Array(MAP_TERRAIN_SIZE);
   const perCell = new Uint32Array(MAP_CELLS);
   for (let y = 0; y < height; y++) {
     const row = Math.min(cells - 1, ((y * cells) / height) | 0);
     const base = y * width;
     for (let x = 0; x < width; x++) {
       const cell = row * cells + Math.min(cells - 1, ((x * cells) / width) | 0);
-      const flags = materialFlags[data[base + x]];
-      const kind = flags & BACKGROUND ? 0 : flags & DIGGABLE ? 1 : 2;
-      counts[kind * MAP_CELLS + cell]++;
+      const channel = MAP_KIND[kindOf(materialFlags[data[base + x]])];
+      counts[channel * MAP_CELLS + cell]++;
       perCell[cell]++;
     }
   }
   for (let cell = 0; cell < MAP_CELLS; cell++) {
     const total = perCell[cell] || 1;
-    for (let kind = 0; kind < 3; kind++) {
-      into[kind * MAP_CELLS + cell] = Math.round((counts[kind * MAP_CELLS + cell] / total) * 255);
+    for (let channel = 0; channel < MAP_TERRAIN_CHANNELS; channel++) {
+      into[channel * MAP_CELLS + cell] = Math.round(
+        (counts[channel * MAP_CELLS + cell] / total) * 255,
+      );
     }
   }
   return into;
 }
 
-/** Where this worm and the others are on that grid. */
+/** Where this worm, the others and its destination are on that grid. */
 export function encodeMapOccupants(view, into = new Uint8Array(MAP_CELLS)) {
   into.fill(0);
   const { terrain, self } = view;
@@ -638,6 +659,9 @@ export function encodeMapOccupants(view, into = new Uint8Array(MAP_CELLS)) {
     const row = Math.min(cells - 1, Math.max(0, ((position.y * cells) / terrain.height) | 0));
     return row * cells + column;
   };
+  // Faintest first, so a foe standing on the goal is still a foe and the worm
+  // itself is always drawn.
+  if (self.alive && view.goal) into[at(view.goal)] = MAP_GOAL;
   for (const foe of view.foes) if (foe.alive) into[at(foe.position)] = MAP_FOE;
   if (self.alive) into[at(self.position)] = MAP_SELF;
   return into;
@@ -687,24 +711,33 @@ function scratch(geometry) {
   }
   return found;
 }
-// The first three channels are the hardness order, so the lowest code wins and
-// is also the channel it expands to.
-const ROCK = 0;
-const DIRT = 1;
-const FREE = 2;
+// A cell answers for the hardest of its pixels, and hardness is not the code
+// order: rock, then dirt, then the flagless ghost, then free. Rock beats dirt
+// so a thin rock line in dirt stays rock; dirt beats ghost so a cell with both
+// still says the rope can hold there; anything solid beats free so a wall one
+// pixel thick never disappears. The code is what the cell stores and the plane
+// it expands to; this table only orders them.
+const HARDNESS = [];
+HARDNESS[KIND.rock] = 0;
+HARDNESS[KIND.dirt] = 1;
+HARDNESS[KIND.ghost] = 2;
+HARDNESS[KIND.free] = 3;
 /** Bit set on a cell that has a shot in it, alongside the terrain code. */
 export const PATCH_PROJECTILE = 4;
 export const PATCH_FOE = 8;
 export const PATCH_SELF = 16;
+/** And the cell the worm has been told to reach, when it is in view. */
+export const PATCH_GOAL = 32;
 export const PATCH_KIND = 3;
 
 /**
  * The patch as one byte per cell — the form it is stored and sent in.
  *
- * Bits 0-1 are the terrain (0 rock, 1 dirt, 2 free) and bit 2 says a shot is in
- * the cell. A quarter of the size of the one-hot form and the same information:
- * a trainer expands it on the GPU, where the expansion is free, and a run that
- * ships a million of these across a pipe ships a quarter of the bytes.
+ * Bits 0-1 are the terrain (0 rock, 1 dirt, 2 free, 3 ghost), bit 2 says a shot
+ * is in the cell, bits 3 and 4 a foe and the worm itself, bit 5 the goal. An
+ * eighth of the size of the one-hot form and the same information: a trainer
+ * expands it on the GPU, where the expansion is free, and a run that ships a
+ * million of these across a pipe ships an eighth of the bytes.
  */
 export function encodePatchBytes(view, into, geometry = PATCH) {
   into ??= new Uint8Array(geometry.cells);
@@ -731,23 +764,26 @@ export function encodePatchBytes(view, into, geometry = PATCH) {
       // hardest of them, so a wall one pixel thick cannot fall between two
       // samples and be reported as open air. Off the level answers rock, which
       // is exactly how the boundary behaves.
-      let hardest = FREE;
-      for (let down = 0; down < scalePx && hardest !== ROCK; down++) {
+      let hardest = KIND.free;
+      let hardness = HARDNESS[KIND.free];
+      scan: for (let down = 0; down < scalePx; down++) {
         const levelRow = PIXEL_ROWS[row * scalePx + down];
         if (levelRow < 0) {
-          hardest = ROCK;
+          hardest = KIND.rock;
           break;
         }
         for (let across = 0; across < scalePx; across++) {
           const x = PIXEL_COLUMNS[column * scalePx + across];
           if (x < 0) {
-            hardest = ROCK;
-            break;
+            hardest = KIND.rock;
+            break scan;
           }
-          const flags = materialFlags[data[levelRow + x]];
-          const kind = flags & BACKGROUND ? FREE : flags & DIGGABLE ? DIRT : ROCK;
-          if (kind < hardest) hardest = kind;
-          if (hardest === ROCK) break;
+          const kind = kindOf(materialFlags[data[levelRow + x]]);
+          if (HARDNESS[kind] < hardness) {
+            hardest = kind;
+            hardness = HARDNESS[kind];
+            if (hardness === 0) break scan;
+          }
         }
       }
       into[row * columns + column] = hardest;
@@ -769,6 +805,11 @@ export function encodePatchBytes(view, into, geometry = PATCH) {
   }
   const here = patchCellOf(origin, self.position.x, self.position.y, geometry);
   if (here) into[here.cell] |= PATCH_SELF;
+  // And where it is going, if that is within sight.
+  if (view.goal) {
+    const there = patchCellOf(origin, view.goal.x, view.goal.y, geometry);
+    if (there) into[there.cell] |= PATCH_GOAL;
+  }
   return into;
 }
 
@@ -782,9 +823,10 @@ export function encodePatch(view, into, geometry = PATCH) {
   for (let cell = 0; cell < plane; cell++) {
     const byte = bytes[cell];
     into[(byte & PATCH_KIND) * plane + cell] = 1;
-    if (byte & PATCH_PROJECTILE) into[3 * plane + cell] = 1;
-    if (byte & PATCH_FOE) into[4 * plane + cell] = 1;
-    if (byte & PATCH_SELF) into[5 * plane + cell] = 1;
+    if (byte & PATCH_PROJECTILE) into[4 * plane + cell] = 1;
+    if (byte & PATCH_FOE) into[5 * plane + cell] = 1;
+    if (byte & PATCH_SELF) into[6 * plane + cell] = 1;
+    if (byte & PATCH_GOAL) into[7 * plane + cell] = 1;
   }
   return into;
 }

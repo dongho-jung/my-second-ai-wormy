@@ -23,23 +23,27 @@ PATCH_KIND = 3
 PATCH_PROJECTILE = 4
 PATCH_FOE = 8
 PATCH_SELF = 16
-TERRAIN_CHANNELS = 3
-# rock, dirt, free, a shot, a foe, itself
-PATCH_CHANNELS = TERRAIN_CHANNELS + 3
+PATCH_GOAL = 32
+# rock, dirt, free, and ghost: the flagless colour that stops a worm and not a rope
+TERRAIN_CHANNELS = 4
+# ... then a shot, a foe, itself, and where it has been told to go
+PATCH_CHANNELS = TERRAIN_CHANNELS + 4
+# free, dirt, rock, ghost, and who is standing where
+MAP_CHANNELS = 5
 
 
 def expand_map(view: torch.Tensor, side: int) -> torch.Tensor:
-    """The whole level's four channels, which are already fractions.
+    """The whole level's five channels, which are already fractions.
 
     Unlike the close patch, these are not categories: a cell is some proportion
-    free, some dirt, some rock, and the fourth channel says who is standing in
-    it. All that is needed is the scale.
+    free, some dirt, some rock, some ghost, and the last channel says who is
+    standing in it and where the worm is headed. All that is needed is the scale.
     """
-    return (view.to(torch.float32) / 255.0).reshape(view.shape[0], 4, side, side)
+    return (view.to(torch.float32) / 255.0).reshape(view.shape[0], MAP_CHANNELS, side, side)
 
 
 def expand_patch(patch: torch.Tensor, shape) -> torch.Tensor:
-    """Bytes from the environment into the four planes the convolution reads.
+    """Bytes from the environment into the eight planes the convolution reads.
 
     The patch is the worm's whole 426x240 window now, so this runs on 25,773
     cells rather than 1,024 and the one-hot is the largest tensor in an update.
@@ -48,7 +52,8 @@ def expand_patch(patch: torch.Tensor, shape) -> torch.Tensor:
     """
     rows, columns = shape
     batch = patch.shape[0]
-    kind = (patch & PATCH_KIND).long().clamp_(0, TERRAIN_CHANNELS - 1)
+    # Two bits, four kinds of ground, every code used.
+    kind = (patch & PATCH_KIND).long()
     planes = torch.zeros(
         batch, TERRAIN_CHANNELS, rows * columns, dtype=torch.float32, device=patch.device
     )
@@ -58,6 +63,7 @@ def expand_patch(patch: torch.Tensor, shape) -> torch.Tensor:
             (patch & PATCH_PROJECTILE) > 0,
             (patch & PATCH_FOE) > 0,
             (patch & PATCH_SELF) > 0,
+            (patch & PATCH_GOAL) > 0,
         ],
         dim=1,
     ).to(torch.float32)
@@ -71,7 +77,22 @@ def policy_from_shape(shape: dict) -> "WormPolicy":
     for itself, and each new option had to be threaded through all of them or
     one of them would quietly build a different network. Defaults are what a
     checkpoint from before the option existed was trained with.
+
+    What a patch or map byte expands to is code, not a setting, so a checkpoint
+    made under another picture cannot be rebuilt here: it says so rather than
+    reading four kinds of ground as three.
     """
+    for name, have, what in (
+        ("patchChannels", PATCH_CHANNELS, "patch"),
+        ("mapChannels", MAP_CHANNELS, "map"),
+    ):
+        saved = shape.get(name)
+        if saved is not None and int(saved) != have:
+            raise RuntimeError(
+                f"this checkpoint was trained on a {saved}-channel {what} and this code "
+                f"makes {have}: the observation has changed under it, so it cannot be "
+                "played or carried on from. Start a fresh run"
+            )
     return WormPolicy(
         shape["vectorSize"],
         shape["headSizes"],
@@ -192,14 +213,14 @@ class WormPolicy(nn.Module):
             # level instead of the worm's own few metres. This is the half that
             # can answer "which way is the rest of the match".
             self.map_conv = nn.Sequential(
-                nn.Conv2d(4, 16, kernel_size=4, stride=2),
+                nn.Conv2d(MAP_CHANNELS, 16, kernel_size=4, stride=2),
                 nn.ReLU(),
                 nn.Conv2d(16, 32, kernel_size=3, stride=2),
                 nn.ReLU(),
                 nn.Flatten(),
             )
             with torch.no_grad():
-                joined += self.map_conv(torch.zeros(1, 4, map_side, map_side)).shape[1]
+                joined += self.map_conv(torch.zeros(1, MAP_CHANNELS, map_side, map_side)).shape[1]
         self.trunk = nn.Sequential(
             nn.Linear(joined, width),
             nn.ReLU(),

@@ -318,6 +318,64 @@ test("a jump press lets go of the rope, and letting go is a jump press", { skip 
   assert.equal(env.lastActions[0].rope, ROPE.release);
 });
 
+test("the rope flies through a wall the worm cannot", { skip }, async () => {
+  // A corridor with a ceiling drawn in a colour that has no material flags:
+  // the engine stops the worm at it and lets the rope through. Five of the
+  // community maps draw much of their walls this way.
+  const engine = await loadEngine();
+  const flags = engine.materialFlags;
+  const first = (want) => [...flags].findIndex((one) => one === want);
+  const background = first(8);
+  const rock = first(4);
+  const ghost = first(0);
+  assert.ok(background >= 0 && rock >= 0 && ghost >= 0, "the mod has all three");
+  const level = engine.randomLevel(7);
+  const { width: W, height: H } = level;
+  const world = engine.createWorld({ level, seed: 1, rules: { bonusDrops: 0 } });
+  const worm = engine.spawnWorm(world, { color: 0, playerId: 0, loadout: LOADOUT });
+  const tick = (action, n) => {
+    for (let i = 0; i < n; i++) {
+      applyAction(world, worm, action);
+      world.update();
+    }
+  };
+  const results = {};
+  for (const [name, wall] of [["rock", rock], ["ghost", ghost]]) {
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++)
+        level.data[y * W + x] = y >= 100 && y < 200 && x < 300 ? background : wall;
+    // Of(), not createWorld: the world's level is a cached copy, and only Of()
+    // writes into it.
+    world.level.Of(level);
+    worm.u = true;
+    worm.x = 250;
+    worm.y = 190;
+    worm.f = worm.b = 0;
+    worm.direction = 1;
+    worm.Oa = worm.ub = 0;
+    worm.Fa.Sc = worm.Fa.jc = false;
+    tick(0, 40);
+    const floor = worm.y;
+    tick({ keys: KEYS.right }, 200);
+    const walked = worm.x;
+    worm.x = 150;
+    worm.y = 190;
+    worm.f = worm.b = 0;
+    worm.Oa = Math.PI / 2;
+    tick(0, 20);
+    tick({ keys: 0, rope: ROPE.throw }, 1);
+    tick(0, 40);
+    results[name] = { floor, walked, attached: worm.Fa.jc, ropeY: worm.Fa.y };
+  }
+  for (const name of ["rock", "ghost"]) {
+    assert.ok(Math.abs(results[name].floor - 196) < 1, `${name}: the worm stands on it`);
+    assert.ok(results[name].walked >= 295 && results[name].walked < 300, `${name}: the wall stops the worm`);
+  }
+  assert.equal(results.rock.attached, true, "the rope holds on rock");
+  assert.ok(results.rock.ropeY >= 95 && results.rock.ropeY <= 100, "at the ceiling");
+  assert.ok(results.ghost.ropeY < 60, "through the ghost ceiling and on");
+});
+
 test("a dead worm is dropped from the world and comes back whole", { skip }, async () => {
   const { world, worms } = await arena({ seed: 77 });
   const [worm] = worms;
