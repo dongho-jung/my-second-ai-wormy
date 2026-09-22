@@ -623,7 +623,11 @@ export class WormEnv {
       // next episode: a minute is long enough for several trips, and one
       // arrival per episode is very few samples of the thing being taught.
       if (moved.reachedGoal) {
-        events.goalsReached = (events.goalsReached ?? 0) + 1;
+        // Straight onto the running total, not through `events`. That buffer is
+        // reused across steps and `tallyDamage` clears only the fields it owns,
+        // so anything else left in it is added again on every later decision of
+        // the episode.
+        this.totals[agent].goalsReached = (this.totals[agent].goalsReached ?? 0) + 1;
         this.assignGoals(agent);
       }
       const outcome = this.reward(
