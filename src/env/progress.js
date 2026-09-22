@@ -35,6 +35,16 @@ export class Progress {
     this.reset();
   }
 
+  /**
+   * A destination, set now rather than at the episode boundary. The distance
+   * restarts from wherever the worm is, so the first step after this is not
+   * paid for the jump from the old goal to the new one.
+   */
+  setGoal(goal) {
+    this.goal = goal ?? null;
+    this.goalDistance = null;
+  }
+
   /** A new episode: forget the trail, the visits and the goal. */
   reset({ goal = null } = {}) {
     this.trail.fill(0);

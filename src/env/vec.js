@@ -44,6 +44,11 @@ export const EPISODE_STATS = [
   "fromOnTarget",
   "fromAimedShot",
   "fromGoal",
+  // How many destinations it actually reached this episode. `fromGoal` mixes
+  // arriving with closing distance, so on its own it cannot say whether a worm
+  // is getting there or just drifting the right way. This is the number a
+  // movement run is judged on.
+  "goalsReached",
   "shaping",
   // The only figure that answers "is it getting better" rather than "is
   // something happening".
@@ -87,6 +92,7 @@ const STAT_SOURCE = {
   fromOnTarget: "fromOnTarget",
   fromAimedShot: "fromAimedShot",
   fromGoal: "fromGoal",
+  goalsReached: "goalsReached",
 };
 
 export const HEADS = ACTION_HEADS.length;

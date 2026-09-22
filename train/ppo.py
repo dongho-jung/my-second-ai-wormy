@@ -211,6 +211,15 @@ def parse_args(argv=None):
                             "learned from without restarting anything")
 
     where = parser.add_argument_group("where it goes")
+    where.add_argument("--task", default="fight", choices=["fight", "movement"],
+                       help="what the run practises. 'movement' zeroes the fighting "
+                            "rewards, holds the fire key and weapon switching shut, and "
+                            "hands every worm a random place on the map to reach — "
+                            "another one as soon as it arrives. Walking, digging and the "
+                            "rope are what is left. The observation carries the goal in "
+                            "both tasks (zeros when there is none), so the vector is the "
+                            "same size either way and a movement policy can be --resume d "
+                            "into a fighting run")
     where.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     where.add_argument("--label", default=None, help="a name for this run on the monitor page")
     where.add_argument("--resume", default=None,
@@ -225,7 +234,15 @@ def parse_args(argv=None):
 
 
 # The figures carried across updates that ended with no episode finished.
-SHOWN = ("episodeReward", "kills", "deaths", "damageDealt", "selfDamage", "stuckSteps")
+SHOWN = (
+    "episodeReward",
+    "kills",
+    "deaths",
+    "damageDealt",
+    "selfDamage",
+    "stuckSteps",
+    "goalsReached",
+)
 
 # Consecutive updates the adaptive rate may spend asking to move past an end of
 # --lr-range before the run says so. A few is ordinary: the control nudges by
@@ -372,6 +389,13 @@ def main(argv=None):
     )
     if args.observation_foes is not None:
         config["observationFoes"] = args.observation_foes
+
+    if args.task == "movement":
+        # Named rather than spelled out: the workers are configured over JSON,
+        # and the environment knows what these names mean.
+        config["goals"] = "random"
+        config["weights"] = "movement"
+        config["lockWeapons"] = True
 
     # How many worms at the back of each match are older copies. Worked out
     # before the workers start, because they have to be told: otherwise every
@@ -1090,7 +1114,10 @@ def main(argv=None):
                 f"{latest.get('episodeReward', float('nan')):7.3f} | "
                 f"k/d {latest.get('kills', 0):.2f}/{latest.get('deaths', 0):.2f} | "
                 f"dealt {latest.get('damageDealt', 0):6.1f} self {latest.get('selfDamage', 0):6.1f} | "
-                f"stuck {latest.get('stuckSteps', 0):5.1f} | entropy {line['entropy']:.2f} | "
+                f"stuck {latest.get('stuckSteps', 0):5.1f} | "
+                # Destinations reached a match. Zero in a fighting run, which
+                # sets no goals, and the whole point of a movement one.
+                f"goals {latest.get('goalsReached', 0):4.1f} | entropy {line['entropy']:.2f} | "
                 # What the adaptive rate is doing. Without these two the log
                 # cannot say why a run went flat: a policy that has stopped
                 # moving and one whose rate has run out of room read the same
