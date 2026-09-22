@@ -133,6 +133,10 @@ const state = () => {
       ammo: worm.O[worm.Ka]?.ha ?? 0,
       loadout: env.loadouts[agent].map((id) => engine.weaponNames[id]),
       rope: worm.Fa.Sc ? { x: worm.Fa.x, y: worm.Fa.y, attached: worm.Fa.jc } : null,
+      // Where this worm was told to go, in a run that hands out destinations.
+      // Without it the page shows a worm moving and no way to tell whether it
+      // is going anywhere on purpose, which is the whole question here.
+      goal: env.progress[agent]?.goal ?? null,
       score: scores[agent],
     })),
     projectiles: [env.world.Ib, env.world.Zb].flatMap((pool) => {
