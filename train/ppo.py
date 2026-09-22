@@ -228,10 +228,29 @@ def parse_args(argv=None):
     probe.add_argument("--probe-episodes", type=int, default=4, help="matches per probe")
 
     where = parser.add_argument_group("where it goes")
+    where.add_argument("--task", default="fight", choices=["fight", "movement"],
+                       help="what the run practises. 'movement' zeroes the fighting "
+                            "rewards, holds the fire key and weapon switching shut, and "
+                            "hands every worm a random place on the map to reach — "
+                            "another one as soon as it arrives. Walking, digging and the "
+                            "rope are what is left. The observation carries the goal in "
+                            "both tasks (zeros when there is none), so the vector is the "
+                            "same size either way and a movement policy can be --resume d "
+                            "into a fighting run")
+    where.add_argument("--rope-cooldown", type=int, default=0,
+                       help="decisions between one rope message and the next being heard. 0 "
+                            "hears every one, which at maximum entropy means throwing five "
+                            "times a second and letting go five times a second. Measured, that "
+                            "does not change how much of an episode a worm spends attached — "
+                            "about half either way — but it changes how long one throw lasts: "
+                            "1.5 decisions at 0, 10.5 at 10. See ropeCooldown in src/env/env.js")
     where.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     where.add_argument("--label", default=None, help="a name for this run on the monitor page")
     where.add_argument("--resume", default=None,
-                       help="a .pt to carry on from, so changing the layout does not throw away what it learned")
+                       help="what to carry on from, so changing the layout does not throw away "
+                            "what it learned. A .pt, or a directory — one run's, or the one the "
+                            "runs are written to, where it takes the last run that saved "
+                            "anything. A restart does not know the id of the run before it")
     where.add_argument("--save-every", type=int, default=20, help="updates between checkpoints")
     where.add_argument("--keep-every", type=int, default=0,
                        help="updates between checkpoints that are kept, as policy-<steps>.pt, rather "
@@ -244,7 +263,22 @@ def parse_args(argv=None):
 
 
 # The figures carried across updates that ended with no episode finished.
-SHOWN = ("episodeReward", "kills", "deaths", "damageDealt", "selfDamage", "stuckSteps")
+SHOWN = (
+    "episodeReward",
+    "kills",
+    "deaths",
+    "damageDealt",
+    "selfDamage",
+    "stuckSteps",
+    "goalsReached",
+    "ropeThrows",
+    "ropeHeld",
+)
+
+# Consecutive updates the adaptive rate may spend asking to move past an end of
+# --lr-range before the run says so. A few is ordinary: the control nudges by
+# 2% and clamps. This many in a row is the KL target no longer being held.
+PINNED_UPDATES = 50
 
 
 LEVEL_SUFFIXES = (".lev", ".png")
@@ -273,6 +307,45 @@ def stock_levels(args):
             )
         print(f"no maps in {args.levels_dir}: playing generated ones alone", flush=True)
     return [str(path) for path in found]
+
+
+# `best.pt` before `policy.pt`: the first is picked on the ladder-free combat
+# score and the second is only whatever the run happened to reach, so the first
+# is the better policy to carry on from even when it is the older file.
+CHECKPOINT_NAMES = ("best.pt", "policy.pt")
+
+
+def resolve_checkpoint(where: str) -> Path:
+    """A `.pt`, a run's directory, or the directory the runs live in.
+
+    A restart does not know the id of the run it is carrying on from — the id
+    is a timestamp minted when that run started — so a deployment can only name
+    the runs directory and mean "whatever the last one got to". Runs that died
+    before their first save are skipped rather than silently starting over.
+    """
+    path = Path(where)
+    if path.is_file():
+        return path
+    if not path.is_dir():
+        raise RuntimeError(f"{where} is neither a checkpoint nor a directory")
+    for name in CHECKPOINT_NAMES:
+        if (path / name).is_file():
+            return path / name
+    found = []
+    for run_dir in path.iterdir():
+        if not run_dir.is_dir():
+            continue
+        for name in CHECKPOINT_NAMES:
+            if (run_dir / name).is_file():
+                found.append(run_dir / name)
+                break
+    if not found:
+        raise RuntimeError(
+            f"no {' or '.join(CHECKPOINT_NAMES)} under {where}. Point --resume "
+            "at a checkpoint, at one run's directory, or at the directory the "
+            "runs are written to"
+        )
+    return max(found, key=lambda one: one.stat().st_mtime)
 
 
 def save(policy, layout, shape, step, path, **extra):
@@ -395,8 +468,11 @@ def main(argv=None):
     # A checkpoint to carry on from is read once, here, because two things
     # below have to know about it before the workers start: how far the ladder
     # had faded, and how the convolution was padded.
+    carried_from = resolve_checkpoint(args.resume) if args.resume else None
     carried = (
-        torch.load(args.resume, map_location="cpu", weights_only=False) if args.resume else None
+        torch.load(carried_from, map_location="cpu", weights_only=False)
+        if carried_from is not None
+        else None
     )
     config = dict(
         envs=args.envs,
@@ -439,6 +515,16 @@ def main(argv=None):
     )
     if args.observation_foes is not None:
         config["observationFoes"] = args.observation_foes
+
+    if args.rope_cooldown > 0:
+        config["ropeCooldown"] = args.rope_cooldown
+
+    if args.task == "movement":
+        # Named rather than spelled out: the workers are configured over JSON,
+        # and the environment knows what these names mean.
+        config["goals"] = "random"
+        config["weights"] = "movement"
+        config["lockWeapons"] = True
 
     # How many worms at the back of each match are older copies. Worked out
     # before the workers start, because they have to be told: otherwise every
@@ -522,6 +608,8 @@ def main(argv=None):
     optimiser = torch.optim.Adam(policy.parameters(), lr=args.lr, eps=1e-5)
     learning_rate = args.lr
     lr_low, lr_high = (float(part) for part in args.lr_range.split(","))
+    # Consecutive updates the rate has wanted to move past an end of that range.
+    pinned = 0
     parameters = sum(p.numel() for p in policy.parameters())
 
     # Carrying on from a checkpoint. The rollout shape is free to change — how
@@ -533,7 +621,7 @@ def main(argv=None):
         shape = carried["layout"]
         if shape["vectorSize"] != layout.vector_size or shape["headSizes"] != layout.head_sizes:
             raise RuntimeError(
-                f"{args.resume} was trained on a vector of {shape['vectorSize']} "
+                f"{carried_from} was trained on a vector of {shape['vectorSize']} "
                 f"with heads {shape['headSizes']}, and this run gives "
                 f"{layout.vector_size} with heads {layout.head_sizes}. A policy "
                 "cannot be carried across a change to what it sees or what it "
@@ -542,13 +630,13 @@ def main(argv=None):
         seen = tuple(shape.get("patchShape") or ())
         if use_patch and seen and seen != patch_shape:
             raise RuntimeError(
-                f"{args.resume} looked at a {seen[1]}x{seen[0]} patch and this run "
+                f"{carried_from} looked at a {seen[1]}x{seen[0]} patch and this run "
                 f"shows a {patch_shape[1]}x{patch_shape[0]} one"
             )
         policy.load_state_dict(carried["policy"])
-        resumed_from = args.resume
+        resumed_from = str(carried_from)
         resumed_at = int(carried.get("step", 0))
-        print(f"carrying on from {args.resume} at {resumed_at:,} steps", flush=True)
+        print(f"carrying on from {carried_from} at {resumed_at:,} steps", flush=True)
 
     run = Run(
         label=args.label or f"{args.agents}-way self-play",
@@ -1078,9 +1166,34 @@ def main(argv=None):
                 elif kl > args.target_kl * 1.5:
                     scale = 1 / 1.02
                 if scale != 1.0:
-                    learning_rate = min(lr_high, max(lr_low, learning_rate * scale))
+                    wanted = learning_rate * scale
+                    learning_rate = min(lr_high, max(lr_low, wanted))
                     for group in optimiser.param_groups:
                         group["lr"] = learning_rate
+                    # The control asked for a rate it cannot have. One update of
+                    # that is nothing; a run of them is the target quietly not
+                    # being held, and the rate sitting still looks deliberate.
+                    pinned = pinned + 1 if wanted != learning_rate else 0
+                else:
+                    pinned = 0
+                if pinned == PINNED_UPDATES:
+                    floor = learning_rate <= lr_low
+                    run.note(
+                        f"the rate has been pinned to its "
+                        f"{'floor' if floor else 'ceiling'} of {learning_rate:.1e} "
+                        f"for {PINNED_UPDATES} updates",
+                        learningRate=learning_rate,
+                        approxKL=kl,
+                    )
+                    print(
+                        f"the rate has sat on its {'floor' if floor else 'ceiling'} "
+                        f"of {learning_rate:.1e} for {PINNED_UPDATES} updates while "
+                        f"the KL wanted it {'lower' if floor else 'higher'} "
+                        f"({kl:.4f} against a target of {args.target_kl}). The "
+                        "target is no longer being held: widen --lr-range, or "
+                        "the policy is sharpening faster than the rate can follow",
+                        flush=True,
+                    )
             scored_ret = returns[:, lane_pool].reshape(-1)
             scored_val = vals[:, lane_pool].reshape(-1)
             variance = float(scored_ret.var())
@@ -1163,7 +1276,19 @@ def main(argv=None):
                 f"{latest.get('episodeReward', float('nan')):7.3f} | "
                 f"k/d {latest.get('kills', 0):.2f}/{latest.get('deaths', 0):.2f} | "
                 f"dealt {latest.get('damageDealt', 0):6.1f} self {latest.get('selfDamage', 0):6.1f} | "
-                f"stuck {latest.get('stuckSteps', 0):5.1f} | entropy {line['entropy']:.2f}",
+                f"stuck {latest.get('stuckSteps', 0):5.1f} | "
+                # Destinations reached a match. Zero in a fighting run, which
+                # sets no goals, and the whole point of a movement one.
+                f"goals {latest.get('goalsReached', 0):4.1f} | "
+                # Throws asked for, and decisions actually spent attached. The
+                # gap between them is the whole question about the rope.
+                f"rope {latest.get('ropeThrows', 0):5.0f}/{latest.get('ropeHeld', 0):5.0f} | "
+                f"entropy {line['entropy']:.2f} | "
+                # What the adaptive rate is doing. Without these two the log
+                # cannot say why a run went flat: a policy that has stopped
+                # moving and one whose rate has run out of room read the same
+                # everywhere else on this line.
+                f"kl {line['approxKL']:.4f} lr {line['learningRate']:.1e}",
                 flush=True,
             )
             if "combat" in line:

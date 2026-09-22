@@ -6,7 +6,7 @@
 // worth interrupting. Everything that could make two runs of one seed differ
 // goes through a single seeded generator, so a rollout is reproducible and a
 // policy's bad episode can be replayed exactly.
-import { KEYS, applyNormalizedAction, normalizeAction } from "./actions.js";
+import { KEYS, ROPE, applyNormalizedAction, normalizeAction } from "./actions.js";
 import { makeRng, respawnWorm, roomWeapons, watchDamage, weaponList } from "./engine.js";
 import {
   AIM_RANGE_PX,
@@ -24,9 +24,11 @@ import {
   combatReward,
   DEFAULT_WEIGHTS,
   emptyEvents,
+  MOVEMENT_WEIGHTS,
   tallyDamage,
 } from "./reward.js";
 import { viewFromWorld } from "./view.js";
+import { solidAt } from "./terrain.js";
 
 /** How wide the cone a worm is paid for aiming inside is. */
 const AIM_CONE = Math.PI / 8;
@@ -140,6 +142,32 @@ export const DEFAULTS = {
   // A place each worm is paid to reach, as (env, agent) => ({x, y}) or null.
   // Off for a fight; on for the walking task that checks the pipeline learns.
   goals: null,
+  // Ignore the fire key and weapon switching. For stages where the lesson is
+  // getting somewhere: see where this is read in `step`.
+  lockWeapons: false,
+  // Decisions between one rope message and the next being listened to. 0 lets
+  // every decision carry one, which at maximum entropy means throwing five
+  // times a second and letting go five times a second.
+  //
+  // What that costs is not what it looks like. Measured with a random policy
+  // over three six-worm episodes, per worm:
+  //
+  //   cooldown   throws   decisions held   share of the episode held
+  //          0    301.9            448.1                       49.8%
+  //          5     82.6            456.0                       50.7%
+  //         10     42.6            444.6                       49.4%
+  //         30     15.1            447.8                       49.8%
+  //
+  // A thrown rope attaches within one decision, and throwing and releasing at
+  // the same rate leaves a worm attached about half the time whatever this is
+  // set to. So the cost of thrashing is not time spent off the rope. What
+  // changes is how long one throw lasts — 1.5 decisions at 0, 10.5 at 10 — and
+  // therefore whether a rope is a state the policy can act from or one that
+  // has already changed by the time the next decision lands.
+  //
+  // Whether that matters to learning is what the a/b is for. It is not settled
+  // by the table above.
+  ropeCooldown: 0,
   // Decisions between re-reading the whole level for the map observation.
   // Reading it costs every pixel, so it is amortised: the terrain only changes
   // where somebody is digging, and four seconds of staleness at this scale is a
@@ -160,6 +188,54 @@ export const DEFAULTS = {
 const NO_ACTION = { keys: 0, rope: 0, weapon: 0, fresh: false };
 
 const range = (setting) => (Array.isArray(setting) ? setting : [setting, setting]);
+
+// How far under a candidate point the ground may be. A goal floating in the
+// middle of a cavern is reachable only by rope, and asking for that before the
+// worm can walk is the wrong lesson first.
+const GOAL_GROUND_PX = 48;
+
+/**
+ * A random spot a worm could stand: background, with something solid not far
+ * below it. Returns null rather than looping forever on a map where that is
+ * hard to find — a worm with no goal simply has no goal that episode.
+ */
+export function groundedGoal(terrain, rng, tries = 64) {
+  if (!terrain) return null;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    const x = Math.floor(rng() * terrain.width);
+    const y = Math.floor(rng() * terrain.height);
+    if (solidAt(terrain, x, y)) continue;
+    for (let below = 1; below <= GOAL_GROUND_PX; below++) {
+      if (solidAt(terrain, x, y + below)) return { x, y };
+    }
+  }
+  return null;
+}
+
+/**
+ * What `weights` means. A name, because a worker is configured over JSON and a
+ * table of numbers does not want to be typed out on a command line. A table
+ * overrides the defaults rather than replacing them, so a trainer can turn one
+ * knob without restating the rest.
+ */
+function weightsFor(weights) {
+  if (weights === "movement") return MOVEMENT_WEIGHTS;
+  if (weights === "fight" || weights == null) return DEFAULT_WEIGHTS;
+  return { ...DEFAULT_WEIGHTS, ...weights };
+}
+
+/**
+ * What `goals` means. A function is used as it is; "random" is the built-in
+ * above, which is what a command line can ask for. Anything else is no goals,
+ * which is every run that came before this setting existed.
+ */
+function goalMaker(goals) {
+  if (typeof goals === "function") return goals;
+  if (goals === "random") {
+    return (env, agent) => groundedGoal(env.views[agent]?.terrain, env.rng);
+  }
+  return null;
+}
 
 export class WormEnv {
   constructor(engine, options = {}) {
@@ -210,11 +286,11 @@ export class WormEnv {
     this.weaponPool = !barred.size
       ? chosen
       : (chosen ?? this.engine.settings.O.map((_, id) => id)).filter((id) => !barred.has(id));
-    // A partial set of weights overrides the defaults rather than replacing
-    // them, so a trainer can turn one knob without restating the rest.
-    this.weights = { ...DEFAULT_WEIGHTS, ...(settings.weights ?? {}) };
+    this.weights = weightsFor(settings.weights);
     this.observationKinds = settings.observations;
-    this.makeGoal = settings.goals;
+    this.makeGoal = goalMaker(settings.goals);
+    this.lockWeapons = Boolean(settings.lockWeapons);
+    this.ropeCooldown = Math.max(0, Math.trunc(settings.ropeCooldown ?? 0));
     this.reward = settings.reward ?? combatReward;
     // A fresh level per episode by default: one map teaches one map.
     this.makeLevel =
@@ -451,21 +527,40 @@ export class WormEnv {
       Array.from({ length: ticks }, () => NO_ACTION),
     );
     this.lastActions = this.worms.map(() => null);
-    this.progress.forEach((progress, agent) => {
+    this.progress.forEach((progress) => {
       // A new level every episode, and covering it is paid as a share of it.
       progress.sized(this.world.level);
-      progress.reset({ goal: this.makeGoal?.(this, agent) ?? null });
+      progress.reset();
     });
     this.alive = this.worms.map((worm) => Boolean(worm.u));
     this.firing = this.worms.map(() => false);
+    // The decision each worm's next rope message will be listened to on.
+    this.ropeReadyAt = this.worms.map(() => 0);
     this.foeRange = this.worms.map(() => null);
     this.totals = this.worms.map(() => ({}));
     this.episodeStartTick = this.world.qb;
     this.done = false;
     this.ending = false;
     this.refreshViews();
+    // Goals are drawn after the views exist, because picking a spot means
+    // reading the terrain and the views are what carry it.
+    this.assignGoals();
     this.encodeObservations();
     return { observations: this.observations, info: this.info() };
+  }
+
+  /**
+   * Hand every worm a destination, if this run has any. Called at the start of
+   * an episode and again whenever one arrives, so a worm practises the whole
+   * episode rather than once.
+   */
+  assignGoals(only = null) {
+    if (!this.makeGoal) return;
+    this.progress.forEach((progress, agent) => {
+      if (only !== null && only !== agent) return;
+      progress.setGoal(this.makeGoal(this, agent) ?? null);
+      if (this.views[agent]) this.views[agent].goal = progress.goal;
+    });
   }
 
   /**
@@ -479,7 +574,29 @@ export class WormEnv {
       throw new Error(`expected ${this.agents} actions, got ${actions.length}`);
     }
     for (const [agent, action] of actions.entries()) {
-      const normalized = normalizeAction(action);
+      let normalized = normalizeAction(action);
+      // Movement stages hold the trigger shut. Recoil and the knockback from a
+      // worm's own explosions move it further than walking does, and while both
+      // are on the books there is no way to tell a policy that goes somewhere
+      // from one that gets shoved there. Aim is left alone: the rope fires
+      // along it, and the rope is one of the things being taught.
+      if (this.lockWeapons) {
+        normalized = { ...normalized, keys: normalized.keys & ~KEYS.fire, weapon: 0 };
+      }
+      // One rope message per cooldown. Throwing and letting go are both
+      // messages, so this is "having thrown, live with it for a moment" rather
+      // than "throw less" — though it is that too. See `ropeCooldown` in the
+      // defaults for what this does and does not change.
+      if (this.ropeCooldown > 0 && normalized.rope !== ROPE.none) {
+        if (this.decisions < this.ropeReadyAt[agent]) {
+          normalized = { ...normalized, rope: ROPE.none };
+        } else {
+          this.ropeReadyAt[agent] = this.decisions + this.ropeCooldown;
+        }
+      }
+      if (normalized.rope === ROPE.throw) {
+        this.totals[agent].ropeThrows = (this.totals[agent].ropeThrows ?? 0) + 1;
+      }
       // Whether it pulled the trigger this decision AND had something to fire,
       // for the aim reward. Firing while lined up is the thing worth paying
       // for, and the view does not say. The gun has to be loaded: the term was
@@ -540,6 +657,25 @@ export class WormEnv {
         worm.u ? worm : this.views[agent].self.position ?? worm,
         Boolean(worm.u),
       );
+      // Decisions spent hanging off an attached rope. Read after the views were
+      // refreshed, so this is the state the worm is in now rather than the one
+      // it acted from. Against `ropeThrows` it says whether a throw turns into
+      // anything: many throws and almost no held decisions is a worm that lets
+      // go the moment it lands.
+      if (this.views[agent]?.self?.rope?.attached) {
+        this.totals[agent].ropeHeld = (this.totals[agent].ropeHeld ?? 0) + 1;
+      }
+      // Arriving clears the goal. Hand out the next one now rather than at the
+      // next episode: a minute is long enough for several trips, and one
+      // arrival per episode is very few samples of the thing being taught.
+      if (moved.reachedGoal) {
+        // Straight onto the running total, not through `events`. That buffer is
+        // reused across steps and `tallyDamage` clears only the fields it owns,
+        // so anything else left in it is added again on every later decision of
+        // the episode.
+        this.totals[agent].goalsReached = (this.totals[agent].goalsReached ?? 0) + 1;
+        this.assignGoals(agent);
+      }
       const outcome = this.reward(
         events,
         { ...moved, ...this.#aimAt(agent) },
@@ -554,10 +690,6 @@ export class WormEnv {
       this.totals[agent].stuckSteps =
         (this.totals[agent].stuckSteps ?? 0) + (moved.stuck ? 1 : 0);
       this.totals[agent].cellsVisited = moved.cellsVisited;
-      // Decisions spent hanging from an attached rope: the one Liero skill
-      // that nothing else on the page can see being learned or not.
-      this.totals[agent].ropeSteps =
-        (this.totals[agent].ropeSteps ?? 0) + (this.views[agent].self.rope?.attached ? 1 : 0);
     }
     const killed = this.events.some((events) => events.killed > 0);
 
@@ -602,15 +734,20 @@ export class WormEnv {
 
   /** Every agent's view of the world as it stands. Cheap: no terrain is copied. */
   refreshViews() {
-    this.views = this.worms.map((worm, agent) =>
-      viewFromWorld(
+    this.views = this.worms.map((worm, agent) => {
+      const view = viewFromWorld(
         this.world,
         worm,
         this.worms.filter((_, other) => other !== agent),
         this.latency[agent] ?? 0,
         this.lastActions[agent] ?? null,
-      ),
-    );
+      );
+      // Where this worm was told to go. `viewFromWorld` only knows what the
+      // engine holds, and a goal is this environment's idea, so it is attached
+      // here — the vector reads it off the view like everything else.
+      view.goal = this.progress[agent]?.goal ?? null;
+      return view;
+    });
     return this.views;
   }
 

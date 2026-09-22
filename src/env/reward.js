@@ -87,6 +87,32 @@ export const DEFAULT_WEIGHTS = {
 };
 
 /**
+ * Getting somewhere is the whole score.
+ *
+ * The fighting terms are set to zero rather than removed, so the same reward
+ * function runs and the same stats come out of it. A later stage turns them
+ * back on by changing weights, not by taking a different path through the code.
+ *
+ * `stuck` stays: it is not a rung up to fighting, it is what stops a worm
+ * sitting in a hole, and that is still true here. `exploreMap` and `revisitMap`
+ * go, because they pay for covering ground rather than for arriving, and a worm
+ * walking a straight line to a goal crosses its own trail whenever the route
+ * doubles back.
+ */
+export const MOVEMENT_WEIGHTS = {
+  ...DEFAULT_WEIGHTS,
+  damageDealt: 0,
+  damageTaken: 0,
+  kill: 0,
+  death: 0,
+  exploreMap: 0,
+  revisitMap: 0,
+  approach: 0,
+  onTarget: 0,
+  aimedShot: 0,
+};
+
+/**
  * The terms that exist to get a policy started, rather than to say what winning
  * is.
  *

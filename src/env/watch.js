@@ -63,21 +63,23 @@ const engine = await loadEngine(config.engine);
 const stock = (config.levelFiles ?? []).map((path) =>
   engine.readAnyLevel(path.split("/").pop(), readFileSync(path)),
 );
+// The whole world the checkpoint carries, then the few things that are about
+// watching rather than about the game.
+//
+// Naming the settings one by one here was the same bug the checkpoint's `world`
+// exists to end: every setting added to training had to be copied into this
+// list too, and the ones that were missed did not fail — they quietly showed a
+// different game. A movement run watched through a hand-written list kept its
+// trigger, because `lockWeapons` was not on it.
+//
+// Anything the environment does not know is ignored, so the viewer's own keys
+// riding along is harmless.
 const env = new WormEnv(engine, {
+  ...config,
   ...(stock.length ? { level: (_, seed) => stock[seed % stock.length] } : {}),
   agents,
-  episodeTicks: config.episodeTicks ?? 3600,
-  frameskip: config.frameskip ?? 4,
-  inputLatencyTicks: config.inputLatencyTicks ?? 0,
-  observationFoes: config.observationFoes,
-  // The scale the policy was trained at rides in its checkpoint; a policy
-  // that learned on a coarse patch has to be shown a coarse patch.
-  patchScale: config.patchScale,
+  // The page draws all three, whatever the run was trained to hand out.
   observations: ["vector", "patchBytes", "map"],
-  loadout: config.loadout ?? "random",
-  weaponPool: config.weaponPool ?? "all",
-  banStart: config.banStart ?? [],
-  rules: config.rules ?? {},
   seed: config.seed ?? Math.floor(Math.random() * 0xffffffff),
 });
 env.reset();
@@ -133,6 +135,10 @@ const state = () => {
       ammo: worm.O[worm.Ka]?.ha ?? 0,
       loadout: env.loadouts[agent].map((id) => engine.weaponNames[id]),
       rope: worm.Fa.Sc ? { x: worm.Fa.x, y: worm.Fa.y, attached: worm.Fa.jc } : null,
+      // Where this worm was told to go, in a run that hands out destinations.
+      // Without it the page shows a worm moving and no way to tell whether it
+      // is going anywhere on purpose, which is the whole question here.
+      goal: env.progress[agent]?.goal ?? null,
       score: scores[agent],
     })),
     projectiles: [env.world.Ib, env.world.Zb].flatMap((pool) => {

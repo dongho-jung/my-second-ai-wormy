@@ -37,6 +37,12 @@ const RAY_DIRECTIONS = Array.from({ length: RAY_COUNT }, (_, k) => {
 // is roughly as far as a worm can act in one move.
 const REACH_PX = 300;
 const HEALTH_MAX = 100;
+// How far a goal has to be before the distance reading saturates. Wider than
+// REACH_PX because a destination is not a fight: the worm is told about one
+// across the map, and what it needs from the far end is "that way, a long way".
+// Maps here run from 504px to a few thousand across, so this is a scale rather
+// than a limit — the direction stays exact past it.
+const GOAL_RANGE_PX = 800;
 export const WEAPON_SLOTS = 5;
 /**
  * What a delay is measured against, in ticks.
@@ -201,6 +207,15 @@ export function observationSpec({
     // and then never mentioned, so the policy had to infer it from how late
     // the world kept reacting.
     ["latency", 1],
+    // Where this worm has been told to go: whether there is a goal at all, the
+    // unit direction to it, and how far saturating at GOAL_RANGE_PX. Paying for
+    // progress toward a point the policy cannot see is paying at random, so the
+    // goal reward is only meaningful with these four.
+    //
+    // They stay in the vector for every stage. A run that sets no goals leaves
+    // them zero rather than dropping them, so the vector keeps its size and a
+    // later stage can --resume a policy trained with them.
+    ["goal", 4],
     // Which weapon, not just what it does. Twelve names in this mod belong to
     // two different weapons — the ordinary one and the strange crate-only
     // version — and ten measured numbers do not say how a VIRUS spreads or
@@ -470,6 +485,22 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
   // as far. Ten measured numbers cannot say that; an identity can.
   // How late this worm's keys arrive, against the longest delay there is.
   into[at++] = clamp((view.inputLatencyTicks ?? 0) / LATENCY_SCALE_TICKS, 0, 1);
+
+  // The goal, as a direction and a distance rather than a position: where it is
+  // on the map is the same question as where the worm is, and the worm already
+  // knows that. No goal leaves the four at zero, which `into.fill(0)` did.
+  const goal = view.goal ?? null;
+  if (goal) {
+    const toGoalX = goal.x - x;
+    const toGoalY = goal.y - y;
+    const distance = Math.hypot(toGoalX, toGoalY) || 1;
+    into[at++] = 1;
+    into[at++] = toGoalX / distance;
+    into[at++] = toGoalY / distance;
+    into[at++] = clamp(distance / GOAL_RANGE_PX, 0, 1);
+  } else {
+    at += 4;
+  }
 
   const held = (worm) => worm?.weapons?.[worm.selectedWeapon]?.id ?? -1;
   for (let slot = 0; slot < WEAPON_SLOTS; slot++) {

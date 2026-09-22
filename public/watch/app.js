@@ -10,6 +10,8 @@ const element = (id) => document.getElementById(id);
 const WORM_COLOURS = ["#f3e6d4", "#ff5a45", "#8fb9e8", "#78bc7b", "#e8a723", "#bf99f3"];
 const SHOT_COLOUR = "#ffd9a0";
 const ROPE_COLOUR = "#9a8a76";
+// `goalRadiusPx` in src/env/progress.js: inside this the worm has arrived.
+const GOAL_RADIUS_PX = 24;
 const LEVEL_MS = 1000;
 
 const arena = element("arena");
@@ -64,6 +66,28 @@ function draw() {
   for (const worm of state.worms) {
     if (!worm.alive) continue;
     const colour = WORM_COLOURS[worm.id % WORM_COLOURS.length];
+    // Where it is headed, in the worm's own colour, drawn under everything else
+    // so a crowd of them does not bury the worms. The circle is the arrival
+    // radius the environment actually pays on, not a decoration: inside it the
+    // goal is reached and the next one is handed out.
+    if (worm.goal) {
+      context.strokeStyle = colour;
+      context.globalAlpha = 0.3;
+      context.lineWidth = 1;
+      context.setLineDash([2, 3]);
+      context.beginPath();
+      context.moveTo(worm.x, worm.y);
+      context.lineTo(worm.goal.x, worm.goal.y);
+      context.stroke();
+      context.setLineDash([]);
+      context.globalAlpha = 0.7;
+      context.beginPath();
+      context.arc(worm.goal.x, worm.goal.y, GOAL_RADIUS_PX, 0, Math.PI * 2);
+      context.stroke();
+      context.fillStyle = colour;
+      context.fillRect(Math.round(worm.goal.x) - 1, Math.round(worm.goal.y) - 1, 3, 3);
+      context.globalAlpha = 1;
+    }
     if (worm.rope) {
       context.strokeStyle = ROPE_COLOUR;
       context.lineWidth = 1;
