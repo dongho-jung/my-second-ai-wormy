@@ -1058,7 +1058,12 @@ def main(argv=None):
                 f"{latest.get('episodeReward', float('nan')):7.3f} | "
                 f"k/d {latest.get('kills', 0):.2f}/{latest.get('deaths', 0):.2f} | "
                 f"dealt {latest.get('damageDealt', 0):6.1f} self {latest.get('selfDamage', 0):6.1f} | "
-                f"stuck {latest.get('stuckSteps', 0):5.1f} | entropy {line['entropy']:.2f}",
+                f"stuck {latest.get('stuckSteps', 0):5.1f} | entropy {line['entropy']:.2f} | "
+                # What the adaptive rate is doing. Without these two the log
+                # cannot say why a run went flat: a policy that has stopped
+                # moving and one whose rate has run out of room read the same
+                # everywhere else on this line.
+                f"kl {line['approxKL']:.4f} lr {line['learningRate']:.1e}",
                 flush=True,
             )
             if "combat" in line:
