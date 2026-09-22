@@ -36,7 +36,7 @@ test("every action the policy can take is one a player could press", () => {
     checked++;
   }
   assert.equal(checked, ACTION_SIZES.reduce((all, size) => all * size, 1));
-  assert.equal(checked, 1944);
+  assert.equal(checked, 1296);
 });
 
 test("the two ways of reaching dig do not collide", () => {
@@ -72,9 +72,10 @@ test("ChangeWeap is a modifier, and nothing we press needs it", () => {
 
 test("the rope and the weapon are presses, not holds", () => {
   assert.deepEqual(pressesForAction({ rope: 1 }), [ACTIONS.rope]);
-  // Letting go is the Jump key: the client only ever sends a throw on the
-  // NinjaRope key, and the release on a press of Jump.
-  assert.deepEqual(pressesForAction({ rope: -1 }), [ACTIONS.jump]);
+  // Letting go is nothing to press on its own: the client only ever sends a
+  // throw on the NinjaRope key, and the release on a press of Jump, which is
+  // the jump head's key already.
+  assert.deepEqual(pressesForAction({ rope: -1 }), []);
   assert.deepEqual(pressesForAction({ weapon: 1 }), [ACTIONS.nextWeapon]);
   assert.deepEqual(pressesForAction({ weapon: -1 }), [ACTIONS.previousWeapon]);
   assert.deepEqual(pressesForAction({}), []);

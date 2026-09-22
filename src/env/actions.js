@@ -85,12 +85,12 @@ export function normalizeAction(action = 0) {
 }
 
 /**
- * What a policy actually emits: eight small choices, not one number out of 1,944.
+ * What a policy actually emits: eight small choices, not one number out of 1,296.
  *
  * Left and right at once is the engine doing nothing, so the two of them are one
  * three-way choice rather than two bits — and the same for aiming, and for the
  * rope's two length keys. The rest are the keys and messages that are genuinely
- * independent. Eight heads is twenty-one logits, against the 1,944 a single flat
+ * independent. Eight heads is twenty logits, against the 1,296 a single flat
  * distribution would need, and a policy that has learned to walk right keeps
  * that when it learns to fire.
  *
@@ -99,6 +99,13 @@ export function normalizeAction(action = 0) {
  * 128, which `src/live/keys.js` already turns back into the game's own
  * shortenRope / lengthenRope bindings. Without this head a worm can fire the
  * rope and hang off it, and cannot swing, which is most of what the rope is for.
+ *
+ * There is no "release" choice. In the game letting go is a press of Jump, and
+ * the jump head already is one; a release of its own that also jumped (it had
+ * to, to match the client) became a second jump key — a trained policy pressed
+ * it 275 times a match, 78% of them with no rope out — and every rope it did
+ * have out was let go within two decisions. So letting go is the jump head,
+ * the way it is a person's Jump key, and nothing else.
  */
 export const ACTION_HEADS = [
   ["move", ["none", "left", "right"]],
@@ -106,7 +113,7 @@ export const ACTION_HEADS = [
   ["fire", ["no", "yes"]],
   ["jump", ["no", "yes"]],
   ["dig", ["no", "yes"]],
-  ["rope", ["none", "throw", "release"]],
+  ["rope", ["none", "throw"]],
   ["ropeLength", ["none", "shorter", "longer"]],
   ["weapon", ["none", "next", "previous"]],
 ];
@@ -115,7 +122,7 @@ export const ACTION_SIZES = ACTION_HEADS.map(([, choices]) => choices.length);
 
 const MOVE_KEYS = [0, KEYS.left, KEYS.right];
 const AIM_KEYS = [0, KEYS.aimUp, KEYS.aimDown];
-const ROPE_CHOICES = [ROPE.none, ROPE.throw, ROPE.release];
+const ROPE_CHOICES = [ROPE.none, ROPE.throw];
 const ROPE_LENGTH_KEYS = [0, KEYS.ropeShorter, KEYS.ropeLonger];
 const WEAPON_CHOICES = [0, 1, -1];
 
@@ -135,6 +142,49 @@ export function actionFromHeads(heads, at = 0) {
     rope: ROPE_CHOICES[heads[at + 5]] ?? ROPE.none,
     weapon: WEAPON_CHOICES[heads[at + 7]] ?? 0,
   };
+}
+
+/**
+ * A throw is a commitment.
+ *
+ * The rope in this mod reels the worm toward whatever it hooks, but only once
+ * it has been held for a while: after a second of pull the worm is moving at
+ * four pixels a tick and has covered a hundred. A policy that chooses afresh
+ * fifteen times a second never gets there — twelve consecutive decisions of
+ * "leave it" is something exploration does not produce, and measured, a
+ * trained policy kept a rope for two decisions in the median and was pulled
+ * up by nothing. So for `decisions` after a throw the rope is left alone:
+ * another throw is ignored and the jump key, which is also how a rope is let
+ * go, is dropped. Walking and aiming go on, which is how a hanging worm swings.
+ *
+ * Applied by the environment and by the live driver the same way, so what the
+ * policy learns is what its keys will do in a room.
+ */
+export class RopeHold {
+  constructor(decisions = 0) {
+    this.hold = Math.max(0, Math.trunc(decisions));
+    this.left = 0;
+  }
+
+  reset() {
+    this.left = 0;
+  }
+
+  /** How much of the hold is still to come, 0..1, for the observation. */
+  get share() {
+    return this.hold > 0 ? this.left / this.hold : 0;
+  }
+
+  /** The action actually taken this decision. */
+  apply(action) {
+    if (this.hold <= 0) return action;
+    if (this.left > 0) {
+      this.left--;
+      return { ...action, keys: action.keys & ~KEYS.jump, rope: ROPE.none };
+    }
+    if (action.rope === ROPE.throw) this.left = this.hold;
+    return action;
+  }
 }
 
 /**

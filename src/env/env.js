@@ -6,7 +6,7 @@
 // worth interrupting. Everything that could make two runs of one seed differ
 // goes through a single seeded generator, so a rollout is reproducible and a
 // policy's bad episode can be replayed exactly.
-import { KEYS, ROPE, applyNormalizedAction, normalizeAction } from "./actions.js";
+import { KEYS, ROPE, RopeHold, applyNormalizedAction, normalizeAction } from "./actions.js";
 import { makeRng, respawnWorm, roomWeapons, watchDamage, weaponList } from "./engine.js";
 import {
   AIM_RANGE_PX,
@@ -197,6 +197,17 @@ export const DEFAULTS = {
   // Whether that matters to learning is what the a/b is for. It is not settled
   // by the table above.
   ropeCooldown: 0,
+  // Decisions a rope throw is committed to: another throw is ignored and the
+  // jump key dropped, so the rope gets to pull. See RopeHold in actions.js.
+  // 0 leaves every decision free, which is what every run before 2026-09-23
+  // had, and none of them held a rope for more than two decisions.
+  ropeHold: 0,
+  // What share of destinations are drawn above the worm, and by how much at
+  // least. Half the goals a jump cannot reach means the success curriculum
+  // cannot move on until the rope is being used — walking and jumping reach
+  // the other half and no more.
+  goalAboveShare: 0,
+  goalAbovePx: 48,
   // Decisions between re-reading the whole level for the map observation.
   // Reading it costs every pixel, so it is amortised: the terrain only changes
   // where somebody is digging, and four seconds of staleness at this scale is a
@@ -383,6 +394,9 @@ export class WormEnv {
           ? () => settings.level
           : (engineIn, seed) => engineIn.randomLevel(seed, settings.levelOptions);
     this.world = engine.createWorld({ rules: settings.rules });
+    this.ropeHold = Math.max(0, Math.trunc(settings.ropeHold ?? 0));
+    this.goalAboveShare = Math.min(1, Math.max(0, settings.goalAboveShare ?? 0));
+    this.goalAbovePx = Math.max(0, settings.goalAbovePx ?? 0);
     // The engine knows who hit whom; this is where it says so.
     this.watch = watchDamage(this.world);
     this.seed = settings.seed ?? 1;
@@ -630,6 +644,8 @@ export class WormEnv {
     // Goals are drawn after the views exist, because picking a spot means
     // reading the terrain and the views are what carry it.
     this.assignGoals();
+    // Each worm's commitment to its last throw.
+    this.ropeHolds = this.worms.map(() => new RopeHold(this.ropeHold));
     this.encodeObservations();
     return { observations: this.observations, info: this.info() };
   }
@@ -704,6 +720,9 @@ export class WormEnv {
       // the edge too, and a key held across two decisions was pressed once.
       const wasJumping = ((this.lastActions[agent]?.keys ?? 0) & KEYS.jump) !== 0;
       const jumpPressed = (normalized.keys & KEYS.jump) !== 0 && !wasJumping;
+      // A throw is kept for a while: during the hold another throw is ignored
+      // and the jump key is dropped, so nothing below can let go of it.
+      normalized = this.ropeHolds[agent].apply(normalized);
       if (normalized.rope === ROPE.release) {
         normalized = { ...normalized, keys: normalized.keys | KEYS.jump };
       } else if (normalized.rope === ROPE.none && jumpPressed && this.views[agent]?.self?.rope) {
@@ -879,6 +898,7 @@ export class WormEnv {
     });
     return this.views;
   }
+        this.ropeHolds?.[agent]?.share ?? 0,
 
   /** The expensive half, so it runs once per step and not once per view. */
   encodeObservations() {

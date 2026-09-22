@@ -563,6 +563,8 @@ def main(argv=None):
         config["goalPatience"] = 450 if args.goal_patience is None else args.goal_patience
         config["goalRadiusMode"] = args.goal_curriculum
         if args.goal_curriculum == "success":
+    if args.rope_hold > 0:
+        config["ropeHold"] = args.rope_hold
             config["goalCurriculum"] = {"window": args.goal_window}
             if carried is not None and carried.get("goalRadius"):
                 # Carrying on: start where the radius had got to.
@@ -755,6 +757,8 @@ def main(argv=None):
             "engineSha256": layout.engine_sha256,
             "mod": layout.mod,
             "lr": args.lr,
+            "ropeHold": args.rope_hold,
+            "goalAbove": args.goal_above,
             "targetKL": args.target_kl,
             "bcCoef": args.bc_coef,
             # The page needs to know whether any worm is an older copy: without

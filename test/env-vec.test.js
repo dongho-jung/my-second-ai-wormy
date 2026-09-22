@@ -27,7 +27,7 @@ const skip = absent.length
 
 test("the heads are the keys a person would press, factorised", () => {
   assert.equal(HEADS, 8);
-  assert.deepEqual(ACTION_SIZES, [3, 3, 2, 2, 2, 3, 3, 3]);
+  assert.deepEqual(ACTION_SIZES, [3, 3, 2, 2, 2, 2, 3, 3]);
   // Left and right together is the engine doing nothing, so they share a head
   // rather than being two bits that can contradict each other.
   assert.deepEqual(actionFromHeads([1, 0, 0, 0, 0, 0, 0, 0]), {
@@ -35,11 +35,14 @@ test("the heads are the keys a person would press, factorised", () => {
     rope: ROPE.none,
     weapon: 0,
   });
-  assert.deepEqual(actionFromHeads([2, 2, 1, 1, 1, 2, 0, 2]), {
+  assert.deepEqual(actionFromHeads([2, 2, 1, 1, 1, 1, 0, 2]), {
     keys: KEYS.right | KEYS.aimDown | KEYS.fire | KEYS.jump | KEYS.dig,
-    rope: ROPE.release,
+    rope: ROPE.throw,
     weapon: -1,
   });
+  // There is no release choice: letting go is the jump head, as it is a
+  // person's Jump key. A stray 2 on the rope head is read as nothing.
+  assert.equal(actionFromHeads([0, 0, 0, 0, 0, 2, 0, 0]).rope, ROPE.none);
   // Reeling the rope in and paying it out are held keys, like moving and
   // aiming, and share a head for the same reason: both at once is nothing.
   // Throwing the rope is a separate message and can happen in the same tick.
@@ -66,8 +69,8 @@ test("the heads are the keys a person would press, factorised", () => {
   assert.equal(actionFromHeads(batch, 8).weapon, 1);
   assert.equal(
     ACTION_HEADS.reduce((all, [, choices]) => all * choices.length, 1),
-    1944,
-    "1,944 combinations, described by 21 numbers",
+    1296,
+    "1,296 combinations, described by 20 numbers",
   );
 });
 

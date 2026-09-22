@@ -17,6 +17,7 @@ import {
   WALK,
   contactsAt,
   kindOf,
+  ropeHoldsAt,
   solidAt,
   walkProbe,
 } from "./terrain.js";
@@ -230,6 +231,16 @@ export function observationSpec({
     // version — and ten measured numbers do not say how a VIRUS spreads or
     // what a FORCE FIELD is for. These are indices for the network to embed,
     // so they are kept out of the running normaliser, which would average them
+    // How much of a rope throw's hold is still to come. A throw is a commitment
+    // for a while (see RopeHold in actions.js) and the policy is told where in
+    // it it is, rather than left to count.
+    ["ropeHold", 1],
+    // What the rope would hook if thrown now: along the aim, how far to the
+    // first ground that holds a rope (0 for nothing within its reach) and how
+    // far above the worm that point is. The rope leaves along the aim and the
+    // aim moves slowly, so "adjust until this says a ledge, then throw" is a
+    // mechanism the policy can see rather than one it has to discover blind.
+    ["ropeReach", 2],
     // into nonsense.
     //
     // All five of my slots, then each foe's held one. Only the held weapon used
@@ -527,6 +538,11 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
     into[at++] = self.weapons?.[slot]?.id ?? -1;
   }
   for (let slot = 0; slot < spec.foeSlots; slot++) into[at++] = held(foes[slot]);
+  into[at++] = clamp(view.ropeHoldShare ?? 0, 0, 1);
+  const hook = ropeReach(terrain, x, y, self.aimRadians);
+  into[at++] = hook ? hook.distance / ROPE_REACH_PX : 0;
+  into[at++] = hook ? clamp((y - hook.y) / ROPE_REACH_PX, -1, 1) : 0;
+
 
   return into;
 }
@@ -536,6 +552,24 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
  *
  * Nearly everything in this mod arcs, so the angle that hits somebody is not
  * the angle that points at them: it is higher by however far the shot falls
+/**
+ * Where a rope thrown along `aimRadians` would hook: the first pixel on the
+ * way that holds a rope (dirt, rock, or the edge of the map — ground with no
+ * material flags lets it through, as the engine does), within the rope's
+ * reach. Null when nothing does. The rope flies straight for that distance at
+ * eight pixels a tick, so the ray is a fair picture of it.
+ */
+export function ropeReach(terrain, x, y, aimRadians, limit = ROPE_REACH_PX) {
+  const dx = Math.cos(aimRadians);
+  const dy = Math.sin(aimRadians);
+  for (let distance = ROPE_RAY_STEP_PX; distance <= limit; distance += ROPE_RAY_STEP_PX) {
+    const px = Math.round(x + dx * distance);
+    const py = Math.round(y + dy * distance);
+    if (ropeHoldsAt(terrain, px, py)) return { distance, x: px, y: py };
+  }
+  return null;
+}
+
  * on the way. `off` is how far the current aim is from that angle, signed and
  * wrapped, and `clear` says whether the arc itself gets there — an arc clears
  * a low wall a straight line does not, and dives into a ceiling the line

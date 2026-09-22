@@ -44,6 +44,7 @@ import {
   observationSpec,
   observe,
 } from "../env/observation.js";
+import { RopeHold } from "../env/actions.js";
 import { viewFromSnapshot } from "../env/view.js";
 import { Controls } from "./controls.js";
 
@@ -77,6 +78,9 @@ const players = config.players ?? 3;
 const decideMs = 1000 / (config.decideHz ?? 15);
 const mapMs = config.mapMs ?? 1000;
 const foeSlots = config.observationFoes ?? players - 1;
+// How long a throw is committed to, from the checkpoint's own world: a policy
+// that learned to leave a rope alone for twelve decisions is driven that way.
+const ropeHold = Number(config.ropeHold ?? 0);
 // The observation a policy trained on, not a default one. The engine is loaded
 // for its measured weapon profile: without it every weapon feature in the
 // vector is zero, which is 72 numbers the policy has never seen at zero, and
@@ -186,6 +190,7 @@ for (let index = 0; index < players; index++) {
     nickname,
     playerId: null,
     controls: null,
+    ropeHold: new RopeHold(ropeHold),
     observer: null,
     terrain: null,
     terrainAt: 0,
@@ -348,7 +353,10 @@ async function look(seat, now) {
     }
   }
   if (!seat.terrain) return null;
-  return viewFromSnapshot(read.game, seat.terrain, { lastAction: seat.lastAction ?? null });
+  return viewFromSnapshot(read.game, seat.terrain, {
+    lastAction: seat.lastAction ?? null,
+    ropeHoldShare: seat.ropeHold.share,
+  });
 }
 
 writeFrame(
@@ -639,7 +647,9 @@ async function act(heads) {
   await Promise.all(
     seats.map(async (seat) => {
       if (!alive[seat.index]) return;
-      const action = actionFromHeads(heads, seat.index * HEADS);
+      // Through the same hold the environment applies, so a throw is kept for
+      // as long here as it was in training.
+      const action = seat.ropeHold.apply(actionFromHeads(heads, seat.index * HEADS));
       // Remembered before it is applied: it is the decision the policy sees
       // next time, whether or not the keyboard took it.
       seat.lastAction = action;

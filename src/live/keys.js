@@ -171,18 +171,15 @@ export function keysForBits(bits) {
 /**
  * What to press once, rather than hold, for the messages that are not bits.
  *
- * Throwing the rope is the NinjaRope key. Letting go is not: in the client
- * (`Kc.qo` in the v20 bundle) NinjaRope always sends a throw, and the release
- * message goes out on the press of Jump while ChangeWeap is not held — which is
- * why the environment treats a jump press as letting go too. Pressing NinjaRope
- * for a release, as this once did, threw the rope again from wherever the worm
- * was. A pressed Jump also jumps if the worm is standing, exactly as it does for
- * a person.
+ * Throwing the rope is the NinjaRope key. Letting go is not a press of its own:
+ * in the client (`Kc.qo` in the v20 bundle) NinjaRope always sends a throw, and
+ * the release message goes out on the press of Jump while ChangeWeap is not
+ * held. The policy has no release choice any more — its jump head is the Jump
+ * key, and a jump pressed with the rope out lets go, for it as for a person.
  */
 export function pressesForAction({ rope = 0, weapon = 0 } = {}) {
   const presses = [];
   if (rope > 0) presses.push(ACTIONS.rope);
-  else if (rope < 0) presses.push(ACTIONS.jump);
   if (weapon > 0) presses.push(ACTIONS.nextWeapon);
   else if (weapon < 0) presses.push(ACTIONS.previousWeapon);
   return presses;
@@ -208,7 +205,8 @@ export function headsFromKeys(keys, { rope = 0, weapon = 0 } = {}) {
     keys & KEY_BITS.fire ? 1 : 0,
     keys & KEY_BITS.jump ? 1 : 0,
     both || keys & KEY_BITS.dig ? 1 : 0,
-    rope > 0 ? 1 : rope < 0 ? 2 : 0,
+    // Throw or not. A person's release is their Jump press, already above.
+    rope > 0 ? 1 : 0,
     // The rope's two length keys are the seventh head. Without it this was
     // seven bytes written into an eight-byte slot: the recorded weapon choice
     // landed in the rope-length column and the player id in the weapon column.

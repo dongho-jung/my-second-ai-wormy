@@ -318,6 +318,41 @@ test("a jump press lets go of the rope, and letting go is a jump press", { skip 
   assert.equal(env.lastActions[0].rope, ROPE.release);
 });
 
+test("a held throw is not let go of, by a jump or another throw, until the hold is over", { skip }, async () => {
+  const engine = await loadEngine();
+  const env = new WormEnv(engine, {
+    agents: 1,
+    observations: ["vector"],
+    inputLatencyTicks: 0,
+    ropeHold: 4,
+    seed: 5,
+  });
+  env.reset({ seed: 5 });
+  const worm = env.worms[0];
+  const step = (action) => env.step([action]);
+  worm.Oa = Math.PI / 2;
+  worm.ub = 0;
+  step({ keys: 0, rope: ROPE.throw });
+  assert.ok(env.views[0].self.rope, "the rope is out");
+  assert.equal(env.views[0].ropeHoldShare, 1, "and the hold has just started");
+  const anchor = { ...env.views[0].self.rope.position };
+  // Four decisions of jumping and throwing change nothing: the rope stays, on
+  // the same anchor, and the recorded decisions carry neither.
+  for (let decision = 0; decision < 4; decision++) {
+    step({ keys: KEYS.jump, rope: ROPE.throw });
+    assert.ok(env.views[0].self.rope, `still out after ${decision + 1}`);
+    assert.equal(env.lastActions[0].rope, ROPE.none);
+    assert.equal(env.lastActions[0].keys & KEYS.jump, 0, "the jump key is dropped");
+  }
+  assert.ok(env.views[0].self.rope.attached, "and it has hooked something by now");
+  assert.deepEqual(env.views[0].self.rope.position, anchor, "on the anchor it first found");
+  assert.equal(env.views[0].ropeHoldShare, 0, "the hold is over");
+  // Now a jump press lets go, as it always did.
+  step({ keys: KEYS.jump });
+  assert.equal(env.views[0].self.rope, null);
+  assert.equal(env.lastActions[0].rope, ROPE.release);
+});
+
 test("the rope flies through a wall the worm cannot", { skip }, async () => {
   // A corridor with a ceiling drawn in a colour that has no material flags:
   // the engine stops the worm at it and lets the rope through. Five of the

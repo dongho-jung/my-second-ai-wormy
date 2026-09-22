@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ROPE } from "../src/env/actions.js";
+import { KEYS, ROPE, RopeHold } from "../src/env/actions.js";
 import { DEFAULTS } from "../src/env/env.js";
 
 // The cooldown is the one thing here that changes what the engine is told, so
@@ -55,4 +55,32 @@ test("decisions that ask for nothing do not start a window", () => {
 
 test("the default is off, so runs that say nothing behave as before", () => {
   assert.equal(DEFAULTS.ropeCooldown, 0);
+  assert.equal(DEFAULTS.ropeHold, 0);
+});
+
+test("a throw is kept: no re-throw and no jump until the hold is over", () => {
+  const hold = new RopeHold(3);
+  const throwing = { keys: KEYS.right, rope: ROPE.throw, weapon: 0 };
+  const jumping = { keys: KEYS.right | KEYS.jump, rope: ROPE.none, weapon: 0 };
+  assert.equal(hold.share, 0);
+  assert.deepEqual(hold.apply(throwing), throwing, "the throw itself goes through");
+  assert.equal(hold.share, 1, "and the hold starts");
+  // For three decisions the rope is left alone: a throw is swallowed, and the
+  // jump key — which is how a rope is let go — is dropped. Walking is kept.
+  assert.deepEqual(hold.apply(throwing), { keys: KEYS.right, rope: ROPE.none, weapon: 0 });
+  assert.deepEqual(hold.apply(jumping), { keys: KEYS.right, rope: ROPE.none, weapon: 0 });
+  assert.ok(Math.abs(hold.share - 1 / 3) < 1e-9);
+  assert.deepEqual(hold.apply(jumping), { keys: KEYS.right, rope: ROPE.none, weapon: 0 });
+  assert.equal(hold.share, 0);
+  // The fourth decision is free again: this jump lets go.
+  assert.deepEqual(hold.apply(jumping), jumping);
+  // And a fresh throw starts a fresh hold.
+  assert.deepEqual(hold.apply(throwing), throwing);
+  assert.equal(hold.share, 1);
+  hold.reset();
+  assert.equal(hold.share, 0);
+  // No hold configured: everything goes through untouched.
+  const none = new RopeHold(0);
+  assert.deepEqual(none.apply(throwing), throwing);
+  assert.deepEqual(none.apply(jumping), jumping);
 });
