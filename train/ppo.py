@@ -227,6 +227,11 @@ def parse_args(argv=None):
 # The figures carried across updates that ended with no episode finished.
 SHOWN = ("episodeReward", "kills", "deaths", "damageDealt", "selfDamage", "stuckSteps")
 
+# Consecutive updates the adaptive rate may spend asking to move past an end of
+# --lr-range before the run says so. A few is ordinary: the control nudges by
+# 2% and clamps. This many in a row is the KL target no longer being held.
+PINNED_UPDATES = 50
+
 
 LEVEL_SUFFIXES = (".lev", ".png")
 
@@ -439,6 +444,8 @@ def main(argv=None):
     optimiser = torch.optim.Adam(policy.parameters(), lr=args.lr, eps=1e-5)
     learning_rate = args.lr
     lr_low, lr_high = (float(part) for part in args.lr_range.split(","))
+    # Consecutive updates the rate has wanted to move past an end of that range.
+    pinned = 0
     parameters = sum(p.numel() for p in policy.parameters())
 
     # Carrying on from a checkpoint. The rollout shape is free to change — how
@@ -994,9 +1001,34 @@ def main(argv=None):
                 elif kl > args.target_kl * 1.5:
                     scale = 1 / 1.02
                 if scale != 1.0:
-                    learning_rate = min(lr_high, max(lr_low, learning_rate * scale))
+                    wanted = learning_rate * scale
+                    learning_rate = min(lr_high, max(lr_low, wanted))
                     for group in optimiser.param_groups:
                         group["lr"] = learning_rate
+                    # The control asked for a rate it cannot have. One update of
+                    # that is nothing; a run of them is the target quietly not
+                    # being held, and the rate sitting still looks deliberate.
+                    pinned = pinned + 1 if wanted != learning_rate else 0
+                else:
+                    pinned = 0
+                if pinned == PINNED_UPDATES:
+                    floor = learning_rate <= lr_low
+                    run.note(
+                        f"the rate has been pinned to its "
+                        f"{'floor' if floor else 'ceiling'} of {learning_rate:.1e} "
+                        f"for {PINNED_UPDATES} updates",
+                        learningRate=learning_rate,
+                        approxKL=kl,
+                    )
+                    print(
+                        f"the rate has sat on its {'floor' if floor else 'ceiling'} "
+                        f"of {learning_rate:.1e} for {PINNED_UPDATES} updates while "
+                        f"the KL wanted it {'lower' if floor else 'higher'} "
+                        f"({kl:.4f} against a target of {args.target_kl}). The "
+                        "target is no longer being held: widen --lr-range, or "
+                        "the policy is sharpening faster than the rate can follow",
+                        flush=True,
+                    )
             scored_ret = returns[:, lane_pool].reshape(-1)
             scored_val = vals[:, lane_pool].reshape(-1)
             variance = float(scored_ret.var())
