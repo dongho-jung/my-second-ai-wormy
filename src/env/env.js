@@ -594,6 +594,20 @@ export class WormEnv {
           this.ropeReadyAt[agent] = this.decisions + this.ropeCooldown;
         }
       }
+      // Letting go of the rope is a jump press, because that is what it is in
+      // the game: the client sends the release on the press of Jump (with no
+      // weapon-change modifier held) and the NinjaRope key only ever throws.
+      // So a policy's release presses Jump — which also jumps, if the worm is
+      // standing, as it does for a person — and a jump pressed while the rope
+      // is out lets go of it. Pressed, not held: the engine's own jump fires on
+      // the edge too, and a key held across two decisions was pressed once.
+      const wasJumping = ((this.lastActions[agent]?.keys ?? 0) & KEYS.jump) !== 0;
+      const jumpPressed = (normalized.keys & KEYS.jump) !== 0 && !wasJumping;
+      if (normalized.rope === ROPE.release) {
+        normalized = { ...normalized, keys: normalized.keys | KEYS.jump };
+      } else if (normalized.rope === ROPE.none && jumpPressed && this.views[agent]?.self?.rope) {
+        normalized = { ...normalized, rope: ROPE.release };
+      }
       if (normalized.rope === ROPE.throw) {
         this.totals[agent].ropeThrows = (this.totals[agent].ropeThrows ?? 0) + 1;
       }

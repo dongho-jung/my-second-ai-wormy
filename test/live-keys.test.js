@@ -72,7 +72,9 @@ test("ChangeWeap is a modifier, and nothing we press needs it", () => {
 
 test("the rope and the weapon are presses, not holds", () => {
   assert.deepEqual(pressesForAction({ rope: 1 }), [ACTIONS.rope]);
-  assert.deepEqual(pressesForAction({ rope: -1 }), [ACTIONS.rope]);
+  // Letting go is the Jump key: the client only ever sends a throw on the
+  // NinjaRope key, and the release on a press of Jump.
+  assert.deepEqual(pressesForAction({ rope: -1 }), [ACTIONS.jump]);
   assert.deepEqual(pressesForAction({ weapon: 1 }), [ACTIONS.nextWeapon]);
   assert.deepEqual(pressesForAction({ weapon: -1 }), [ACTIONS.previousWeapon]);
   assert.deepEqual(pressesForAction({}), []);

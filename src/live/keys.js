@@ -168,10 +168,21 @@ export function keysForBits(bits) {
   return held;
 }
 
-/** What to press once, rather than hold, for the messages that are not bits. */
+/**
+ * What to press once, rather than hold, for the messages that are not bits.
+ *
+ * Throwing the rope is the NinjaRope key. Letting go is not: in the client
+ * (`Kc.qo` in the v20 bundle) NinjaRope always sends a throw, and the release
+ * message goes out on the press of Jump while ChangeWeap is not held — which is
+ * why the environment treats a jump press as letting go too. Pressing NinjaRope
+ * for a release, as this once did, threw the rope again from wherever the worm
+ * was. A pressed Jump also jumps if the worm is standing, exactly as it does for
+ * a person.
+ */
 export function pressesForAction({ rope = 0, weapon = 0 } = {}) {
   const presses = [];
-  if (rope !== 0) presses.push(ACTIONS.rope);
+  if (rope > 0) presses.push(ACTIONS.rope);
+  else if (rope < 0) presses.push(ACTIONS.jump);
   if (weapon > 0) presses.push(ACTIONS.nextWeapon);
   else if (weapon < 0) presses.push(ACTIONS.previousWeapon);
   return presses;

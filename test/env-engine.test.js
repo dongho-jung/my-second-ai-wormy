@@ -273,6 +273,51 @@ test("the rope and the weapon are messages, not held keys", { skip }, async () =
   assert.equal(worm.Ka, 4);
 });
 
+test("a jump press lets go of the rope, and letting go is a jump press", { skip }, async () => {
+  const engine = await loadEngine();
+  const env = new WormEnv(engine, {
+    agents: 1,
+    observations: ["vector"],
+    inputLatencyTicks: 0,
+    seed: 5,
+  });
+  env.reset({ seed: 5 });
+  const worm = env.worms[0];
+  const step = (action) => env.step([action]);
+  // Straight up, so the rope has a ceiling to find on any map.
+  worm.Oa = Math.PI / 2;
+  worm.ub = 0;
+  step({ keys: 0, rope: ROPE.throw });
+  assert.ok(env.views[0].self.rope, "the rope is out");
+  // A press of Jump while the rope is out is the game's release, and the
+  // environment says so in the decision it records.
+  step({ keys: KEYS.jump });
+  assert.equal(env.views[0].self.rope, null, "a jump press lets go");
+  assert.equal(env.lastActions[0].rope, ROPE.release);
+  // Held across two decisions it was pressed once: the second is no release.
+  step({ keys: 0, rope: ROPE.throw });
+  assert.ok(env.views[0].self.rope);
+  step({ keys: KEYS.jump });
+  assert.equal(env.views[0].self.rope, null);
+  step({ keys: 0, rope: ROPE.throw });
+  assert.ok(env.views[0].self.rope);
+  step({ keys: KEYS.jump });
+  assert.equal(env.views[0].self.rope, null, "pressed again, released again");
+  step({ keys: 0, rope: ROPE.throw });
+  step({ keys: KEYS.jump }); // released
+  step({ keys: 0, rope: ROPE.throw });
+  assert.ok(env.views[0].self.rope);
+  step({ keys: KEYS.jump, rope: ROPE.throw }); // a throw with the press wins, as it does in the client
+  assert.ok(env.views[0].self.rope, "throwing on the same decision keeps the rope");
+  step({ keys: KEYS.jump }); // still held: no new press, so no release
+  assert.ok(env.views[0].self.rope, "a key still held is not a press");
+  // And the policy's own release is a Jump press in the keys it is recorded as.
+  step({ keys: 0, rope: ROPE.release });
+  assert.equal(env.views[0].self.rope, null);
+  assert.equal(env.lastActions[0].keys & KEYS.jump, KEYS.jump, "release presses Jump");
+  assert.equal(env.lastActions[0].rope, ROPE.release);
+});
+
 test("a dead worm is dropped from the world and comes back whole", { skip }, async () => {
   const { world, worms } = await arena({ seed: 77 });
   const [worm] = worms;
