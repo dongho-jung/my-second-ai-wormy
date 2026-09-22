@@ -1080,7 +1080,6 @@ def main(argv=None):
             flat_adv = advantages.reshape(batch)
             flat_ret = returns.reshape(batch)
             flat_val = vals.reshape(batch)
-            policy.norm.observe(flat_v)
 
             # Kept on the device and read once at the end: turning a loss into a
             # Python float waits for the GPU, and doing that five times per
@@ -1221,6 +1220,12 @@ def main(argv=None):
                             running_heads += head_entropy.detach()
                         passes += 1
 
+            # The normaliser learns this rollout's vectors only now: the update
+            # above scored the rollout with the statistics the rollout was
+            # collected under, so its ratios started at exactly one. Folding
+            # them in first shifted every input under a log-prob that had
+            # already been recorded.
+            policy.norm.observe(flat_v)
             updates += 1
             if frozen and updates % args.pool_every == 0:
                 past.append({k: v.detach().cpu().clone() for k, v in policy.state_dict().items()})
