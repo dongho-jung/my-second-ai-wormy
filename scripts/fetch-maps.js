@@ -12,9 +12,23 @@ import { MAPS_DIR } from "../src/env/engine.js";
 const PROJECT = "webliero%2Fwebliero-maps";
 const RAW = "https://gitlab.com/webliero/webliero-maps/-/raw/master";
 
+/**
+ * Maps a pool has that no simulation here should play, by file name.
+ *
+ * cs_4004 was taken out of every run on 2026-09-22. The pool is whatever is on
+ * disk — the trainer, the evaluator and the viewer all read the directory — so
+ * leaving a map out means not having the file: it is not in the repository and
+ * this filter keeps a fetch from bringing it back. To put one back, drop it from
+ * here and run `npm run maps`, which fetches whatever is missing.
+ */
+const LEFT_OUT = new Set(["cs_4004.png"]);
+
 /** Where each pool lives, and which of its files belong to it. */
 const POOLS = {
-  "dsds-cs": { path: "dsds", keep: (name) => name.startsWith("cs_") && name.endsWith(".png") },
+  "dsds-cs": {
+    path: "dsds",
+    keep: (name) => name.startsWith("cs_") && name.endsWith(".png") && !LEFT_OUT.has(name),
+  },
 };
 
 const asked = process.argv.slice(2);
