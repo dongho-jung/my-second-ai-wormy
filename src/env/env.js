@@ -10,7 +10,7 @@ import { KEYS, ROPE, applyNormalizedAction, normalizeAction } from "./actions.js
 import { makeRng, respawnWorm, roomWeapons, watchDamage, weaponList } from "./engine.js";
 import {
   AIM_RANGE_PX,
-  MAP_CELLS,
+  MAP_TERRAIN_SIZE,
   OBSERVATIONS,
   encodeMapTerrain,
   nearestFoe,
@@ -142,6 +142,23 @@ export const DEFAULTS = {
   // A place each worm is paid to reach, as (env, agent) => ({x, y}) or null.
   // Off for a fight; on for the walking task that checks the pipeline learns.
   goals: null,
+  // How far from the worm "random" draws its goal, in pixels: a number, or
+  // [from, to] that grows from the first to the second over `goalRadiusFullAt`
+  // decisions. Null draws from the whole map, which is what the first movement
+  // runs did — and on these maps that is a destination 450-550 px away on
+  // average, fourteen seconds of walking on open ground and a rope everywhere
+  // else, handed to a policy that cannot walk yet. A run that starts within a
+  // hundred pixels learns to walk and jump first and meets the rope when the
+  // goals move out of reach.
+  goalRadiusPx: null,
+  goalRadiusFullAt: 0,
+  // Decisions a goal is kept before it is given up on and another handed out.
+  // 0 keeps it for the whole episode. A worm sent somewhere it cannot get to
+  // otherwise spends the rest of its minute learning nothing.
+  goalPatience: 0,
+  // Weights laid over `weights` after it is resolved, so a run can turn one
+  // knob (`--rope-throw-cost`, `--suicide-cost`) without restating a table.
+  weightOverrides: null,
   // Ignore the fire key and weapon switching. For stages where the lesson is
   // getting somewhere: see where this is read in `step`.
   lockWeapons: false,
@@ -212,6 +229,34 @@ export function groundedGoal(terrain, rng, tries = 64) {
   return null;
 }
 
+/** Closer than this and the worm has arrived before it has been told to go. */
+const GOAL_MIN_PX = 40;
+
+/**
+ * The same, within `radius` pixels of `from`. Drawn from the square around the
+ * point and kept when inside the circle and at least a few strides away, so a
+ * short radius is a short walk and not a spot underfoot. Null when nothing
+ * standable is that close, which a caller falls back from.
+ */
+export function groundedGoalNear(terrain, rng, from, radius, tries = 64) {
+  if (!terrain || !from || !(radius > GOAL_MIN_PX)) return null;
+  const left = Math.max(0, Math.floor(from.x - radius));
+  const right = Math.min(terrain.width - 1, Math.ceil(from.x + radius));
+  const top = Math.max(0, Math.floor(from.y - radius));
+  const bottom = Math.min(terrain.height - 1, Math.ceil(from.y + radius));
+  for (let attempt = 0; attempt < tries; attempt++) {
+    const x = left + Math.floor(rng() * (right - left + 1));
+    const y = top + Math.floor(rng() * (bottom - top + 1));
+    const distance = Math.hypot(x - from.x, y - from.y);
+    if (distance > radius || distance < GOAL_MIN_PX) continue;
+    if (solidAt(terrain, x, y)) continue;
+    for (let below = 1; below <= GOAL_GROUND_PX; below++) {
+      if (solidAt(terrain, x, y + below)) return { x, y };
+    }
+  }
+  return null;
+}
+
 /**
  * What `weights` means. A name, because a worker is configured over JSON and a
  * table of numbers does not want to be typed out on a command line. A table
@@ -232,7 +277,15 @@ function weightsFor(weights) {
 function goalMaker(goals) {
   if (typeof goals === "function") return goals;
   if (goals === "random") {
-    return (env, agent) => groundedGoal(env.views[agent]?.terrain, env.rng);
+    return (env, agent) => {
+      const terrain = env.views[agent]?.terrain;
+      const radius = env.goalRadius();
+      if (radius !== null) {
+        const near = groundedGoalNear(terrain, env.rng, env.views[agent]?.self?.position, radius);
+        if (near) return near;
+      }
+      return groundedGoal(terrain, env.rng);
+    };
   }
   return null;
 }
@@ -265,7 +318,7 @@ export class WormEnv {
     }
     // Shared by every worm in this world: the terrain is the same for all of
     // them, and only where they are differs.
-    this.mapTerrain = new Uint8Array(3 * MAP_CELLS);
+    this.mapTerrain = new Uint8Array(MAP_TERRAIN_SIZE);
     this.mapAt = -1;
     this.frameskip = settings.frameskip;
     this.episodeTicks = settings.episodeTicks;
@@ -286,9 +339,12 @@ export class WormEnv {
     this.weaponPool = !barred.size
       ? chosen
       : (chosen ?? this.engine.settings.O.map((_, id) => id)).filter((id) => !barred.has(id));
-    this.weights = weightsFor(settings.weights);
+    this.weights = { ...weightsFor(settings.weights), ...(settings.weightOverrides ?? {}) };
     this.observationKinds = settings.observations;
     this.makeGoal = goalMaker(settings.goals);
+    this.goalRadiusPx = settings.goalRadiusPx ?? null;
+    this.goalRadiusFullAt = Math.max(0, settings.goalRadiusFullAt ?? 0);
+    this.goalPatience = Math.max(0, Math.trunc(settings.goalPatience ?? 0));
     this.lockWeapons = Boolean(settings.lockWeapons);
     this.ropeCooldown = Math.max(0, Math.trunc(settings.ropeCooldown ?? 0));
     this.reward = settings.reward ?? combatReward;
@@ -534,6 +590,8 @@ export class WormEnv {
     });
     this.alive = this.worms.map((worm) => Boolean(worm.u));
     this.firing = this.worms.map(() => false);
+    // Whether each worm threw the rope this decision, for the reward.
+    this.ropeThrown = this.worms.map(() => 0);
     // The decision each worm's next rope message will be listened to on.
     this.ropeReadyAt = this.worms.map(() => 0);
     this.foeRange = this.worms.map(() => null);
@@ -547,6 +605,21 @@ export class WormEnv {
     this.assignGoals();
     this.encodeObservations();
     return { observations: this.observations, info: this.info() };
+  }
+
+  /**
+   * How far a goal may be drawn from the worm right now, or null for anywhere.
+   * A range grows with the decisions this world has made, the way the ladder
+   * fades: a resumed run carries on from where the radius had got to.
+   */
+  goalRadius() {
+    const setting = this.goalRadiusPx;
+    if (setting === null || setting === undefined) return null;
+    if (!Array.isArray(setting)) return setting;
+    const [from, to] = setting;
+    if (!(this.goalRadiusFullAt > 0)) return to;
+    const gone = Math.min(1, this.decisions / this.goalRadiusFullAt);
+    return from + (to - from) * gone;
   }
 
   /**
@@ -608,7 +681,9 @@ export class WormEnv {
       } else if (normalized.rope === ROPE.none && jumpPressed && this.views[agent]?.self?.rope) {
         normalized = { ...normalized, rope: ROPE.release };
       }
-      if (normalized.rope === ROPE.throw) {
+      const thrown = normalized.rope === ROPE.throw ? 1 : 0;
+      this.ropeThrown[agent] = thrown;
+      if (thrown) {
         this.totals[agent].ropeThrows = (this.totals[agent].ropeThrows ?? 0) + 1;
       }
       // Whether it pulled the trigger this decision AND had something to fire,
@@ -689,10 +764,20 @@ export class WormEnv {
         // the episode.
         this.totals[agent].goalsReached = (this.totals[agent].goalsReached ?? 0) + 1;
         this.assignGoals(agent);
+      } else if (
+        this.goalPatience > 0 &&
+        this.progress[agent].goal &&
+        moved.goalSteps >= this.goalPatience
+      ) {
+        // Kept this long and not reached: give it up and hand out another, so
+        // a destination the worm cannot get to does not eat the whole episode.
+        // Counted, because many of these is the finding, not the reaching.
+        this.totals[agent].goalsMissed = (this.totals[agent].goalsMissed ?? 0) + 1;
+        this.assignGoals(agent);
       }
       const outcome = this.reward(
         events,
-        { ...moved, ...this.#aimAt(agent) },
+        { ...moved, ...this.#aimAt(agent), ropeThrows: this.ropeThrown[agent] },
         this.weights,
         this.shaping,
       );
@@ -792,6 +877,7 @@ export class WormEnv {
       vectorSize: this.spec.vectorSize,
       inputLatencyTicks: this.latency,
       shaping: this.shaping,
+      goalRadiusPx: this.goalRadius(),
       totals: this.totals,
     };
   }

@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { snapshotV20 } from "../src/adapter-v20.js";
 import { fixture, LEVEL } from "./fixture.js";
-import { groundedGoal } from "../src/env/env.js";
+import { groundedGoal, groundedGoalNear } from "../src/env/env.js";
 import { VECTOR_OFFSETS, encodeVector } from "../src/env/observation.js";
-import { solidAt } from "../src/env/terrain.js";
+import { solidAt, terrainOf } from "../src/env/terrain.js";
 import { viewFromSnapshot } from "../src/env/view.js";
 
 // Paying a worm for closing on a point it cannot see is paying at random, so
@@ -46,6 +46,36 @@ test("a goal is background with ground under it, never inside the rock", () => {
     assert.notEqual(goal.x, LEVEL.wallX, "goal sits in the wall");
   }
   assert.ok(found > 0, "no goal was found on a level that has a floor");
+});
+
+test("a near goal is within the radius, a few strides off, and standable", () => {
+  // A flat 400x200 field with a floor at y=150: index 0 background, 1 dirt.
+  const width = 400;
+  const height = 200;
+  const data = new Uint8Array(width * height);
+  for (let y = 150; y < height; y++) for (let x = 0; x < width; x++) data[y * width + x] = 1;
+  const materialFlags = new Uint8Array(256).fill(8);
+  materialFlags[1] = 3;
+  const terrain = terrainOf({ data, width, height, materialFlags });
+  const rng = rngOver(Array.from({ length: 997 }, (_, i) => ((i * 7919) % 997) / 997));
+  const from = { x: 200, y: 140 };
+
+  let found = 0;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const goal = groundedGoalNear(terrain, rng, from, 100);
+    if (!goal) continue;
+    found++;
+    const distance = Math.hypot(goal.x - from.x, goal.y - from.y);
+    assert.ok(distance <= 100, `goal ${distance.toFixed(0)}px away is past the radius`);
+    assert.ok(distance >= 40, `goal ${distance.toFixed(0)}px away is underfoot`);
+    assert.equal(solidAt(terrain, goal.x, goal.y), false, "goal stands in the floor");
+    assert.ok(goal.y + 48 >= 150, "goal floats with nothing under it");
+  }
+  assert.ok(found >= 30, `a hundred-pixel radius on open ground should nearly always find a spot, found ${found}`);
+  // A radius shorter than the closest allowed goal has nothing to offer.
+  assert.equal(groundedGoalNear(terrain, rng, from, 30), null);
+  // And nowhere standable within reach is null rather than a guess: the sky.
+  assert.equal(groundedGoalNear(terrain, rng, { x: 200, y: 10 }, 60), null);
 });
 
 test("no goal leaves the four values at zero", () => {

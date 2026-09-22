@@ -43,6 +43,7 @@ export class Progress {
   setGoal(goal) {
     this.goal = goal ?? null;
     this.goalDistance = null;
+    this.goalSteps = 0;
   }
 
   /** A new episode: forget the trail, the visits and the goal. */
@@ -55,6 +56,8 @@ export class Progress {
     this.stuckSteps = 0;
     this.goal = goal;
     this.goalDistance = null;
+    // Decisions spent on the current goal, for a caller that gives up on one.
+    this.goalSteps = 0;
     this.cell = -1;
     return this;
   }
@@ -114,6 +117,7 @@ export class Progress {
     let goalDelta = 0;
     let reachedGoal = false;
     if (this.goal) {
+      this.goalSteps++;
       const distance = Math.hypot(position.x - this.goal.x, position.y - this.goal.y);
       goalDelta = this.goalDistance === null ? 0 : this.goalDistance - distance;
       this.goalDistance = distance;
@@ -155,6 +159,7 @@ export class Progress {
       goalDelta,
       reachedGoal,
       goalDistance: this.goalDistance,
+      goalSteps: this.goalSteps ?? 0,
       cellsVisited: this.visited.size,
     };
   }

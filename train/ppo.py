@@ -186,6 +186,13 @@ def parse_args(argv=None):
                             "still comes out +2, and 44%% of the first cluster run's deaths were "
                             "its own. 0 leaves the arithmetic as it is; the evaluator says "
                             "whether a value here makes a better player or a shyer one")
+    learn.add_argument("--rope-throw-cost", type=float, default=0.0,
+                       help="charged per rope throw the engine hears. The rope in this mod is a "
+                            "grappling hook that reels the worm in by itself, so re-throwing "
+                            "along the aim several times a second is a way to fly, and the first "
+                            "movement runs settled on exactly that: 300 throws a match and no rope "
+                            "held long enough to swing. A small charge makes holding on the "
+                            "cheaper way to cover the same ground. 0 leaves throws free")
     learn.add_argument("--value-coef", type=float, default=0.5)
     learn.add_argument("--max-grad-norm", type=float, default=0.5)
     learn.add_argument("--seed", type=int, default=1)
@@ -244,6 +251,20 @@ def parse_args(argv=None):
                             "does not change how much of an episode a worm spends attached — "
                             "about half either way — but it changes how long one throw lasts: "
                             "1.5 decisions at 0, 10.5 at 10. See ropeCooldown in src/env/env.js")
+    where.add_argument("--goal-radius", default=None,
+                       help="how far from the worm a destination is drawn, in pixels: one number, "
+                            "or from-to to grow it over --goal-grow of the run. The movement task's "
+                            "default is 96-1600: a walk or a jump away first, the rope once the goals "
+                            "move out of reach, the whole map by the end. Anywhere at all was what "
+                            "the first movement runs did — 450-550 px on average, handed to a policy "
+                            "that could not walk yet")
+    where.add_argument("--goal-grow", type=float, default=0.6,
+                       help="what share of --total-steps the radius takes to grow from the first "
+                            "number to the second")
+    where.add_argument("--goal-patience", type=int, default=None,
+                       help="decisions a destination is kept before another is handed out, so one "
+                            "the worm cannot reach does not eat the whole minute. The movement "
+                            "task's default is 450, thirty seconds; 0 keeps a goal all episode")
     where.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     where.add_argument("--label", default=None, help="a name for this run on the monitor page")
     where.add_argument("--resume", default=None,
@@ -271,6 +292,7 @@ SHOWN = (
     "selfDamage",
     "stuckSteps",
     "goalsReached",
+    "goalsMissed",
     "ropeThrows",
     "ropeHeld",
 )
@@ -495,7 +517,6 @@ def main(argv=None):
         # Filled in below, once the worker count is known.
         shapingFullAt=0,
         shapingFloor=args.shaping_floor,
-        **({"weights": {"suicide": args.suicide_cost}} if args.suicide_cost else {}),
         banStart=[name.strip() for name in args.ban_start.split(",") if name.strip()],
         # Read off the room this project watches, rather than assumed: it drops
         # weapon crates only, eight seconds apart, and makes a swapped-to weapon
@@ -525,6 +546,20 @@ def main(argv=None):
         config["goals"] = "random"
         config["weights"] = "movement"
         config["lockWeapons"] = True
+        radius = [float(part) for part in str(args.goal_radius or "96-1600").split("-")]
+        config["goalRadiusPx"] = radius if len(radius) > 1 else radius[0]
+        config["goalPatience"] = 450 if args.goal_patience is None else args.goal_patience
+    elif args.goal_radius is not None or args.goal_patience is not None:
+        raise SystemExit("--goal-radius and --goal-patience only mean something with --task movement")
+    # Single knobs laid over the named table, so a run can charge for one thing
+    # without restating the rest.
+    overrides = {}
+    if args.suicide_cost:
+        overrides["suicide"] = args.suicide_cost
+    if args.rope_throw_cost:
+        overrides["ropeThrow"] = args.rope_throw_cost
+    if overrides:
+        config["weightOverrides"] = overrides
 
     # How many worms at the back of each match are older copies. Worked out
     # before the workers start, because they have to be told: otherwise every
@@ -533,16 +568,28 @@ def main(argv=None):
     frozen_per_match = min(args.agents - 1, int(round(args.agents * args.opponents)))
     config["opponents"] = frozen_per_match
 
+    # `--total-steps` counts every worm's decision; the environment counts only
+    # its own. One worm's share of the run is the whole thing divided by how
+    # many are playing it. The ladder's fade and the goal radius are both
+    # measured in those decisions.
+    worms = max(1, args.workers * args.envs * args.agents)
+    if carried is not None:
+        # Carrying on: the ladder had faded and the goals had moved out this far
+        # already. Without this a resumed run started both over from the top.
+        config["decisionsDone"] = int(carried.get("step", 0)) // worms
     if args.shaping_decay > 0:
-        # `--total-steps` counts every worm's decision; the environment counts
-        # only its own. One worm's share of the run is the whole thing divided
-        # by how many are playing it.
-        worms = max(1, args.workers * args.envs * args.agents)
         config["shapingFullAt"] = int(args.total_steps * args.shaping_decay / worms)
-        if carried is not None:
-            # Carrying on: the ladder had faded this far already. Without this
-            # a resumed run started the fade over from the top.
-            config["decisionsDone"] = int(carried.get("step", 0)) // worms
+    if isinstance(config.get("goalRadiusPx"), list):
+        config["goalRadiusFullAt"] = int(args.total_steps * args.goal_grow / worms)
+
+    def goal_radius_now():
+        """The radius the worlds are drawing goals at, by the same arithmetic."""
+        setting = config.get("goalRadiusPx")
+        if not isinstance(setting, list):
+            return setting
+        full_at = config.get("goalRadiusFullAt", 0)
+        gone = 1.0 if full_at <= 0 else min(1.0, (total_steps // worms) / full_at)
+        return setting[0] + (setting[1] - setting[0]) * gone
 
     pool = WorkerPool(args.workers, config)
     layout = pool.layout
@@ -663,6 +710,11 @@ def main(argv=None):
                 + (f" + patch {layout.patch_shape[0]}x{patch_shape[0]}x{patch_shape[1]}" if use_patch else "")
                 + (f" + map {layout.map_channels}x{map_side}x{map_side}" if use_map else "")
             ),
+            "task": args.task,
+            "goalRadius": config.get("goalRadiusPx"),
+            "goalPatience": config.get("goalPatience"),
+            "ropeThrowCost": args.rope_throw_cost,
+            "ropeCooldown": args.rope_cooldown,
             "rolloutSteps": args.steps,
             "batch": args.steps * slots,
             "rolloutSteps": args.steps,
@@ -1243,6 +1295,11 @@ def main(argv=None):
                 explainedVariance=explained,
                 meanReward=float(rews.mean()) * args.steps,
             )
+            for name, value in zip(layout.head_names, (running_heads / passes).tolist()):
+                line[f"entropy{name[0].upper()}{name[1:]}"] = value
+            radius_now = goal_radius_now()
+            if radius_now is not None:
+                line["goalRadiusPx"] = float(radius_now)
             if episodes is not None:
                 for index, field in enumerate(layout.stat_fields):
                     if field == "seed":
@@ -1290,7 +1347,7 @@ def main(argv=None):
                 f"stuck {latest.get('stuckSteps', 0):5.1f} | "
                 # Destinations reached a match. Zero in a fighting run, which
                 # sets no goals, and the whole point of a movement one.
-                f"goals {latest.get('goalsReached', 0):4.1f} | "
+                f"goals {latest.get('goalsReached', 0):4.1f}/{latest.get('goalsMissed', 0):3.1f} | "
                 # Throws asked for, and decisions actually spent attached. The
                 # gap between them is the whole question about the rope.
                 f"rope {latest.get('ropeThrows', 0):5.0f}/{latest.get('ropeHeld', 0):5.0f} | "

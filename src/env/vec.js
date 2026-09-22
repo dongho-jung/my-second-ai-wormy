@@ -49,11 +49,16 @@ export const EPISODE_STATS = [
   "fromOnTarget",
   "fromAimedShot",
   "fromGoal",
+  "fromRopeThrow",
   // How many destinations it actually reached this episode. `fromGoal` mixes
   // arriving with closing distance, so on its own it cannot say whether a worm
   // is getting there or just drifting the right way. This is the number a
   // movement run is judged on.
   "goalsReached",
+  // And how many it was given up on: kept longer than the world's patience and
+  // swapped for another. Many of these against few reached is a worm that
+  // cannot get where it is sent, whatever the reward curve says.
+  "goalsMissed",
   // The rope, which is the one tool a worm has for ground it cannot walk to.
   // Throws are what it asked for; held is what it got — decisions spent with a
   // rope actually attached. A policy near maximum entropy throws on a third of
@@ -112,7 +117,9 @@ const STAT_SOURCE = {
   fromOnTarget: "fromOnTarget",
   fromAimedShot: "fromAimedShot",
   fromGoal: "fromGoal",
+  fromRopeThrow: "fromRopeThrow",
   goalsReached: "goalsReached",
+  goalsMissed: "goalsMissed",
   ropeThrows: "ropeThrows",
   ropeHeld: "ropeHeld",
 };
@@ -401,6 +408,10 @@ export class VecWormEnv {
       patchCells: this.wantsPatch ? this.spec.patch.cells : 0,
       patchShape: this.wantsPatch ? this.spec.patch.shape : null,
       patchScale: this.spec.patch.scalePx,
+      // What a cell's byte expands to, so a trainer built for another picture
+      // refuses rather than reading four kinds of ground as three.
+      patchChannels: PATCH.channels.length,
+      mapChannels: MAP.channels.length,
       // The second cut, when one was asked for; zero cells otherwise.
       patch2Cells: this.wantsPatch2 ? this.spec.patch2.cells : 0,
       patch2Shape: this.wantsPatch2 ? this.spec.patch2.shape : null,
@@ -408,10 +419,6 @@ export class VecWormEnv {
       mapCells: this.wantsMap ? MAP_SIZE : 0,
       mapShape: this.wantsMap ? [4, 32, 32] : null,
       statFields: EPISODE_STATS,
-      // What a cell's byte expands to, so a trainer built for another picture
-      // refuses rather than reading four kinds of ground as three.
-      patchChannels: PATCH.channels.length,
-      mapChannels: MAP.channels.length,
       // Spelled out on the wire so the other side cannot drift from it.
       doneCodes: DONE,
       opponents: this.opponents,

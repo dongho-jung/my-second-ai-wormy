@@ -62,6 +62,15 @@ export const DEFAULT_WEIGHTS = {
   // Per pixel of progress toward a goal, when one is set, and for arriving.
   goalProgress: 0.02,
   reachedGoal: 2,
+  // Per rope throw the engine actually hears. Zero: a throw is free, which is
+  // what every run so far has had. The rope in this mod is a grappling hook —
+  // once it holds, the worm is reeled toward the anchor on its own — so a
+  // stream of re-throws along the aim is a way to fly, and a policy that
+  // found it never learns to hold a rope and let go with the momentum. A small
+  // charge per throw makes holding on the cheaper way to cover the same
+  // ground; the size is a knob (`--rope-throw-cost`) because the a/b that
+  // settles it has not run yet.
+  ropeThrow: 0,
   // Pointing at somebody it could actually hit, per decision, scaled by how
   // centred the aim is. Aiming earns nothing by itself in this game — the
   // payoff arrives later as damage, if the shot lands — so a policy that
@@ -202,6 +211,7 @@ export function combatReward(events, progress, weights = DEFAULT_WEIGHTS, shapin
     fromGoal:
       progress.goalDelta * weights.goalProgress +
       (progress.reachedGoal ? weights.reachedGoal : 0),
+    fromRopeThrow: -((progress.ropeThrows ?? 0) * (weights.ropeThrow ?? 0)) || 0,
   };
   if (shaping !== 1) {
     for (const name of LADDER) parts[name] *= shaping;

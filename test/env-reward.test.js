@@ -165,6 +165,28 @@ test("a goal pays for closing on it and once for arriving", () => {
   assert.equal(+away.parts.fromGoal.toFixed(10), -0.24, "walking away costs the same");
 });
 
+test("a rope throw costs what the weights say, and nothing by default", () => {
+  const thrown = { ...still, ropeThrows: 1 };
+  assert.equal(combatReward(emptyEvents(1)[0], thrown).parts.fromRopeThrow, 0, "free by default");
+  const charged = combatReward(emptyEvents(1)[0], thrown, { ...DEFAULT_WEIGHTS, ropeThrow: 0.01 });
+  assert.equal(+charged.parts.fromRopeThrow.toFixed(10), -0.01);
+  assert.equal(+charged.reward.toFixed(10), -0.01, "and it is part of the reward");
+  const held = combatReward(emptyEvents(1)[0], still, { ...DEFAULT_WEIGHTS, ropeThrow: 0.01 });
+  assert.equal(held.parts.fromRopeThrow, 0, "holding on is free");
+});
+
+test("a goal's age is counted, so a caller can give up on it", () => {
+  const progress = new Progress({ window: 5 });
+  progress.reset({ goal: { x: 900, y: 100 } });
+  let facts;
+  for (let step = 0; step < 3; step++) facts = progress.update({ x: 100, y: 100 });
+  assert.equal(facts.goalSteps, 3);
+  progress.setGoal({ x: 950, y: 100 });
+  assert.equal(progress.update({ x: 100, y: 100 }).goalSteps, 1, "a new goal starts over");
+  progress.setGoal(null);
+  assert.equal(progress.update({ x: 100, y: 100 }).goalSteps, 0, "no goal, no age");
+});
+
 test("weights are the one place the balance lives", () => {
   const brutal = { ...DEFAULT_WEIGHTS, kill: 10, death: 0 };
   const { reward } = combatReward(

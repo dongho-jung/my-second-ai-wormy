@@ -376,6 +376,45 @@ test("the rope flies through a wall the worm cannot", { skip }, async () => {
   assert.ok(results.ghost.ropeY < 60, "through the ghost ceiling and on");
 });
 
+test("goals move out as the world's decisions add up", { skip }, async () => {
+  const engine = await loadEngine();
+  const env = new WormEnv(engine, {
+    agents: 1,
+    observations: ["vector"],
+    goals: "random",
+    goalRadiusPx: [100, 500],
+    goalRadiusFullAt: 100,
+    goalPatience: 10,
+    seed: 3,
+  });
+  env.reset();
+  assert.equal(env.goalRadius(), 100);
+  const worm = env.views[0].self.position;
+  const goal = env.progress[0].goal;
+  assert.ok(goal, "a goal was handed out");
+  assert.ok(Math.hypot(goal.x - worm.x, goal.y - worm.y) <= 100, "and it is within the radius");
+  for (let decision = 0; decision < 50; decision++) env.step([0]);
+  assert.equal(env.goalRadius(), 300, "half way there half way through");
+  for (let decision = 0; decision < 60; decision++) env.step([0]);
+  assert.equal(env.goalRadius(), 500, "and it stops at the far end");
+  assert.equal(env.info().goalRadiusPx, 500);
+  // Standing still for 110 decisions at a patience of 10 gave up on ten goals
+  // or so, each swapped for another rather than kept.
+  assert.ok((env.totals[0].goalsMissed ?? 0) >= 9, `gave up on ${env.totals[0].goalsMissed} goals`);
+  assert.ok(env.progress[0].goal, "and there is still one to go to");
+  // A world carried on from a checkpoint starts where the radius had got to.
+  const carried = new WormEnv(engine, {
+    agents: 1,
+    observations: ["vector"],
+    goals: "random",
+    goalRadiusPx: [100, 500],
+    goalRadiusFullAt: 100,
+    decisionsDone: 75,
+    seed: 3,
+  });
+  assert.equal(carried.goalRadius(), 400);
+});
+
 test("a dead worm is dropped from the world and comes back whole", { skip }, async () => {
   const { world, worms } = await arena({ seed: 77 });
   const [worm] = worms;
