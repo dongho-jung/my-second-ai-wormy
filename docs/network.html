@@ -104,11 +104,11 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
 </section>
 <section id="inputs">
   <span class="kicker">02 / OBSERVATION</span><h2>숫자 하나의 묶음, 두 가지 시야</h2>
-  <p class="muted">수치는 코드 기본값인 상대 슬롯 2개, 패치 셀 2픽셀, 패치와 전체 지도 입력을 모두 켠 구성 기준입니다. 6인전 실행 설정에서는 상대 슬롯이 5개라 벡터가 234로 늘어납니다.</p>
+  <p class="muted">수치는 코드 기본값인 상대 슬롯 2개, 패치 셀 2픽셀, 패치와 전체 지도 입력을 모두 켠 구성 기준입니다. 6인전 실행 설정에서는 상대 슬롯이 5개라 벡터가 238로 늘어납니다.</p>
   <div class="grid">
-    <article class="card"><h3>상태 벡터</h3><span class="shape">168 <small style="font-size:.55em;color:var(--muted)">(6인전 234)</small></span><p>체력, 탄약, 조준과 조준 각속도, 16방향 거리 센서, 상대와 투사체 정보, 상대마다 든 무기로 맞히려면 조준을 얼마나 돌려야 하는지, 그리고 직전 결정입니다. 학습 중 누적한 평균·분산으로 정규화한 뒤 완전연결층에 넣습니다. 끝의 무기 ID 7개 — 내 다섯 슬롯과 상대 둘이 든 것 — 만은 측정값이 아니라 이름이므로 정규화에서 빼고 임베딩으로 따로 처리합니다. 6인전에서는 상대 5명 몫이 더해져 무기 ID도 10개입니다.</p></article>
-    <article class="card"><h3>주변 지형 패치</h3><span class="shape">6 × 121 × 213</span><p>웜 주변 가로 426 × 세로 242픽셀을 2 × 2픽셀 셀로 읽습니다. 게임의 426 × 240 시야에 세로 여유 2픽셀을 둡니다. 셀 안의 가장 단단한 지형을 바위·흙·빈 공간 중 하나로, 투사체·상대·자기 자신을 각각 별도 채널로 표현합니다. 셀 크기는 <code>--patch-scale</code>로 고르며 4를 주면 같은 시야가 6 × 61 × 107이 됩니다. 체크포인트에 실리므로 뷰어도 학습한 배율로 재생합니다.</p></article>
-    <article class="card"><h3>전체 지도</h3><span class="shape">4 × 32 × 32</span><p>맵 전체를 32 × 32 격자로 압축합니다. 빈 공간·흙·바위의 비율과 웜의 위치를 담습니다. 기본 학습은 방이 실제로 도는 커뮤니티 맵(<code>cs_</code> 풀)에서만 하고, 게임이 만들어 주는 504 × 350 dirt 맵은 켜야 섞입니다.</p></article>
+    <article class="card"><h3>상태 벡터</h3><span class="shape">172 <small style="font-size:.55em;color:var(--muted)">(6인전 238)</small></span><p>체력, 탄약, 조준과 조준 각속도, 16방향 거리 센서, 상대와 투사체 정보, 상대마다 든 무기로 맞히려면 조준을 얼마나 돌려야 하는지, 직전 결정, 그리고 목적지의 방향과 거리입니다. 학습 중 누적한 평균·분산으로 정규화한 뒤 완전연결층에 넣습니다. 끝의 무기 ID 7개 — 내 다섯 슬롯과 상대 둘이 든 것 — 만은 측정값이 아니라 이름이므로 정규화에서 빼고 임베딩으로 따로 처리합니다. 6인전에서는 상대 5명 몫이 더해져 무기 ID도 10개입니다.</p></article>
+    <article class="card"><h3>주변 지형 패치</h3><span class="shape">8 × 121 × 213</span><p>웜 주변 가로 426 × 세로 242픽셀을 2 × 2픽셀 셀로 읽습니다. 게임의 426 × 240 시야에 세로 여유 2픽셀을 둡니다. 셀 안의 가장 단단한 지형을 바위·흙·빈 공간·ghost 중 하나로, 투사체·상대·자기 자신·목적지를 각각 별도 채널로 표현합니다. ghost 는 재질 플래그가 없는 색으로, 웜은 막고 로프는 통과시킵니다. 이 방이 도는 커뮤니티 맵 다섯 장은 벽의 19~62%가 그 색이라, 바위로 그려 두면 정책은 걸 수 없는 벽을 걸 수 있다고 봅니다. 셀 크기는 <code>--patch-scale</code>로 고르며 4를 주면 같은 시야가 8 × 61 × 107이 됩니다. 체크포인트에 실리므로 뷰어도 학습한 배율로 재생합니다.</p></article>
+    <article class="card"><h3>전체 지도</h3><span class="shape">5 × 32 × 32</span><p>맵 전체를 32 × 32 격자로 압축합니다. 빈 공간·흙·바위·ghost 의 비율과 웜과 목적지의 위치를 담습니다. 기본 학습은 방이 실제로 도는 커뮤니티 맵(<code>cs_</code> 풀)에서만 하고, 게임이 만들어 주는 504 × 350 dirt 맵은 켜야 섞입니다.</p></article>
   </div>
   <p class="note"><strong>피와 탄피는 투사체가 아닙니다.</strong> 엔진의 입자 풀에는 피, 탄피, 터진 웜의 조각처럼 무기가 던지지 않은 것이 섞여 있습니다. 한 에피소드를 다 돌려도 그중 해를 끼칠 수 있는 것은 하나도 없었는데, 벡터의 투사체 3칸 중 83%를 그것들이 차지해 실제로 날아오는 총알은 33%만 보였습니다. 이제 무기 ID가 없는 입자는 벡터와 패치 모두에서 뺍니다. 무기가 만든 파편과 연기는 남깁니다 — 근처에서 무언가 터졌다는 신호이기 때문입니다. 실제 게임을 읽는 경로에도 같은 규칙을 적용해 두 세계가 같아 보이도록 합니다.</p>
   <p class="note"><strong>지도만 일부를 재사용합니다.</strong> 전체 지도의 지형 채널은 기본 60번의 의사결정마다 갱신하고, 웜 위치는 매 관측마다 반영합니다. 따라서 방금 판 굴이 잠시 늦게 나타나는 것은 <strong>32 × 32 지도뿐</strong>입니다. 주변 패치는 매 결정마다 새로 만들므로, 굴착이 실제로 중요한 발밑 지형은 항상 최신입니다. 셀 하나가 몇 픽셀인지는 맵 크기에 따라 달라집니다. 504 × 350짜리에서는 약 16 × 11픽셀이라 폭발 하나가 여러 셀을 바꿀 수 있고, 2,000픽셀대의 큰 맵에서는 약 66 × 29픽셀이라 4초치 굴착이 셀의 일부에 그칩니다. 작은 맵일수록 안심할 일이 아닙니다.</p>
@@ -118,9 +118,9 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
   <p class="muted">세 갈래 입력을 각각 처리한 뒤 합치고, 공통 특징에서 행동과 가치를 읽습니다. 아래 크기는 배치 차원을 생략했습니다.</p>
   <figure class="flow">
     <div class="flow-grid">
-      <div class="lane"><div class="node input"><strong>상태 벡터</strong><code>168</code><small>6인전 234</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>누적 통계 정규화</strong><small>평균·분산 적용, 범위 제한</small><small>무기 ID 7개는 제외</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>168 → 128</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>무기 ID 임베딩 이어붙이기</strong><small>내 5슬롯과 상대 2명의 무기</small><code>7 × 8 = 56</code><small>6인전 10 × 8 = 80</small></div><span class="arrow">출력 128 + 56</span></div>
-      <div class="lane"><div class="node input"><strong>주변 패치</strong><code>6 × 121 × 213</code><small>25,773바이트 → 지형 3채널 + 투사체·상대·자기 3채널</small><small>셀 4픽셀이면 6 × 61 × 107</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 6 → 32 + ReLU</strong><small>커널 8 × 8 · 보폭 4 · 패딩 2</small><code>32 × 30 × 53</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 32 → 64 + ReLU</strong><small>커널 4 × 4 · 보폭 2 · 패딩 1</small><code>64 × 15 × 26</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 64 → 32 + ReLU</strong><small>커널 3 × 3 · 보폭 2 · 패딩 1</small><code>32 × 8 × 13</code></div><span class="arrow">펼치기 → 3,328 <small>(셀 4픽셀이면 896)</small></span></div>
-      <div class="lane"><div class="node input"><strong>전체 지도</strong><code>4 × 32 × 32</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 4 → 16 + ReLU</strong><small>커널 4 × 4 · 보폭 2</small><code>16 × 15 × 15</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 16 → 32 + ReLU</strong><small>커널 3 × 3 · 보폭 2</small><code>32 × 7 × 7</code></div><span class="arrow">펼치기 → 1,568</span></div>
+      <div class="lane"><div class="node input"><strong>상태 벡터</strong><code>172</code><small>6인전 238</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>누적 통계 정규화</strong><small>평균·분산 적용, 범위 제한</small><small>무기 ID 7개는 제외</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>172 → 128</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>무기 ID 임베딩 이어붙이기</strong><small>내 5슬롯과 상대 2명의 무기</small><code>7 × 8 = 56</code><small>6인전 10 × 8 = 80</small></div><span class="arrow">출력 128 + 56</span></div>
+      <div class="lane"><div class="node input"><strong>주변 패치</strong><code>8 × 121 × 213</code><small>25,773바이트 → 지형 4채널 + 투사체·상대·자기·목표 4채널</small><small>셀 4픽셀이면 8 × 61 × 107</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 8 → 32 + ReLU</strong><small>커널 8 × 8 · 보폭 4 · 패딩 2</small><code>32 × 30 × 53</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 32 → 64 + ReLU</strong><small>커널 4 × 4 · 보폭 2 · 패딩 1</small><code>64 × 15 × 26</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 64 → 32 + ReLU</strong><small>커널 3 × 3 · 보폭 2 · 패딩 1</small><code>32 × 8 × 13</code></div><span class="arrow">펼치기 → 3,328 <small>(셀 4픽셀이면 896)</small></span></div>
+      <div class="lane"><div class="node input"><strong>전체 지도</strong><code>5 × 32 × 32</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 5 → 16 + ReLU</strong><small>커널 4 × 4 · 보폭 2</small><code>16 × 15 × 15</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>합성곱 16 → 32 + ReLU</strong><small>커널 3 × 3 · 보폭 2</small><code>32 × 7 × 7</code></div><span class="arrow">펼치기 → 1,568</span></div>
     </div>
     <div class="join"><strong>특징 결합</strong> · 128 + 56 + 3,328 + 1,568 = <strong>5,080</strong> <span class="muted">(6인전 5,104 · 셀 4픽셀이면 2,672)</span></div>
     <div class="trunk"><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>5,080 → 256</code><small>전체 학습 파라미터의 약 70%</small></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>완전연결층 + ReLU</strong><code>256 → 256</code></div><span class="arrow" aria-hidden="true">↓</span><div class="node"><strong>순환 기억 · GRU</strong><code>256 → 256</code><small>직전 결정에서 넘겨받은 은닉 상태를 함께 읽고 갱신합니다. 새 에피소드가 시작될 때와 그 웜이 리스폰할 때 0으로 지웁니다</small></div></div>
@@ -131,7 +131,7 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
   </figure>
 </section>
 <section id="vector">
-  <span class="kicker">04 / VECTOR</span><h2>168개 숫자에는 무엇이 들어갈까</h2>
+  <span class="kicker">04 / VECTOR</span><h2>172개 숫자에는 무엇이 들어갈까</h2>
   <p>학습으로 생성한 임베딩이 아니라, 코드가 직접 측정하는 관측값입니다. 아래 표는 인접한 일부 필드를 묶어 표시했습니다.</p>
   <details><summary>전체 필드와 오프셋 펼치기</summary>
     <p class="scroll-hint">좁은 화면에서는 표 안에서 좌우로 스크롤할 수 있습니다.</p>
@@ -155,26 +155,27 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
       <tr><td class="n">137</td><td class="n">12</td><td><code>pickups</code></td><td>가까운 보급품 3개 × 4개: 상대 위치·체력 또는 무기 여부</td></tr>
       <tr><td class="n">149</td><td class="n">11</td><td><code>lastAction</code></td><td>직전 결정: 눌린 키 9개(좌·우·조준 상·하·발사·점프·로프 감기·풀기·굴착)와 로프 메시지(던지기 +1, 해제 −1), 무기 메시지(다음 +1, 이전 −1). 점프·굴착은 누르는 순간에만 작동하고, 지연 큐에 실려 가는 행동은 세계에 아직 보이지 않으므로 정책이 자기 선택을 기억해야 합니다. 매치 시작 시 0</td></tr>
       <tr><td class="n">160</td><td class="n">1</td><td><code>latency</code></td><td>이번 에피소드에 이 웜의 키가 얼마나 늦게 닿는지. 30틱으로 나눈 값이라 런이 달라도 같은 뜻입니다</td></tr>
-      <tr><td class="n">161</td><td class="n">7</td><td><code>weaponIds</code></td><td>내 5슬롯과 상대 2명이 든 무기의 ID. 빈 슬롯은 −1. 측정값이 아니라 이름이므로 정규화 대상에서 빼고 임베딩으로 넘깁니다</td></tr>
-      </tbody><tfoot><tr><td class="n">합계</td><td class="n">168</td><td colspan="2">상대 슬롯을 1개로 설정하면 146, 4개면 212, 6인전의 5개면 234. 슬롯 수가 바뀌면 <code>foes</code> 뒤의 오프셋이 함께 밀립니다</td></tr></tfoot>
+      <tr><td class="n">161</td><td class="n">4</td><td><code>goal</code></td><td>가라고 받은 목적지: 있음 여부, 단위 방향 x·y, 800픽셀에서 포화하는 거리. 이동 단계에서만 채워지고 전투에서는 0 이라 벡터 크기는 두 단계가 같습니다</td></tr>
+      <tr><td class="n">165</td><td class="n">7</td><td><code>weaponIds</code></td><td>내 5슬롯과 상대 2명이 든 무기의 ID. 빈 슬롯은 −1. 측정값이 아니라 이름이므로 정규화 대상에서 빼고 임베딩으로 넘깁니다</td></tr>
+      </tbody><tfoot><tr><td class="n">합계</td><td class="n">172</td><td colspan="2">상대 슬롯을 1개로 설정하면 150, 4개면 216, 6인전의 5개면 238. 슬롯 수가 바뀌면 <code>foes</code> 뒤의 오프셋이 함께 밀립니다</td></tr></tfoot>
     </table></div>
   </details>
   <p class="note">벡터 크기는 실제 참가자 수가 아니라 <strong>설정한 상대 슬롯 수</strong>에 따라 결정됩니다. 6인전으로 학습한 정책을 뷰어에서 3인전에 넣으면 상대 슬롯 5개 중 둘만 채워지고 나머지는 0으로 남습니다. 체크포인트가 학습 당시의 슬롯 수를 기억하므로 벡터 폭은 유지됩니다.</p>
 </section>
 <section id="parameters">
-  <span class="kicker">05 / PARAMETERS</span><h2>약 186만~187만 개의 파라미터, 대부분은 결합 직후와 기억에</h2>
-  <div class="two"><div><p>코드 기본값에서는 총 <strong>1,858,902개</strong>의 학습 파라미터 중 70.0%가 <code>5,080 → 256</code> 완전연결층에, 21.2%가 GRU에 있습니다. 6인전 실행 설정은 벡터가 234, 무기 ID가 10개라 첫 완전연결층과 결합층이 조금 커져 <strong>1,873,494개</strong>가 됩니다. 패치 셀을 4픽셀로 하면 결합 입력이 2,672로 줄어 1,250,902개입니다. 아래 수치는 편향을 포함하고, 정규화의 누적 통계 버퍼는 제외합니다. 무기 임베딩은 모드가 정의한 무기 수에 따라 달라지며, 아래는 이 방이 쓰는 129개 기준입니다.</p><p class="note"><strong>크다고 곧 병목은 아닙니다.</strong> 파라미터 비중만으로 어디를 넓혀야 할지 결정할 수 없습니다. 합성곱 출력 채널을 늘리면 뒤의 결합층 입력도 커져 전체 비용이 함께 늘어납니다. 먼저 관측·보상·평가의 문제를 구분해야 합니다.</p></div>
+  <span class="kicker">05 / PARAMETERS</span><h2>약 186만~188만 개의 파라미터, 대부분은 결합 직후와 기억에</h2>
+  <div class="two"><div><p>코드 기본값에서는 총 <strong>1,863,766개</strong>의 학습 파라미터 중 69.8%가 <code>5,080 → 256</code> 완전연결층에, 21.2%가 GRU에 있습니다. 6인전 실행 설정은 벡터가 238, 무기 ID가 10개라 첫 완전연결층과 결합층이 조금 커져 <strong>1,878,358개</strong>가 됩니다. 패치 셀을 4픽셀로 하면 결합 입력이 2,672로 줄어 1,255,766개입니다. 아래 수치는 편향을 포함하고, 정규화의 누적 통계 버퍼는 제외합니다. 무기 임베딩은 모드가 정의한 무기 수에 따라 달라지며, 아래는 이 방이 쓰는 129개 기준입니다.</p><p class="note"><strong>크다고 곧 병목은 아닙니다.</strong> 파라미터 비중만으로 어디를 넓혀야 할지 결정할 수 없습니다. 합성곱 출력 채널을 늘리면 뒤의 결합층 입력도 커져 전체 비용이 함께 늘어납니다. 먼저 관측·보상·평가의 문제를 구분해야 합니다.</p></div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="파라미터 수 표"><table><caption>층별 학습 파라미터 (코드 기본값 3인전 · 괄호는 6인전)</caption><thead><tr><th scope="col">층</th><th scope="col" class="n">개수</th><th scope="col" class="n">비중</th></tr></thead><tbody>
-  <tr><td><code>5080 → 256</code><span class="bar" style="width:100%"></span></td><td class="n">1,300,736 <span class="muted">(1,306,880)</span></td><td class="n">70.0%</td></tr>
+  <tr><td><code>5080 → 256</code><span class="bar" style="width:100%"></span></td><td class="n">1,300,736 <span class="muted">(1,306,880)</span></td><td class="n">69.8%</td></tr>
   <tr><td>순환 기억 · GRU <code>256 → 256</code><span class="bar" style="width:30%"></span></td><td class="n">394,752</td><td class="n">21.2%</td></tr>
   <tr><td><code>256 → 256</code></td><td class="n">65,792</td><td class="n">3.5%</td></tr>
-  <tr><td>주변 패치 합성곱 3층</td><td class="n">63,616</td><td class="n">3.4%</td></tr>
-  <tr><td><code>168 → 128</code></td><td class="n">21,632 <span class="muted">(234 → 128: 30,080)</span></td><td class="n">1.2%</td></tr>
-  <tr><td>전체 지도 합성곱 2층</td><td class="n">5,680</td><td class="n">0.3%</td></tr>
+  <tr><td>주변 패치 합성곱 3층</td><td class="n">67,712</td><td class="n">3.6%</td></tr>
+  <tr><td><code>172 → 128</code></td><td class="n">22,144 <span class="muted">(238 → 128: 30,592)</span></td><td class="n">1.2%</td></tr>
+  <tr><td>전체 지도 합성곱 2층</td><td class="n">5,936</td><td class="n">0.3%</td></tr>
   <tr><td>행동 출력</td><td class="n">5,397</td><td class="n">0.3%</td></tr>
   <tr><td>무기 ID 임베딩 <code>130 × 8</code></td><td class="n">1,040</td><td class="n">0.06%</td></tr>
   <tr><td>가치 출력</td><td class="n">257</td><td class="n">0.01%</td></tr>
-  </tbody><tfoot><tr><td>합계</td><td class="n">1,858,902 <span class="muted">(1,873,494)</span></td><td class="n">100%</td></tr></tfoot></table></div></div>
+  </tbody><tfoot><tr><td>합계</td><td class="n">1,863,766 <span class="muted">(1,878,358)</span></td><td class="n">100%</td></tr></tfoot></table></div></div>
 </section>
 <section id="actions">
   <span class="kicker">06 / ACTION</span><h2>1,944개 조합을 8개의 선택으로 나눕니다</h2>
@@ -231,7 +232,7 @@ footer { margin-top:64px; padding:24px 0 40px; border-top:1px solid var(--line);
   <p class="sources">추가 읽을거리: <a href="https://arxiv.org/abs/1707.06347">PPO 원 논문</a> · <a href="https://gymnasium.farama.org/v0.27.0/tutorials/handling_time_limits/">Gymnasium의 시간 제한 처리</a></p>
 </section>
 </main>
-<footer><p>Wormy II · 2026-09-21 로컬 구현 기준: <code>train/policy.py</code>, <code>train/ppo.py</code>, <code>src/env/observation.js</code>, <code>src/env/view.js</code>, <code>src/env/actions.js</code>, <code>src/env/env.js</code>, <code>src/env/reward.js</code>, <code>src/env/vec.js</code>. 순환 기억(GRU), 무기 ID 임베딩, 과거 자신 상대 풀, 사다리 감쇠, 리스폰 시 기억 초기화, 패치 배율 선택, 조준 각속도와 직전 결정 관측, 웜을 중심에 두는 합성곱 패딩이 들어간 이후 기준입니다. 설정과 코드가 바뀌면 입력 크기와 파라미터 수도 달라집니다.</p><p>공식 WebLiero v20 게임 번들을 렌더링 없이 실행하는 환경입니다. 번들 체크섬 접두사: <code>b3c7b33c</code>. 기본 학습은 <code>cs_</code> 커뮤니티 맵 풀에서, 방이 실제로 허용하는 무기 95종을 들고 시작합니다. 나머지 34종은 상자에서만 나옵니다. 이 문서는 구조 설명과 코드 검토이며, 실전 성능 평가 결과는 아닙니다.</p></footer>
+<footer><p>Wormy II · 2026-09-23 로컬 구현 기준: <code>train/policy.py</code>, <code>train/ppo.py</code>, <code>src/env/observation.js</code>, <code>src/env/view.js</code>, <code>src/env/actions.js</code>, <code>src/env/env.js</code>, <code>src/env/reward.js</code>, <code>src/env/vec.js</code>. 순환 기억(GRU), 무기 ID 임베딩, 과거 자신 상대 풀, 사다리 감쇠, 리스폰 시 기억 초기화, 패치 배율 선택, 조준 각속도와 직전 결정 관측, 웜을 중심에 두는 합성곱 패딩, 벡터의 목적지 4칸, 패치와 지도의 ghost 지형과 목적지 표시가 들어간 이후 기준입니다. 설정과 코드가 바뀌면 입력 크기와 파라미터 수도 달라집니다.</p><p>공식 WebLiero v20 게임 번들을 렌더링 없이 실행하는 환경입니다. 번들 체크섬 접두사: <code>b3c7b33c</code>. 기본 학습은 <code>cs_</code> 커뮤니티 맵 풀에서, 방이 실제로 허용하는 무기 95종을 들고 시작합니다. 나머지 34종은 상자에서만 나옵니다. 이 문서는 구조 설명과 코드 검토이며, 실전 성능 평가 결과는 아닙니다.</p></footer>
 </div>
 </body>
 </html>

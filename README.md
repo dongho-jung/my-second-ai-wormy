@@ -126,10 +126,10 @@ setting: solo, a duel and a five-way brawl all run on the same code.
 | `engine.js` | Patches the bundle in memory, evaluates it, and checks its SHA-256 against the one the adapter locked. Also seed-reproducible level generation, random weapon loadouts, and the instrument that records **who hit whom**. |
 | `actions.js` | The key bitmask (`1 left … 256 dig`), the rope and weapon-change messages that are not bits, and the eight heads a policy emits. Exactly how a real room passes input. |
 | `view.js` | Turns a headless world and a live snapshot into **one shape**. The observation encoders read only that. |
-| `observation.js` | The vector (146-234 numbers, depending on how many worms are playing), the worm's own 213x121 view of the terrain, and the whole level on a 32x32 grid. Any of them can be left out. |
-| `progress.js` | Whether a worm is stuck, going in circles, or closing on a goal. |
-| `reward.js` | Damage dealt minus damage taken, kills and deaths, the movement terms, and the ladder up to aiming. Blowing yourself up costs the same as being shot. |
-| `env.js` | `reset()` / `step()`, frameskip, respawn, input latency. An episode ends on a clock, so its last observation is handed over to be valued rather than thrown away. |
+| `observation.js` | The vector (150-238 numbers, depending on how many worms are playing), the worm's own 213x121 view of the terrain in eight planes — rock, dirt, free, the flagless ground a rope goes through, shots, foes, itself, its destination — and the whole level on a 32x32 grid. Any of them can be left out. |
+| `progress.js` | Whether a worm is stuck, going in circles, or closing on a goal, and how long it has had the goal. |
+| `reward.js` | Damage dealt minus damage taken, kills and deaths, the movement terms, the ladder up to aiming, and a price per rope throw when a run asks for one. Blowing yourself up costs the same as being shot. |
+| `env.js` | `reset()` / `step()`, frameskip, respawn, input latency, the goals of the movement task and how far away they are drawn. An episode ends on a clock, so its last observation is handed over to be valued rather than thrown away. Letting go of the rope is a jump press, as it is in the game. |
 | `vec.js`, `worker.js` | Many worlds in one process, and the binary frames the trainer talks over. |
 
 - **The bundle and its assets are not in the repository** (`artifacts/` is
@@ -174,6 +174,37 @@ player or a shyer one is for `npm run evaluate` to say.
 The weights are `DEFAULT_WEIGHTS` in `src/env/reward.js`, and the reasoning
 behind each one — including the run that learned to stand still — is in the
 comments beside them. `docs/network.html` draws the whole policy in Korean.
+
+### Learning to move first
+
+```bash
+npm run train -- --task movement --agents 6 --rope-throw-cost 0.01
+```
+
+`--task movement` turns the fighting terms off, holds the trigger shut, and
+hands every worm a place on the map to reach — another as soon as it arrives,
+or after `--goal-patience` decisions without arriving. The score is
+`goalsReached`, destinations a worm reaches in a minute, and `best.pt` is
+picked on it.
+
+The destinations start close. `--goal-radius 96-1600` draws them within 96 px
+of the worm at first — a walk or a jump — and moves the limit out to 1,600 px
+over the first `--goal-grow` of the run, so the rope is met when walking stops
+being enough rather than on the first decision. The first runs drew from the
+whole map, 450-550 px away on average, and a policy that could not walk yet
+learned the one thing that covers that distance: re-throwing the rope along
+its aim several times a second, which the engine reels it in on. It reached
+six destinations a minute that way and never learned to hold a rope. The rope
+in this mod is a grappling hook — it flies at 8 px a tick, holds at a fixed
+28 px of length and pulls the worm toward the anchor on its own — so
+`--rope-throw-cost` charges a little per throw to make holding on the cheaper
+way to cover the same ground. Both are measured in
+`docs/movement-runs-2026-09-22.md`.
+
+Five of the community maps draw much of their walls in a colour that has no
+material flags: a worm walks into it and a rope flies through it. The patch
+and the map show that ground as its own kind, `ghost`, so the policy can see
+which walls hold a rope, and both show where the goal is when it is in view.
 
 ## Training
 
@@ -220,7 +251,11 @@ npm run train -- --help
   through two convolutions — the worm's own view, and the whole level small —
   and a **GRU** on top of the joined features, because a decision that takes
   longer than one frame has to be carried. 1.86M parameters at two pixels a
-  patch cell, 1.25M at four.
+  patch cell, 1.26M at four.
+- **The entropy of every head is logged**, not only their sum. Eight heads
+  summed into one number cannot tell a rope head that has gone deterministic
+  from a fire head the bonus keeps uniform, and in a movement run that is the
+  question. The log line carries the six that move a worm.
 - **A rollout is 128 decisions and the gradient runs through 32 of them.** The
   two are not the same knob. How far a reward can be from the action that
   earned it and still reach it is the first; how far back the memory learns is

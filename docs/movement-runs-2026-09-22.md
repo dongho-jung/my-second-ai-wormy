@@ -135,15 +135,35 @@ about input differ, read off `Kc.qo` and `Cb.apply` in the bundle:
 
 Neither touches training; both matter the first time a policy plays a room.
 
-## What follows from this
+## What was changed on 2026-09-23, before the next runs
 
-1. Goals at a distance the policy can reach by walking first, then farther,
-   as the earlier note planned. The environment needs a goal maker that takes
-   a radius; the observation and the network need nothing.
-2. Either drop the five rope-hostile maps from the movement stage, or give the
-   patch a channel for "the rope holds here" — `flags & 7` — so the policy can
-   tell.
-3. Log the entropy per head. With eight heads summed into one number, a rope
-   head that has gone deterministic and a fire head kept uniform by the bonus
-   read the same.
-4. Fix the release press in `keys.js` before the next live match.
+1. **Goals within reach first.** `--goal-radius 96-1600` draws a destination
+   within 96 px of the worm and moves the limit out to 1,600 px over the first
+   `--goal-grow` (0.6) of the run; a goal not reached in `--goal-patience`
+   (450) decisions is given up on and counted as `goalsMissed`. The radius the
+   worlds are drawing at is logged as `goalRadiusPx`.
+2. **A price per throw.** `--rope-throw-cost` charges per rope throw the engine
+   hears (`fromRopeThrow`). Holding on is free. The a/b of the next runs is
+   this knob: 0.01 against 0.
+3. **The rope-transparent ground is its own kind.** `terrain.js` classifies
+   ground by the flags the engine tests — background, dirt, rock, and the
+   flagless `ghost` that stops a worm and lets a rope through — and the patch
+   has eight planes (rock, dirt, free, ghost, shot, foe, self, goal) and the
+   map five channels (free, dirt, rock, ghost, occupants). The goal is drawn on
+   both when it is in view. Checkpoints and worker layouts carry the channel
+   counts, so a policy from another picture is refused rather than misread.
+4. **One entropy per head** in the metrics (`entropyMove` … `entropyWeapon`)
+   and on the log line.
+5. **`best.pt` of a movement run is picked on `goalsReached`** (`bestGoals`),
+   not on the combat score, which is zero throughout — the first checkpoint
+   ever written used to stay "best" for the whole run.
+6. **The normaliser is updated after the gradient step**, so an update scores
+   its rollout under the statistics the rollout was collected with.
+7. **Letting go of the rope is a jump press**, in the environment and in the
+   live driver, which is what the client does. A jump pressed while the rope
+   is out lets go of it.
+8. The probe against still worms is off in the movement task; there is nothing
+   to kill.
+
+Baselines under the new world are the same as above to within noise: the
+pictures changed, the rules a scripted walker follows did not.
