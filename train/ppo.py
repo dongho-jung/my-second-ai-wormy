@@ -220,6 +220,13 @@ def parse_args(argv=None):
                             "both tasks (zeros when there is none), so the vector is the "
                             "same size either way and a movement policy can be --resume d "
                             "into a fighting run")
+    where.add_argument("--rope-cooldown", type=int, default=0,
+                       help="decisions between one rope message and the next being heard. 0 "
+                            "hears every one, which at maximum entropy means throwing five "
+                            "times a second and letting go five times a second. Measured, that "
+                            "does not change how much of an episode a worm spends attached — "
+                            "about half either way — but it changes how long one throw lasts: "
+                            "1.5 decisions at 0, 10.5 at 10. See ropeCooldown in src/env/env.js")
     where.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     where.add_argument("--label", default=None, help="a name for this run on the monitor page")
     where.add_argument("--resume", default=None,
@@ -242,6 +249,8 @@ SHOWN = (
     "selfDamage",
     "stuckSteps",
     "goalsReached",
+    "ropeThrows",
+    "ropeHeld",
 )
 
 # Consecutive updates the adaptive rate may spend asking to move past an end of
@@ -389,6 +398,9 @@ def main(argv=None):
     )
     if args.observation_foes is not None:
         config["observationFoes"] = args.observation_foes
+
+    if args.rope_cooldown > 0:
+        config["ropeCooldown"] = args.rope_cooldown
 
     if args.task == "movement":
         # Named rather than spelled out: the workers are configured over JSON,
@@ -1117,7 +1129,11 @@ def main(argv=None):
                 f"stuck {latest.get('stuckSteps', 0):5.1f} | "
                 # Destinations reached a match. Zero in a fighting run, which
                 # sets no goals, and the whole point of a movement one.
-                f"goals {latest.get('goalsReached', 0):4.1f} | entropy {line['entropy']:.2f} | "
+                f"goals {latest.get('goalsReached', 0):4.1f} | "
+                # Throws asked for, and decisions actually spent attached. The
+                # gap between them is the whole question about the rope.
+                f"rope {latest.get('ropeThrows', 0):5.0f}/{latest.get('ropeHeld', 0):5.0f} | "
+                f"entropy {line['entropy']:.2f} | "
                 # What the adaptive rate is doing. Without these two the log
                 # cannot say why a run went flat: a policy that has stopped
                 # moving and one whose rate has run out of room read the same

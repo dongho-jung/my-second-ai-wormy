@@ -49,6 +49,13 @@ export const EPISODE_STATS = [
   // is getting there or just drifting the right way. This is the number a
   // movement run is judged on.
   "goalsReached",
+  // The rope, which is the one tool a worm has for ground it cannot walk to.
+  // Throws are what it asked for; held is what it got — decisions spent with a
+  // rope actually attached. A policy near maximum entropy throws on a third of
+  // its decisions and lets go on a third, so the two numbers apart say whether
+  // any of that turned into hanging off something.
+  "ropeThrows",
+  "ropeHeld",
   "shaping",
   // The only figure that answers "is it getting better" rather than "is
   // something happening".
@@ -93,6 +100,8 @@ const STAT_SOURCE = {
   fromAimedShot: "fromAimedShot",
   fromGoal: "fromGoal",
   goalsReached: "goalsReached",
+  ropeThrows: "ropeThrows",
+  ropeHeld: "ropeHeld",
 };
 
 export const HEADS = ACTION_HEADS.length;

@@ -6,7 +6,7 @@
 // worth interrupting. Everything that could make two runs of one seed differ
 // goes through a single seeded generator, so a rollout is reproducible and a
 // policy's bad episode can be replayed exactly.
-import { KEYS, applyNormalizedAction, normalizeAction } from "./actions.js";
+import { KEYS, ROPE, applyNormalizedAction, normalizeAction } from "./actions.js";
 import { makeRng, respawnWorm, roomWeapons, watchDamage, weaponList } from "./engine.js";
 import {
   MAP_CELLS,
@@ -143,6 +143,29 @@ export const DEFAULTS = {
   // Ignore the fire key and weapon switching. For stages where the lesson is
   // getting somewhere: see where this is read in `step`.
   lockWeapons: false,
+  // Decisions between one rope message and the next being listened to. 0 lets
+  // every decision carry one, which at maximum entropy means throwing five
+  // times a second and letting go five times a second.
+  //
+  // What that costs is not what it looks like. Measured with a random policy
+  // over three six-worm episodes, per worm:
+  //
+  //   cooldown   throws   decisions held   share of the episode held
+  //          0    301.9            448.1                       49.8%
+  //          5     82.6            456.0                       50.7%
+  //         10     42.6            444.6                       49.4%
+  //         30     15.1            447.8                       49.8%
+  //
+  // A thrown rope attaches within one decision, and throwing and releasing at
+  // the same rate leaves a worm attached about half the time whatever this is
+  // set to. So the cost of thrashing is not time spent off the rope. What
+  // changes is how long one throw lasts — 1.5 decisions at 0, 10.5 at 10 — and
+  // therefore whether a rope is a state the policy can act from or one that
+  // has already changed by the time the next decision lands.
+  //
+  // Whether that matters to learning is what the a/b is for. It is not settled
+  // by the table above.
+  ropeCooldown: 0,
   // Decisions between re-reading the whole level for the map observation.
   // Reading it costs every pixel, so it is amortised: the terrain only changes
   // where somebody is digging, and four seconds of staleness at this scale is a
@@ -253,6 +276,7 @@ export class WormEnv {
     this.observationKinds = settings.observations;
     this.makeGoal = goalMaker(settings.goals);
     this.lockWeapons = Boolean(settings.lockWeapons);
+    this.ropeCooldown = Math.max(0, Math.trunc(settings.ropeCooldown ?? 0));
     this.reward = settings.reward ?? combatReward;
     // A fresh level per episode by default: one map teaches one map.
     this.makeLevel =
@@ -513,6 +537,8 @@ export class WormEnv {
     });
     this.alive = this.worms.map((worm) => Boolean(worm.u));
     this.firing = this.worms.map(() => false);
+    // The decision each worm's next rope message will be listened to on.
+    this.ropeReadyAt = this.worms.map(() => 0);
     this.foeRange = this.worms.map(() => null);
     this.totals = this.worms.map(() => ({}));
     this.episodeStartTick = this.world.qb;
@@ -559,6 +585,20 @@ export class WormEnv {
       // along it, and the rope is one of the things being taught.
       if (this.lockWeapons) {
         normalized = { ...normalized, keys: normalized.keys & ~KEYS.fire, weapon: 0 };
+      }
+      // One rope message per cooldown. Throwing and letting go are both
+      // messages, so this is "having thrown, live with it for a moment" rather
+      // than "throw less" — though it is that too. See `ropeCooldown` in the
+      // defaults for what this does and does not change.
+      if (this.ropeCooldown > 0 && normalized.rope !== ROPE.none) {
+        if (this.decisions < this.ropeReadyAt[agent]) {
+          normalized = { ...normalized, rope: ROPE.none };
+        } else {
+          this.ropeReadyAt[agent] = this.decisions + this.ropeCooldown;
+        }
+      }
+      if (normalized.rope === ROPE.throw) {
+        this.totals[agent].ropeThrows = (this.totals[agent].ropeThrows ?? 0) + 1;
       }
       // Whether it pulled the trigger this decision AND had something to fire,
       // for the aim reward. Firing while lined up is the thing worth paying
@@ -619,6 +659,14 @@ export class WormEnv {
         worm.u ? worm : this.views[agent].self.position ?? worm,
         Boolean(worm.u),
       );
+      // Decisions spent hanging off an attached rope. Read after the views were
+      // refreshed, so this is the state the worm is in now rather than the one
+      // it acted from. Against `ropeThrows` it says whether a throw turns into
+      // anything: many throws and almost no held decisions is a worm that lets
+      // go the moment it lands.
+      if (this.views[agent]?.self?.rope?.attached) {
+        this.totals[agent].ropeHeld = (this.totals[agent].ropeHeld ?? 0) + 1;
+      }
       // Arriving clears the goal. Hand out the next one now rather than at the
       // next episode: a minute is long enough for several trips, and one
       // arrival per episode is very few samples of the thing being taught.
