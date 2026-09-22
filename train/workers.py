@@ -54,6 +54,7 @@ class Layout:
     map_cells: int
     map_shape: tuple
     head_sizes: list
+    head_names: list
     stat_fields: list
     action_bytes: int
     offsets: dict
@@ -64,11 +65,11 @@ class Layout:
     weapon_ids_count: int
     weapon_count: int
     weapons_measured: bool
-    frameskip: int
     # What a patch byte and a map byte expand to. A trainer built for another
     # picture must refuse rather than misread.
     patch_channels: int
     map_channels: int
+    frameskip: int
     episode_ticks: int
     maps: int
     stock_maps: int
@@ -93,6 +94,7 @@ class Layout:
             map_cells=raw.get("mapCells", 0),
             map_shape=tuple(raw["mapShape"]) if raw.get("mapShape") else None,
             head_sizes=[head["choices"] for head in raw["heads"]],
+            head_names=[head["name"] for head in raw["heads"]],
             stat_fields=raw["statFields"],
             action_bytes=raw["actionBytes"],
             offsets=offsets,
@@ -103,10 +105,10 @@ class Layout:
             weapon_ids_count=int(raw.get("weaponIdsCount", 0)),
             weapon_count=int(raw.get("weaponCount", 0)),
             weapons_measured=bool(raw.get("weaponsMeasured", True)),
-            frameskip=raw["frameskip"],
-            episode_ticks=raw["episodeTicks"],
             patch_channels=int(raw.get("patchChannels", 6)),
             map_channels=int(raw.get("mapChannels", 4)),
+            frameskip=raw["frameskip"],
+            episode_ticks=raw["episodeTicks"],
             maps=raw["maps"],
             stock_maps=raw.get("stockMaps", 0),
             # What the `dones` byte means. Three states, not two: an episode

@@ -303,9 +303,13 @@ class WormPolicy(nn.Module):
     ):
         """Sample (or score) one action per head, value the state, and remember.
 
-        Collecting a rollout does not need the entropy, and seven distributions'
-        worth of it is seven more kernels per step on a batch small enough that
-        the launch is most of the cost.
+        Collecting a rollout does not need the entropy, and eight distributions'
+        worth of it is eight more kernels per step on a batch small enough that
+        the launch is most of the cost. When it is wanted it comes back one
+        column per head, `[batch, heads]`, because the sum hides what matters:
+        a rope head that has gone deterministic and a fire head kept uniform by
+        the bonus read the same in one number. Sum over the last axis for the
+        usual scalar.
         """
         logits, value, kept = self(vectors, patches, maps, carried, restart)
         distributions = [Categorical(logits=head) for head in logits]
@@ -316,7 +320,7 @@ class WormPolicy(nn.Module):
             dim=1,
         ).sum(dim=1)
         entropy = (
-            torch.stack([one.entropy() for one in distributions], dim=1).sum(dim=1)
+            torch.stack([one.entropy() for one in distributions], dim=1)
             if want_entropy
             else None
         )

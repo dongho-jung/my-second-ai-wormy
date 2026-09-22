@@ -1088,6 +1088,10 @@ def main(argv=None):
                     print(f"recordings now hold {after:,} frames", flush=True)
             names = ("policy", "value", "entropy", "clipped", "kl", "bc", "bcAgree")
             running_losses = torch.zeros(len(names), device=device)
+            # One entropy per head as well as the sum: the sum cannot tell a
+            # rope head that has gone deterministic from a fire head kept
+            # uniform by the bonus, and that is the question a movement run asks.
+            running_heads = torch.zeros(heads_count, device=device)
             passes = 0
             # Whole worms, replayed in order, rather than a shuffle of single
             # steps. A memory only means anything in sequence: scoring step 12
@@ -1125,6 +1129,7 @@ def main(argv=None):
                             entropy_steps.append(ent)
                             value_steps.append(val)
                         logp = torch.cat(logp_steps)
+                        # [steps x lanes, heads]: one column per head.
                         entropy = torch.cat(entropy_steps)
                         value = torch.cat(value_steps)
                         # Flattened the same way the steps were concatenated.
@@ -1144,7 +1149,8 @@ def main(argv=None):
                         clipped = ratio.clamp(1 - args.clip, 1 + args.clip) * advantage
                         policy_loss = -(torch.min(unclipped, clipped) * take_valid).sum() / counted
                         value_loss = 0.5 * ((value - take_ret).pow(2) * take_valid).sum() / counted
-                        entropy_loss = (entropy * take_valid).sum() / counted
+                        entropy_loss = (entropy.sum(dim=1) * take_valid).sum() / counted
+                        head_entropy = (entropy * take_valid.unsqueeze(1)).sum(dim=0) / counted
                         # Agreeing with what a person did, alongside being paid
                         # for the outcome. The reward says what is good; the
                         # recordings say what to try, which is the half exploration
@@ -1206,6 +1212,7 @@ def main(argv=None):
                                     bc_agree,
                                 )
                             )
+                            running_heads += head_entropy.detach()
                         passes += 1
 
             updates += 1
@@ -1333,6 +1340,14 @@ def main(argv=None):
                     policy.train()
             run.record(**line)
             latest.update({key: value for key, value in line.items() if key in SHOWN})
+            # The heads that move a worm, in nats each: move, aim, jump, dig,
+            # rope, rope length. Fire and weapon are left out — in a movement
+            # run they are locked and the bonus keeps them uniform.
+            heads_shown = " ".join(
+                f"{name[0]}{line['entropy' + name[0].upper() + name[1:]]:.2f}"
+                for name in layout.head_names
+                if name not in ("fire", "weapon")
+            )
             print(
                 f"update {updates:4d} | {total_steps:>10,} steps | "
                 f"{line['stepsPerSecond']:>7,.0f}/s | "
@@ -1351,7 +1366,7 @@ def main(argv=None):
                 # Throws asked for, and decisions actually spent attached. The
                 # gap between them is the whole question about the rope.
                 f"rope {latest.get('ropeThrows', 0):5.0f}/{latest.get('ropeHeld', 0):5.0f} | "
-                f"entropy {line['entropy']:.2f} | "
+                f"entropy {line['entropy']:.2f} [{heads_shown}] | "
                 # What the adaptive rate is doing. Without these two the log
                 # cannot say why a run went flat: a policy that has stopped
                 # moving and one whose rate has run out of room read the same
