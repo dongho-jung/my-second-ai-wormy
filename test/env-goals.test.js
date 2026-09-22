@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { snapshotV20 } from "../src/adapter-v20.js";
 import { fixture, LEVEL } from "./fixture.js";
+import { CURRICULUM_DEFAULTS, GoalCurriculum } from "../src/env/curriculum.js";
 import { groundedGoal, groundedGoalNear } from "../src/env/env.js";
 import { VECTOR_OFFSETS, encodeVector } from "../src/env/observation.js";
 import { solidAt, terrainOf } from "../src/env/terrain.js";
@@ -76,6 +77,34 @@ test("a near goal is within the radius, a few strides off, and standable", () =>
   assert.equal(groundedGoalNear(terrain, rng, from, 30), null);
   // And nowhere standable within reach is null rather than a guess: the sky.
   assert.equal(groundedGoalNear(terrain, rng, { x: 200, y: 10 }, 60), null);
+});
+
+test("the radius moves out when the worms keep arriving, and back when they do not", () => {
+  const curriculum = new GoalCurriculum({ from: 96, to: 1600, window: 10 });
+  assert.equal(curriculum.radius, 96, "starts at the near end");
+  // Nine outcomes are not a window: nothing moves, however good they were.
+  for (let i = 0; i < 9; i++) curriculum.record(true);
+  assert.equal(curriculum.radius, 96);
+  // The tenth completes it: nine of ten reached is above the 85% bar.
+  curriculum.record(true);
+  assert.ok(Math.abs(curriculum.radius - 96 * 1.1) < 1e-9, "one notch out");
+  // Six of ten is between the bars: stays.
+  for (let i = 0; i < 10; i++) curriculum.record(i < 6);
+  assert.ok(Math.abs(curriculum.radius - 96 * 1.1) < 1e-9, "middling outcomes hold it");
+  // Four of ten is at or below half: one notch back, and never below `from`.
+  for (let i = 0; i < 10; i++) curriculum.record(i < 4);
+  assert.ok(Math.abs(curriculum.radius - 96) < 1e-9, "one notch back");
+  for (let i = 0; i < 10; i++) curriculum.record(false);
+  assert.equal(curriculum.radius, 96, "it does not go under the near end");
+  // Nor over the far end, however long the run of good windows.
+  const far = new GoalCurriculum({ from: 96, to: 120, window: 2, start: 115 });
+  assert.equal(far.radius, 115, "a carried-on run starts where it had got to");
+  far.record(true);
+  far.record(true);
+  assert.equal(far.radius, 120, "capped at the far end");
+  // A start outside the range is pulled inside it.
+  assert.equal(new GoalCurriculum({ from: 96, to: 120, start: 5000 }).radius, 120);
+  assert.equal(CURRICULUM_DEFAULTS.window, 30);
 });
 
 test("no goal leaves the four values at zero", () => {

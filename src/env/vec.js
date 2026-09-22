@@ -59,6 +59,10 @@ export const EPISODE_STATS = [
   // swapped for another. Many of these against few reached is a worm that
   // cannot get where it is sent, whatever the reward curve says.
   "goalsMissed",
+  // How far this world was drawing destinations when the match ended. On a
+  // clock schedule every world says the same; on a success-driven one each
+  // world has moved it as far as its own worms earned.
+  "goalRadiusPx",
   // The rope, which is the one tool a worm has for ground it cannot walk to.
   // Throws are what it asked for; held is what it got — decisions spent with a
   // rope actually attached. A policy near maximum entropy throws on a third of
@@ -371,6 +375,7 @@ export class VecWormEnv {
         this.stats[at + offset] = mean("ropeHeld") / (env.episodeTicks / env.frameskip);
       }
       else if (field === "shaping") this.stats[at + offset] = env.shaping;
+      else if (field === "goalRadiusPx") this.stats[at + offset] = env.goalRadius() ?? 0;
       else if (field === "seed") this.stats[at + offset] = env.episodeSeed;
       else if (field === "killsVsPast") this.stats[at + offset] = versus("killed");
       else if (field === "damageVsPast") this.stats[at + offset] = versus("damageDealt");

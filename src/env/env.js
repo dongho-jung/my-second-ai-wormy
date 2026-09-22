@@ -18,6 +18,7 @@ import {
   observe,
   shotSolution,
 } from "./observation.js";
+import { GoalCurriculum } from "./curriculum.js";
 import { Progress } from "./progress.js";
 import {
   addEvents,
@@ -152,6 +153,17 @@ export const DEFAULTS = {
   // goals move out of reach.
   goalRadiusPx: null,
   goalRadiusFullAt: 0,
+  // What moves the radius from the first number to the second. "steps" grows
+  // it with the decisions taken, over `goalRadiusFullAt` of them. "success"
+  // grows it when the worms have been reaching their destinations and brings
+  // it back when they have not — see curriculum.js, which also says why the
+  // clock was the wrong thing to move it with.
+  goalRadiusMode: "steps",
+  // Where a "success" curriculum starts, for a run carrying on from a
+  // checkpoint that had got somewhere. Null starts at the first number.
+  goalRadiusStart: null,
+  // Its window and thresholds, laid over CURRICULUM_DEFAULTS.
+  goalCurriculum: null,
   // Decisions a goal is kept before it is given up on and another handed out.
   // 0 keeps it for the whole episode. A worm sent somewhere it cannot get to
   // otherwise spends the rest of its minute learning nothing.
@@ -344,6 +356,21 @@ export class WormEnv {
     this.makeGoal = goalMaker(settings.goals);
     this.goalRadiusPx = settings.goalRadiusPx ?? null;
     this.goalRadiusFullAt = Math.max(0, settings.goalRadiusFullAt ?? 0);
+    this.goalRadiusMode = settings.goalRadiusMode ?? "steps";
+    if (!["steps", "success"].includes(this.goalRadiusMode)) {
+      throw new Error(`goalRadiusMode must be steps or success, got ${this.goalRadiusMode}`);
+    }
+    // One per world, across its episodes: the destinations its worms reach
+    // and give up on are what move it, and a new match does not forget them.
+    this.curriculum =
+      this.goalRadiusMode === "success" && Array.isArray(this.goalRadiusPx)
+        ? new GoalCurriculum({
+            from: this.goalRadiusPx[0],
+            to: this.goalRadiusPx[1],
+            start: settings.goalRadiusStart ?? null,
+            ...(settings.goalCurriculum ?? {}),
+          })
+        : null;
     this.goalPatience = Math.max(0, Math.trunc(settings.goalPatience ?? 0));
     this.lockWeapons = Boolean(settings.lockWeapons);
     this.ropeCooldown = Math.max(0, Math.trunc(settings.ropeCooldown ?? 0));
@@ -616,6 +643,7 @@ export class WormEnv {
     const setting = this.goalRadiusPx;
     if (setting === null || setting === undefined) return null;
     if (!Array.isArray(setting)) return setting;
+    if (this.curriculum) return this.curriculum.radius;
     const [from, to] = setting;
     if (!(this.goalRadiusFullAt > 0)) return to;
     const gone = Math.min(1, this.decisions / this.goalRadiusFullAt);
@@ -763,6 +791,7 @@ export class WormEnv {
         // so anything else left in it is added again on every later decision of
         // the episode.
         this.totals[agent].goalsReached = (this.totals[agent].goalsReached ?? 0) + 1;
+        this.curriculum?.record(true);
         this.assignGoals(agent);
       } else if (
         this.goalPatience > 0 &&
@@ -773,6 +802,7 @@ export class WormEnv {
         // a destination the worm cannot get to does not eat the whole episode.
         // Counted, because many of these is the finding, not the reaching.
         this.totals[agent].goalsMissed = (this.totals[agent].goalsMissed ?? 0) + 1;
+        this.curriculum?.record(false);
         this.assignGoals(agent);
       }
       const outcome = this.reward(

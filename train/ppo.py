@@ -261,7 +261,15 @@ def parse_args(argv=None):
                             "that could not walk yet")
     where.add_argument("--goal-grow", type=float, default=0.6,
                        help="what share of --total-steps the radius takes to grow from the first "
-                            "number to the second")
+                            "number to the second, when --goal-curriculum is steps")
+    where.add_argument("--goal-curriculum", default="steps", choices=["steps", "success"],
+                       help="what moves the radius. steps: the clock, over --goal-grow of the run. "
+                            "success: the worms — it moves out a tenth when 85%% of the last "
+                            "--goal-window destinations were reached and back a tenth when half "
+                            "or fewer were. The clock outran the first runs: six destinations a "
+                            "match at 130 px, three by the time it had moved out to 250")
+    where.add_argument("--goal-window", type=int, default=30,
+                       help="destinations a world judges its radius on, for --goal-curriculum success")
     where.add_argument("--goal-patience", type=int, default=None,
                        help="decisions a destination is kept before another is handed out, so one "
                             "the worm cannot reach does not eat the whole minute. The movement "
@@ -294,6 +302,7 @@ SHOWN = (
     "stuckSteps",
     "goalsReached",
     "goalsMissed",
+    "goalRadiusPx",
     "ropeThrows",
     "ropeHeld",
 )
@@ -552,6 +561,12 @@ def main(argv=None):
         radius = [float(part) for part in str(args.goal_radius or "96-1600").split("-")]
         config["goalRadiusPx"] = radius if len(radius) > 1 else radius[0]
         config["goalPatience"] = 450 if args.goal_patience is None else args.goal_patience
+        config["goalRadiusMode"] = args.goal_curriculum
+        if args.goal_curriculum == "success":
+            config["goalCurriculum"] = {"window": args.goal_window}
+            if carried is not None and carried.get("goalRadius"):
+                # Carrying on: start where the radius had got to.
+                config["goalRadiusStart"] = float(carried["goalRadius"])
     elif args.goal_radius is not None or args.goal_patience is not None:
         raise SystemExit("--goal-radius and --goal-patience only mean something with --task movement")
     # Single knobs laid over the named table, so a run can charge for one thing
@@ -582,14 +597,20 @@ def main(argv=None):
         config["decisionsDone"] = int(carried.get("step", 0)) // worms
     if args.shaping_decay > 0:
         config["shapingFullAt"] = int(args.total_steps * args.shaping_decay / worms)
-    if isinstance(config.get("goalRadiusPx"), list):
+    if isinstance(config.get("goalRadiusPx"), list) and config.get("goalRadiusMode", "steps") == "steps":
         config["goalRadiusFullAt"] = int(args.total_steps * args.goal_grow / worms)
 
     def goal_radius_now():
-        """The radius the worlds are drawing goals at, by the same arithmetic."""
+        """The radius the worlds are drawing goals at, by the same arithmetic.
+
+        Only on the clock schedule. On the success-driven one each world moves
+        its own, and the figure comes back with the episode stats instead.
+        """
         setting = config.get("goalRadiusPx")
         if not isinstance(setting, list):
             return setting
+        if config.get("goalRadiusMode", "steps") != "steps":
+            return None
         full_at = config.get("goalRadiusFullAt", 0)
         gone = 1.0 if full_at <= 0 else min(1.0, (total_steps // worms) / full_at)
         return setting[0] + (setting[1] - setting[0]) * gone
@@ -715,6 +736,7 @@ def main(argv=None):
             ),
             "task": args.task,
             "goalRadius": config.get("goalRadiusPx"),
+            "goalCurriculum": args.goal_curriculum,
             "goalPatience": config.get("goalPatience"),
             "ropeThrowCost": args.rope_throw_cost,
             "ropeCooldown": args.rope_cooldown,
@@ -1318,9 +1340,12 @@ def main(argv=None):
             )
             for name, value in zip(layout.head_names, (running_heads / passes).tolist()):
                 line[f"entropy{name[0].upper()}{name[1:]}"] = value
-            radius_now = goal_radius_now()
-            if radius_now is not None:
-                line["goalRadiusPx"] = float(radius_now)
+            # The worlds report the radius they are drawing at with every finished
+            # episode; between those, the clock schedule can be worked out here.
+            if "goalRadiusPx" not in line:
+                radius_now = goal_radius_now()
+                if radius_now is not None:
+                    line["goalRadiusPx"] = float(radius_now)
             if episodes is not None:
                 for index, field in enumerate(layout.stat_fields):
                     if field == "seed":
@@ -1376,7 +1401,8 @@ def main(argv=None):
                 f"stuck {latest.get('stuckSteps', 0):5.1f} | "
                 # Destinations reached a match. Zero in a fighting run, which
                 # sets no goals, and the whole point of a movement one.
-                f"goals {latest.get('goalsReached', 0):4.1f}/{latest.get('goalsMissed', 0):3.1f} | "
+                f"goals {latest.get('goalsReached', 0):4.1f}/{latest.get('goalsMissed', 0):3.1f} "
+                f"at {latest.get('goalRadiusPx', 0):4.0f}px | "
                 # Throws asked for, and decisions actually spent attached. The
                 # gap between them is the whole question about the rope.
                 f"rope {latest.get('ropeThrows', 0):5.0f}/{latest.get('ropeHeld', 0):5.0f} | "
@@ -1398,12 +1424,15 @@ def main(argv=None):
                     best_score = smoothed
                     save(policy, layout, shape_of, total_steps, run.path / "best.pt",
                          score=best_score, reward=line.get("episodeReward"),
+                         goalRadius=latest.get("goalRadiusPx"),
                          **{score_field: best_score})
                     run.record(step=total_steps, **{best_name: best_score})
             if updates % args.save_every == 0:
-                save(policy, layout, shape_of, total_steps, run.path / "policy.pt")
+                save(policy, layout, shape_of, total_steps, run.path / "policy.pt",
+                     goalRadius=latest.get("goalRadiusPx"))
             if args.keep_every and updates % args.keep_every == 0:
-                save(policy, layout, shape_of, total_steps, run.path / f"policy-{total_steps}.pt")
+                save(policy, layout, shape_of, total_steps, run.path / f"policy-{total_steps}.pt",
+                     goalRadius=latest.get("goalRadiusPx"))
     except KeyboardInterrupt:
         run.note("stopped by hand")
         run.close(status="stopped", steps=total_steps)
@@ -1411,7 +1440,8 @@ def main(argv=None):
     finally:
         pool.close()
 
-    save(policy, layout, shape_of, total_steps, run.path / "policy.pt")
+    save(policy, layout, shape_of, total_steps, run.path / "policy.pt",
+         goalRadius=latest.get("goalRadiusPx"))
     run.note(f"finished: {total_steps:,} steps over {updates} updates")
     run.close(
         status="done",

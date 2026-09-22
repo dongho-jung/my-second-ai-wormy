@@ -415,6 +415,33 @@ test("goals move out as the world's decisions add up", { skip }, async () => {
   assert.equal(carried.goalRadius(), 400);
 });
 
+test("a world that keeps giving up on its goals draws them closer", { skip }, async () => {
+  const engine = await loadEngine();
+  const env = new WormEnv(engine, {
+    agents: 1,
+    observations: ["vector"],
+    goals: "random",
+    goalRadiusPx: [96, 1600],
+    goalRadiusMode: "success",
+    goalRadiusStart: 300,
+    goalCurriculum: { window: 5 },
+    goalPatience: 10,
+    seed: 3,
+  });
+  env.reset();
+  assert.equal(env.goalRadius(), 300, "starts where it was told");
+  // A worm that presses nothing gives up on a goal every ten decisions, and
+  // every five of those is a window of nothing reached: a notch back each.
+  for (let decision = 0; decision < 100; decision++) env.step([0]);
+  const missed = env.totals[0].goalsMissed ?? 0;
+  assert.ok(missed >= 9, `gave up on ${missed} goals`);
+  const notches = Math.floor(missed / 5);
+  assert.ok(Math.abs(env.goalRadius() - 300 / 1.1 ** notches) < 1e-6, `${notches} notches back`);
+  assert.equal(env.info().goalRadiusPx, env.goalRadius());
+  // The clock does nothing to it.
+  assert.ok(env.goalRadius() < 300, "moved, and not by the clock");
+});
+
 test("a dead worm is dropped from the world and comes back whole", { skip }, async () => {
   const { world, worms } = await arena({ seed: 77 });
   const [worm] = worms;
