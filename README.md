@@ -188,9 +188,14 @@ or after `--goal-patience` decisions without arriving. The score is
 picked on it.
 
 The destinations start close. `--goal-radius 96-1600` draws them within 96 px
-of the worm at first — a walk or a jump — and moves the limit out to 1,600 px
-over the first `--goal-grow` of the run, so the rope is met when walking stops
-being enough rather than on the first decision. The first runs drew from the
+of the worm at first — a walk or a jump — and moves the limit out to 1,600 px,
+so the rope is met when walking stops being enough rather than on the first
+decision. What moves it is `--goal-curriculum`: `steps` grows it with the clock
+over the first `--goal-grow` of the run, and `success` grows it a tenth when
+85% of a world's last `--goal-window` destinations were reached and brings it
+back a tenth when half or fewer were. The clock outran the first runs — six
+destinations a match at 130 px, three by the time it had moved out to 250 —
+which is what the second mode is for. The first runs drew from the
 whole map, 450-550 px away on average, and a policy that could not walk yet
 learned the one thing that covers that distance: re-throwing the rope along
 its aim several times a second, which the engine reels it in on. It reached

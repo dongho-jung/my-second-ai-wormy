@@ -167,3 +167,32 @@ Neither touches training; both matter the first time a policy plays a room.
 
 Baselines under the new world are the same as above to within noise: the
 pictures changed, the rules a scripted walker follows did not.
+
+## The next runs, 100 minutes in
+
+Started 15:18 UTC on `sha-d325732`, a with `--rope-throw-cost 0.01`, b with 0,
+both on the clock schedule. Per half-million steps:
+
+| steps (M) | radius | a goals / missed | a rope    | b goals / missed | b rope    | b jump entropy |
+| --------: | -----: | :--------------- | :-------- | :--------------- | :-------- | -------------: |
+|   0.5-1.0 |    115 | 4.7 / 1.1        | 158 / 146 | 5.3 / 1.0        | 280 / 155 |           0.69 |
+|   1.0-1.5 |    127 | 5.5 / 1.0        |  94 / 89  | 6.1 / 1.0        | 284 / 118 |           0.69 |
+|   3.0-3.5 |    177 | 3.4 / 1.1        |  40 / 17  | 3.6 / 1.1        | 279 / 103 |           0.65 |
+|   5.0-5.5 |    228 | 2.5 / 1.2        |  12 / 5   | 2.9 / 1.1        | 240 / 143 |           0.63 |
+|   7.0-7.5 |    278 | 2.0 / 1.2        |  22 / 14  | 4.3 / 0.7        | 191 / 312 |           0.29 |
+
+Two things, both measured:
+
+- **The throw cost killed the rope.** At 0.01 a throw costs what a third of a
+  near destination pays, before the rope has earned anything; the gradient's
+  answer was to stop throwing, and by 4M steps `a` threw eleven times a match
+  and walked. Charging for a thing before it is useful removes the chance of
+  it becoming useful. `a` is restarted without the cost.
+- **The clock outran the policy.** Both runs reached five or six destinations
+  a match at 115-130 px, and three by the time the radius had moved out to
+  250, while nothing in a schedule that grows with the steps could notice. `b`
+  recovered on its own once its rope head started holding (312 decisions a
+  match on the rope at 7.3M, 1.6 per throw against 0.3 at first), but a
+  curriculum should not depend on that. `--goal-curriculum success` moves the
+  radius on the share of destinations reached instead; `a` runs it, `b` stays
+  on the clock as the control.
