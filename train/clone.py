@@ -257,10 +257,10 @@ def main(argv=None):
         for at, head in enumerate(meta["heads"]):
             line[f"agree_{head['name']}"] = agree[at]
         run.record(**line)
+        by_head = ", ".join(f"{h['name']} {a * 100:.0f}%" for h, a in zip(meta["heads"], agree))
         print(
             f"epoch {epoch + 1:2d} | loss {line['cloneLoss']:.3f} | "
-            f"agrees with the player {mean_agree * 100:.1f}% "
-            f"({', '.join(f'{h['name']} {a*100:.0f}%' for h, a in zip(meta['heads'], agree))})",
+            f"agrees with the player {mean_agree * 100:.1f}% ({by_head})",
             flush=True,
         )
         if best is None or mean_agree > best:
