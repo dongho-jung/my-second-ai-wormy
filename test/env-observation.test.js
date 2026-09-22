@@ -27,9 +27,10 @@ import {
   observe,
   patchCellOf,
   patchOriginOf,
+  ropeReach,
 } from "../src/env/observation.js";
 import { LIVE_LATENCY_TICKS, viewFromSnapshot } from "../src/env/view.js";
-import { KIND, contactsAt, kindAt, reach, ropeHoldsAt, solidAt, walkProbe } from "../src/env/terrain.js";
+import { KIND, contactsAt, kindAt, reach, ropeHoldsAt, solidAt, terrainOf, walkProbe } from "../src/env/terrain.js";
 
 // The live game is the other source an observation is built from, so the whole
 // encoder is exercised through it: if a mapping the adapter reports ever stops
@@ -288,6 +289,34 @@ test("the byte patch and the one-hot patch are the same picture", () => {
   // the vector is what says the patch means anything.
   const dead = encodePatchBytes({ ...view, self: { alive: false } });
   assert.deepEqual(Array.from(dead), new Array(PATCH_CELLS).fill(0));
+});
+
+test("the worm is told what a throw would hook, and where it is in a hold", () => {
+  const view = liveView();
+  const at = VECTOR_OFFSETS;
+  // The fixture's aim is -0.25 rad, up and to the right, from (32, 26): the
+  // first thing that holds a rope on that line is the rock wall at x=39.
+  const hook = ropeReach(view.terrain, 32, 26, -0.25);
+  assert.ok(hook, "something within reach");
+  assert.equal(hook.x, LEVEL.wallX);
+  assert.ok(hook.distance >= 6 && hook.distance <= 8, `the wall is ${hook.distance}px along the aim`);
+  const vector = encodeVector(view);
+  assert.equal(vector[at.ropeHold], 0, "no hold going");
+  assert.ok(Math.abs(vector[at.ropeReach] - hook.distance / 250) < 1e-6);
+  assert.ok(Math.abs(vector[at.ropeReach + 1] - (26 - hook.y) / 250) < 1e-6, "how far up the hook is");
+  // Aimed at the ghost floor beyond the wall from above it: the rope flies
+  // through it and on to the bottom edge of the map, which does hold.
+  const over = ropeReach(view.terrain, 55, 20, Math.PI / 2);
+  assert.ok(over && over.y >= LEVEL.height, `through the ghost floor to the edge, hit at y=${over?.y}`);
+  // Straight up, the ceiling is off the map: the edge holds, 26px away.
+  const up = ropeReach(view.terrain, 32, 26, -Math.PI / 2);
+  assert.equal(up.y, -1);
+  // Nothing within reach reads as nothing at all.
+  const wide = terrainOf({ data: new Uint8Array(600 * 600), width: 600, height: 600, materialFlags: new Uint8Array(256).fill(8) });
+  assert.equal(ropeReach(wide, 300, 300, 0), null);
+  // Mid-hold, the share is written as it is.
+  view.ropeHoldShare = 0.75;
+  assert.ok(Math.abs(encodeVector(view)[at.ropeHold] - 0.75) < 1e-6);
 });
 
 test("a wall the rope goes through is its own ground, and the goal is in the picture", () => {

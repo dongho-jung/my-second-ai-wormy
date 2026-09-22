@@ -37,6 +37,11 @@ const RAY_DIRECTIONS = Array.from({ length: RAY_COUNT }, (_, k) => {
 // The distance everything relative is measured against: the rope's reach, which
 // is roughly as far as a worm can act in one move.
 const REACH_PX = 300;
+/** How far a thrown rope flies before it is pulled back: `Gj` in the mod. */
+export const ROPE_REACH_PX = 250;
+// One pixel at a time: at two, an oblique ray stepped clean over a wall one
+// pixel thick and reported the far side of the map instead.
+const ROPE_RAY_STEP_PX = 1;
 const HEALTH_MAX = 100;
 // How far a goal has to be before the distance reading saturates. Wider than
 // REACH_PX because a destination is not a fight: the worm is told about one
@@ -226,11 +231,6 @@ export function observationSpec({
     // them zero rather than dropping them, so the vector keeps its size and a
     // later stage can --resume a policy trained with them.
     ["goal", 4],
-    // Which weapon, not just what it does. Twelve names in this mod belong to
-    // two different weapons — the ordinary one and the strange crate-only
-    // version — and ten measured numbers do not say how a VIRUS spreads or
-    // what a FORCE FIELD is for. These are indices for the network to embed,
-    // so they are kept out of the running normaliser, which would average them
     // How much of a rope throw's hold is still to come. A throw is a commitment
     // for a while (see RopeHold in actions.js) and the policy is told where in
     // it it is, rather than left to count.
@@ -241,6 +241,11 @@ export function observationSpec({
     // aim moves slowly, so "adjust until this says a ledge, then throw" is a
     // mechanism the policy can see rather than one it has to discover blind.
     ["ropeReach", 2],
+    // Which weapon, not just what it does. Twelve names in this mod belong to
+    // two different weapons — the ordinary one and the strange crate-only
+    // version — and ten measured numbers do not say how a VIRUS spreads or
+    // what a FORCE FIELD is for. These are indices for the network to embed,
+    // so they are kept out of the running normaliser, which would average them
     // into nonsense.
     //
     // All five of my slots, then each foe's held one. Only the held weapon used
@@ -533,25 +538,20 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
     at += 4;
   }
 
-  const held = (worm) => worm?.weapons?.[worm.selectedWeapon]?.id ?? -1;
-  for (let slot = 0; slot < WEAPON_SLOTS; slot++) {
-    into[at++] = self.weapons?.[slot]?.id ?? -1;
-  }
-  for (let slot = 0; slot < spec.foeSlots; slot++) into[at++] = held(foes[slot]);
   into[at++] = clamp(view.ropeHoldShare ?? 0, 0, 1);
   const hook = ropeReach(terrain, x, y, self.aimRadians);
   into[at++] = hook ? hook.distance / ROPE_REACH_PX : 0;
   into[at++] = hook ? clamp((y - hook.y) / ROPE_REACH_PX, -1, 1) : 0;
 
+  const held = (worm) => worm?.weapons?.[worm.selectedWeapon]?.id ?? -1;
+  for (let slot = 0; slot < WEAPON_SLOTS; slot++) {
+    into[at++] = self.weapons?.[slot]?.id ?? -1;
+  }
+  for (let slot = 0; slot < spec.foeSlots; slot++) into[at++] = held(foes[slot]);
 
   return into;
 }
 
-/**
- * The shot the held weapon would have to make to hit `foe`.
- *
- * Nearly everything in this mod arcs, so the angle that hits somebody is not
- * the angle that points at them: it is higher by however far the shot falls
 /**
  * Where a rope thrown along `aimRadians` would hook: the first pixel on the
  * way that holds a rope (dirt, rock, or the edge of the map — ground with no
@@ -570,6 +570,11 @@ export function ropeReach(terrain, x, y, aimRadians, limit = ROPE_REACH_PX) {
   return null;
 }
 
+/**
+ * The shot the held weapon would have to make to hit `foe`.
+ *
+ * Nearly everything in this mod arcs, so the angle that hits somebody is not
+ * the angle that points at them: it is higher by however far the shot falls
  * on the way. `off` is how far the current aim is from that angle, signed and
  * wrapped, and `clear` says whether the arc itself gets there — an arc clears
  * a low wall a straight line does not, and dives into a ceiling the line

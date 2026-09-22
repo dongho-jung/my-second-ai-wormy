@@ -261,12 +261,14 @@ const GOAL_MIN_PX = 40;
  * short radius is a short walk and not a spot underfoot. Null when nothing
  * standable is that close, which a caller falls back from.
  */
-export function groundedGoalNear(terrain, rng, from, radius, tries = 64) {
+export function groundedGoalNear(terrain, rng, from, radius, { tries = 64, abovePx = 0 } = {}) {
   if (!terrain || !from || !(radius > GOAL_MIN_PX)) return null;
   const left = Math.max(0, Math.floor(from.x - radius));
   const right = Math.min(terrain.width - 1, Math.ceil(from.x + radius));
   const top = Math.max(0, Math.floor(from.y - radius));
-  const bottom = Math.min(terrain.height - 1, Math.ceil(from.y + radius));
+  // Asked for a spot above the worm, only rows that far up are drawn from.
+  const bottom = Math.min(terrain.height - 1, Math.ceil(from.y + radius), Math.floor(from.y - abovePx));
+  if (bottom < top) return null;
   for (let attempt = 0; attempt < tries; attempt++) {
     const x = left + Math.floor(rng() * (right - left + 1));
     const y = top + Math.floor(rng() * (bottom - top + 1));
@@ -304,7 +306,14 @@ function goalMaker(goals) {
       const terrain = env.views[agent]?.terrain;
       const radius = env.goalRadius();
       if (radius !== null) {
-        const near = groundedGoalNear(terrain, env.rng, env.views[agent]?.self?.position, radius);
+        const from = env.views[agent]?.self?.position;
+        // Some of the time, somewhere a jump does not reach; the rest of the
+        // time anywhere within reach, which may still be up.
+        if (env.goalAboveShare > 0 && env.rng() < env.goalAboveShare) {
+          const up = groundedGoalNear(terrain, env.rng, from, radius, { abovePx: env.goalAbovePx });
+          if (up) return up;
+        }
+        const near = groundedGoalNear(terrain, env.rng, from, radius);
         if (near) return near;
       }
       return groundedGoal(terrain, env.rng);
@@ -385,6 +394,9 @@ export class WormEnv {
     this.goalPatience = Math.max(0, Math.trunc(settings.goalPatience ?? 0));
     this.lockWeapons = Boolean(settings.lockWeapons);
     this.ropeCooldown = Math.max(0, Math.trunc(settings.ropeCooldown ?? 0));
+    this.ropeHold = Math.max(0, Math.trunc(settings.ropeHold ?? 0));
+    this.goalAboveShare = Math.min(1, Math.max(0, settings.goalAboveShare ?? 0));
+    this.goalAbovePx = Math.max(0, settings.goalAbovePx ?? 0);
     this.reward = settings.reward ?? combatReward;
     // A fresh level per episode by default: one map teaches one map.
     this.makeLevel =
@@ -394,9 +406,6 @@ export class WormEnv {
           ? () => settings.level
           : (engineIn, seed) => engineIn.randomLevel(seed, settings.levelOptions);
     this.world = engine.createWorld({ rules: settings.rules });
-    this.ropeHold = Math.max(0, Math.trunc(settings.ropeHold ?? 0));
-    this.goalAboveShare = Math.min(1, Math.max(0, settings.goalAboveShare ?? 0));
-    this.goalAbovePx = Math.max(0, settings.goalAbovePx ?? 0);
     // The engine knows who hit whom; this is where it says so.
     this.watch = watchDamage(this.world);
     this.seed = settings.seed ?? 1;
@@ -635,6 +644,8 @@ export class WormEnv {
     this.ropeThrown = this.worms.map(() => 0);
     // The decision each worm's next rope message will be listened to on.
     this.ropeReadyAt = this.worms.map(() => 0);
+    // Each worm's commitment to its last throw.
+    this.ropeHolds = this.worms.map(() => new RopeHold(this.ropeHold));
     this.foeRange = this.worms.map(() => null);
     this.totals = this.worms.map(() => ({}));
     this.episodeStartTick = this.world.qb;
@@ -644,8 +655,6 @@ export class WormEnv {
     // Goals are drawn after the views exist, because picking a spot means
     // reading the terrain and the views are what carry it.
     this.assignGoals();
-    // Each worm's commitment to its last throw.
-    this.ropeHolds = this.worms.map(() => new RopeHold(this.ropeHold));
     this.encodeObservations();
     return { observations: this.observations, info: this.info() };
   }
@@ -711,18 +720,18 @@ export class WormEnv {
           this.ropeReadyAt[agent] = this.decisions + this.ropeCooldown;
         }
       }
-      // Letting go of the rope is a jump press, because that is what it is in
-      // the game: the client sends the release on the press of Jump (with no
-      // weapon-change modifier held) and the NinjaRope key only ever throws.
-      // So a policy's release presses Jump — which also jumps, if the worm is
-      // standing, as it does for a person — and a jump pressed while the rope
-      // is out lets go of it. Pressed, not held: the engine's own jump fires on
-      // the edge too, and a key held across two decisions was pressed once.
-      const wasJumping = ((this.lastActions[agent]?.keys ?? 0) & KEYS.jump) !== 0;
-      const jumpPressed = (normalized.keys & KEYS.jump) !== 0 && !wasJumping;
       // A throw is kept for a while: during the hold another throw is ignored
       // and the jump key is dropped, so nothing below can let go of it.
       normalized = this.ropeHolds[agent].apply(normalized);
+      // Letting go of the rope is a jump press, because that is what it is in
+      // the game: the client sends the release on the press of Jump (with no
+      // weapon-change modifier held) and the NinjaRope key only ever throws.
+      // So a release presses Jump — which also jumps, if the worm is standing,
+      // as it does for a person — and a jump pressed while the rope is out
+      // lets go of it. Pressed, not held: the engine's own jump fires on the
+      // edge too, and a key held across two decisions was pressed once.
+      const wasJumping = ((this.lastActions[agent]?.keys ?? 0) & KEYS.jump) !== 0;
+      const jumpPressed = (normalized.keys & KEYS.jump) !== 0 && !wasJumping;
       if (normalized.rope === ROPE.release) {
         normalized = { ...normalized, keys: normalized.keys | KEYS.jump };
       } else if (normalized.rope === ROPE.none && jumpPressed && this.views[agent]?.self?.rope) {
@@ -889,6 +898,7 @@ export class WormEnv {
         this.worms.filter((_, other) => other !== agent),
         this.latency[agent] ?? 0,
         this.lastActions[agent] ?? null,
+        this.ropeHolds?.[agent]?.share ?? 0,
       );
       // Where this worm was told to go. `viewFromWorld` only knows what the
       // engine holds, and a goal is this environment's idea, so it is attached
@@ -898,7 +908,6 @@ export class WormEnv {
     });
     return this.views;
   }
-        this.ropeHolds?.[agent]?.share ?? 0,
 
   /** The expensive half, so it runs once per step and not once per view. */
   encodeObservations() {

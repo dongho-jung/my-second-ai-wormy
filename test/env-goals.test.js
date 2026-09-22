@@ -73,6 +73,20 @@ test("a near goal is within the radius, a few strides off, and standable", () =>
     assert.ok(goal.y + 48 >= 150, "goal floats with nothing under it");
   }
   assert.ok(found >= 30, `a hundred-pixel radius on open ground should nearly always find a spot, found ${found}`);
+  // Asked for somewhere above the worm, only rows at least that far up are
+  // drawn from — here the floor is below, so the sky above it, standing on
+  // nothing, is refused and there is nothing to offer.
+  assert.equal(groundedGoalNear(terrain, rng, from, 100, { abovePx: 48 }), null);
+  // From down on the floor with a ledge above, the ledge is what comes back.
+  for (let y = 100; y < 110; y++) for (let x = 150; x < 250; x++) data[y * width + x] = 1;
+  let above = 0;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const goal = groundedGoalNear(terrain, rng, { x: 200, y: 140 }, 100, { abovePx: 48 });
+    if (!goal) continue;
+    above++;
+    assert.ok(140 - goal.y >= 48, `goal at y=${goal.y} is not 48px above the worm at 140`);
+  }
+  assert.ok(above >= 20, `a ledge within reach should be found most of the time, found ${above}`);
   // A radius shorter than the closest allowed goal has nothing to offer.
   assert.equal(groundedGoalNear(terrain, rng, from, 30), null);
   // And nowhere standable within reach is null rather than a guess: the sky.

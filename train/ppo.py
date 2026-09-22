@@ -252,6 +252,18 @@ def parse_args(argv=None):
                             "does not change how much of an episode a worm spends attached — "
                             "about half either way — but it changes how long one throw lasts: "
                             "1.5 decisions at 0, 10.5 at 10. See ropeCooldown in src/env/env.js")
+    where.add_argument("--rope-hold", type=int, default=0,
+                       help="decisions a rope throw is committed to: another throw is ignored "
+                            "and the jump key dropped, so the rope gets to pull. The rope here "
+                            "reels the worm in on its own, but only once held for a while — "
+                            "after twelve decisions it is moving at four pixels a tick — and a "
+                            "policy choosing afresh fifteen times a second kept one for two "
+                            "decisions in the median. 0 leaves every decision free")
+    where.add_argument("--goal-above", type=float, default=0.0,
+                       help="what share of destinations are drawn at least --goal-above-px "
+                            "above the worm, where a jump does not reach. With half of them up "
+                            "there, the success curriculum cannot move on until the rope is used")
+    where.add_argument("--goal-above-px", type=int, default=48)
     where.add_argument("--goal-radius", default=None,
                        help="how far from the worm a destination is drawn, in pixels: one number, "
                             "or from-to to grow it over --goal-grow of the run. The movement task's "
@@ -551,6 +563,8 @@ def main(argv=None):
 
     if args.rope_cooldown > 0:
         config["ropeCooldown"] = args.rope_cooldown
+    if args.rope_hold > 0:
+        config["ropeHold"] = args.rope_hold
 
     if args.task == "movement":
         # Named rather than spelled out: the workers are configured over JSON,
@@ -562,9 +576,10 @@ def main(argv=None):
         config["goalRadiusPx"] = radius if len(radius) > 1 else radius[0]
         config["goalPatience"] = 450 if args.goal_patience is None else args.goal_patience
         config["goalRadiusMode"] = args.goal_curriculum
+        if args.goal_above > 0:
+            config["goalAboveShare"] = args.goal_above
+            config["goalAbovePx"] = args.goal_above_px
         if args.goal_curriculum == "success":
-    if args.rope_hold > 0:
-        config["ropeHold"] = args.rope_hold
             config["goalCurriculum"] = {"window": args.goal_window}
             if carried is not None and carried.get("goalRadius"):
                 # Carrying on: start where the radius had got to.
@@ -742,6 +757,8 @@ def main(argv=None):
             "goalPatience": config.get("goalPatience"),
             "ropeThrowCost": args.rope_throw_cost,
             "ropeCooldown": args.rope_cooldown,
+            "ropeHold": args.rope_hold,
+            "goalAbove": args.goal_above,
             "rolloutSteps": args.steps,
             "batch": args.steps * slots,
             "rolloutSteps": args.steps,
@@ -757,8 +774,6 @@ def main(argv=None):
             "engineSha256": layout.engine_sha256,
             "mod": layout.mod,
             "lr": args.lr,
-            "ropeHold": args.rope_hold,
-            "goalAbove": args.goal_above,
             "targetKL": args.target_kl,
             "bcCoef": args.bc_coef,
             # The page needs to know whether any worm is an older copy: without
