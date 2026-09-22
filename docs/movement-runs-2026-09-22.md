@@ -233,3 +233,33 @@ Changed on 2026-09-23, both runs restarted:
 - **Half the destinations are above the worm** (`--goal-above 0.5`, at least
   48 px up), where a jump does not reach, so the success curriculum cannot
   move on until the rope is used.
+
+## The same trace under a twelve-decision hold
+
+A local run on the changed interface (`--rope-hold 12`, the success curriculum
+from 96 px, half the destinations above) was played back the same way at 0.6M
+steps, one hour in. Per worm and match:
+
+| | |
+| --- | ---: |
+| throw choices | 542 (the head is still near uniform) |
+| throws that went through | 66 — one every 13-14 decisions, the hold plus a coin flip |
+| jump presses | 225 |
+| decisions attached | 695 of 900, being pulled up on 147 |
+| median time a rope was out | 39 decisions (2.6 s), 31 or more on 54% |
+| throws aimed above 60° | 70%; above 30°, 76% |
+| height gained while out | +19 px on a throw above 60°, −46 px on one below −30° |
+
+Ropes are let go by a jump 89% of the time; the rest lose their anchor (the
+dig key is random too) or end with the match. So the hold does what it was
+for: a rope is kept for 39 decisions in the median instead of 2, and the pull
+is felt on 147 decisions a match instead of 11. What it has not done yet is
+turn into destinations — 2-3 reached a match at 96-101 px, against 4.7-5.3 at
+115 px for the earlier runs at the same age, whose destinations were all on
+the ground. A worm hanging under a ceiling for three seconds at a time is
+slower to the ones on the floor; whether it learns to hang only for the ones
+above is what the two cluster runs are for.
+
+Both restarted at 04:30 KST on 2026-09-23 on `sha-3066320`, `a` holding 12
+and `b` 24, and their first matches read the same way: 0.8 and 0.7 reached at
+96 px, 65 and 35 throws, 693 and 789 decisions attached.
