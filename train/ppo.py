@@ -225,13 +225,14 @@ def parse_args(argv=None):
                             "learned from without restarting anything")
 
     probe = parser.add_argument_group("probing")
-    probe.add_argument("--probe-every", type=int, default=50,
+    probe.add_argument("--probe-every", type=int, default=None,
                        help="updates between playing the policy, on its own, against worms that "
                             "press nothing. Everything else on the training page is measured "
                             "against a moving target — itself, or its recent past — so none of it "
                             "says whether the policy can find and kill a worm that just stands "
                             "there, or how often it kills itself trying. This does. A few matches, "
-                            "about ten seconds; the figures land on the page as probe*. 0 never")
+                            "about ten seconds; the figures land on the page as probe*. 0 never. "
+                            "Unset: 50 for a fight, 0 for the movement task, which has nothing to kill")
     probe.add_argument("--probe-episodes", type=int, default=4, help="matches per probe")
 
     where = parser.add_argument_group("where it goes")
@@ -481,6 +482,8 @@ def pick_device(choice: str) -> torch.device:
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.probe_every is None:
+        args.probe_every = 0 if args.task == "movement" else 50
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     torch.set_num_threads(args.torch_threads)
