@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import struct
 import subprocess
 import sys
@@ -153,6 +154,15 @@ def main(argv=None):
     # same manifest route; the browser overlays them as ghosts. Loading the
     # manifest instead of drawing another random goal makes the picture auditable
     # against the numbers that selected best.pt.
+    config["checkpoint"] = {
+        "run": path.parent.name,
+        "file": path.name,
+        "step": int(checkpoint.get("step", 0)),
+        "benchmarkSuccess": checkpoint.get("benchmarkSuccess"),
+        "benchmarkSeconds": checkpoint.get("benchmarkSeconds"),
+        "loadedAt": time.time(),
+    }
+
     race = None
     if (shape.get("world") or {}).get("goals"):
         manifest_path = path.parent / "benchmark.json"
@@ -320,4 +330,8 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    def stop(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stop)
     main()

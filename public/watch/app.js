@@ -202,6 +202,15 @@ function renderWorms() {
       + `benchmark reference + ${Math.max(0, state.worms.length - 1)} sampled · `
       + `same start and goal · ${state.speed}× speed`
     : `${state.map.name} ${state.map.width}×${state.map.height} · ${state.worms.length} worms · ${state.speed}× speed`;
+  const checkpoint = state.checkpoint;
+  element("checkpoint").textContent = checkpoint
+    ? `${checkpoint.file} · ${Number(checkpoint.step).toLocaleString()} steps · `
+      + `${checkpoint.run}`
+      + (Number.isFinite(checkpoint.benchmarkSuccess)
+        ? ` · fixed success ${(checkpoint.benchmarkSuccess * 100).toFixed(1)}%` : "")
+      + (Number.isFinite(checkpoint.benchmarkSeconds)
+        ? ` · ${checkpoint.benchmarkSeconds.toFixed(1)}s including failures` : "")
+    : "";
 }
 
 function subscribe() {

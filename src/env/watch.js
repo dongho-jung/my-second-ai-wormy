@@ -164,6 +164,7 @@ const state = () => {
     episodes,
     seed: env.episodeSeed,
     speed,
+    checkpoint: config.checkpoint ?? null,
     levelVersion,
     mode: racing ? "ghost-race" : "match",
     race: race

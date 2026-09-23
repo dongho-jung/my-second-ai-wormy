@@ -17,6 +17,7 @@
     </header>
 
     <p class="alert" id="alert" hidden></p>
+    <p class="footnote" id="checkpoint"></p>
 
     <main class="stage">
       <div class="canvas-wrap">
@@ -37,6 +38,9 @@
       racer gets the same map, start, goal and clock; collisions, weapons, ropes
       and terrain changes in one world cannot affect another. Ghost 1 takes the
       deterministic actions used to score best.pt; the others sample the same policy.
+      This is a model snapshot. Click Watch again on the training page to load
+      an updated best.pt. The fixed benchmark gives every attempt its full time;
+      the race can skip remaining ghosts after arrivals stop.
     </p>
   </body>
 </html>

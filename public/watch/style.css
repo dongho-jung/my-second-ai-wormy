@@ -190,6 +190,7 @@ canvas {
 }
 
 .footnote {
+  overflow-wrap: anywhere;
   margin: 10px 0 0;
   color: var(--dim);
   max-width: 78ch;

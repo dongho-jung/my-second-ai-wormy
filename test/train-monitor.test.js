@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { get } from "node:http";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, readFile, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { createMonitorServer } from "../src/train/monitor.js";
 import {
   createRun,
@@ -18,6 +18,94 @@ async function runsDir() {
   const path = await mkdtemp(join(tmpdir(), "wormy-runs-"));
   return pathToFileURL(`${path}/`);
 }
+
+async function waitUntil(check) {
+  const until = Date.now() + 3000;
+  while (Date.now() < until) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+  assert.fail("viewer lifecycle did not settle");
+}
+
+async function viewerFixture(dir) {
+  const script = new URL("viewer.cjs", dir);
+  await writeFile(script, `
+    const fs = require('node:fs');
+    const http = require('node:http');
+    const path = process.argv[process.argv.indexOf('--checkpoint') + 1];
+    const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+    fs.appendFileSync(path + '.events', 'start ' + data.version + '\\n');
+    process.on('SIGTERM', () => setTimeout(() => {
+      fs.appendFileSync(path + '.events', 'stop ' + data.version + '\\n');
+      process.exit(0);
+    }, 30));
+    const server = http.createServer((req, res) => {
+      res.end(JSON.stringify(data));
+      if (req.url === '/exit') setImmediate(() => process.exit(0));
+    });
+    server.listen(0, '127.0.0.1', () => {
+      if (!data.pending) console.log('viewer http://127.0.0.1:' + server.address().port);
+    });
+  `);
+  return fileURLToPath(script);
+}
+
+test("Watch reloads changed best.pt, reuses unchanged snapshots and releases the old viewer", { timeout: 10_000 }, async () => {
+  const dir = await runsDir();
+  const run = await createRun({ dir });
+  const checkpoint = new URL(`${run.id}/best.pt`, dir);
+  await writeFile(checkpoint, JSON.stringify({ version: 1 }));
+  const server = await createMonitorServer({ port: 0, dir, viewerScript: await viewerFixture(dir) });
+  const start = () => fetch(`${server.origin}/runs/${run.id}/watch`, { method: "POST" }).then((r) => r.json());
+  try {
+    const [first, duplicate] = await Promise.all([start(), start()]);
+    assert.equal(duplicate.url, first.url);
+    assert.equal(duplicate.alreadyRunning, true);
+    assert.equal((await (await fetch(first.url)).json()).version, 1);
+    const replacement = new URL(`${run.id}/next.pt`, dir);
+    await writeFile(replacement, JSON.stringify({ version: 2 }));
+    await rename(replacement, checkpoint);
+    const second = await start();
+    assert.equal((await (await fetch(second.url)).json()).version, 2);
+    assert.match(await readFile(new URL(`${run.id}/best.pt.events`, dir), "utf8"), /start 1\nstop 1\nstart 2/);
+    await fetch(`${second.url}/exit`);
+    await waitUntil(async () => (await (await fetch(`${server.origin}/watch`)).json()).watching === null);
+    const restarted = await start();
+    assert.equal((await (await fetch(restarted.url)).json()).version, 2);
+    await server.close();
+    assert.match(await readFile(new URL(`${run.id}/best.pt.events`, dir), "utf8"), /stop 2\n$/);
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("stopping Watch cancels pending starts after client disconnect and permits a fresh start", { timeout: 10_000 }, async () => {
+  const dir = await runsDir();
+  const run = await createRun({ dir });
+  const checkpoint = new URL(`${run.id}/best.pt`, dir);
+  await writeFile(checkpoint, JSON.stringify({ version: 1, pending: true }));
+  const server = await createMonitorServer({ port: 0, dir, viewerScript: await viewerFixture(dir) });
+  const endpoint = `${server.origin}/runs/${run.id}/watch`;
+  const abort = new AbortController();
+  try {
+    const disconnected = fetch(endpoint, { method: "POST", signal: abort.signal }).catch(() => null);
+    await waitUntil(async () => (await (await fetch(`${server.origin}/watch`)).json()).watching === run.id);
+    const queued = fetch(endpoint, { method: "POST" }).then((r) => r.json());
+    abort.abort();
+    await disconnected;
+    await fetch(`${server.origin}/watch/stop`, { method: "POST" });
+    assert.match((await queued).error, /cancelled|stopped/i);
+    assert.equal((await (await fetch(`${server.origin}/watch`)).json()).watching, null);
+    await writeFile(checkpoint, JSON.stringify({ version: 2 }));
+    const fresh = await (await fetch(endpoint, { method: "POST" })).json();
+    assert.equal((await (await fetch(fresh.url)).json()).version, 2);
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 /** Reads named SSE frames off a live response, one at a time. */
 function frames(response) {

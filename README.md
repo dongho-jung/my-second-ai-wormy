@@ -412,6 +412,9 @@ owns a separate engine world, including its own worms, projectiles and mutable
 terrain, so collisions, ropes, shots and digging cannot change another
 attempt. Ghost 1 uses the greedy actions that produced the fixed benchmark
 score; the remaining ghosts sample the same policy to show its variation.
+The viewer identifies the loaded checkpoint, training step and fixed score.
+It keeps that snapshot for the session; clicking Watch again reloads a changed
+`best.pt`, while repeated clicks on an unchanged snapshot reuse the viewer.
 Finish rank and time are shown before the next fixed route starts. Once no new
 ghost has arrived for three game seconds, remaining stragglers are marked DNF;
 one failed sample no longer holds the viewer for the whole 30-second horizon.

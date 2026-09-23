@@ -19,6 +19,7 @@ import json
 import random
 import signal
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -463,22 +464,32 @@ def resolve_checkpoint(where: str) -> Path:
 def save(policy, layout, shape, step, path, **extra):
     """A checkpoint carries the shape of what it expects, so a viewer can load it
     without being told how the run was configured."""
-    torch.save(
-        {
-            "policy": policy.state_dict(),
-            "layout": {
-                "vectorSize": layout.vector_size,
-                "headSizes": layout.head_sizes,
-                **shape,
-                "agents": layout.agents,
-                "frameskip": layout.frameskip,
-                "episodeTicks": layout.episode_ticks,
+    # Readers keep seeing the previous complete checkpoint until its replacement
+    # is fully written. Watch can be opened while the trainer saves best.pt.
+    path = Path(path)
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}-", delete=False) as file:
+        temporary = Path(file.name)
+    try:
+        torch.save(
+            {
+                "policy": policy.state_dict(),
+                "layout": {
+                    "vectorSize": layout.vector_size,
+                    "headSizes": layout.head_sizes,
+                    **shape,
+                    "agents": layout.agents,
+                    "frameskip": layout.frameskip,
+                    "episodeTicks": layout.episode_ticks,
+                },
+                "step": step,
+                **extra,
             },
-            "step": step,
-            **extra,
-        },
-        path,
-    )
+            temporary,
+        )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
 
 
 def probe_against_still(policy, config, args, device):
