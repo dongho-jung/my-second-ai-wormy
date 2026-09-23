@@ -401,7 +401,9 @@ selected run and opens it. For a movement run it replays `benchmark.json`: all
 coloured worms get the exact same fixed map, start, goal and clock. Each ghost
 owns a separate engine world, including its own worms, projectiles and mutable
 terrain, so collisions, ropes, shots and digging cannot change another
-attempt. Finish rank and time are shown before the next fixed route starts.
+attempt. Ghost 1 uses the greedy actions that produced the fixed benchmark
+score; the remaining ghosts sample the same policy to show its variation.
+Finish rank and time are shown before the next fixed route starts.
 
 For a combat run, one match is played at the speed the game actually runs at
 and drawn in the browser on port 8769: the terrain the worms are digging

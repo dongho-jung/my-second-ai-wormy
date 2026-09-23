@@ -55,9 +55,17 @@ h2 {
 
 .status {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   margin-left: auto;
+  min-width: 0;
+}
+
+#heading {
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .chip {
@@ -158,6 +166,10 @@ canvas {
   border-color: color-mix(in srgb, var(--live) 55%, var(--edge));
 }
 
+.worms li[data-policy-mode="benchmark"] {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--edge));
+}
+
 .bar {
   grid-column: 1 / -1;
   height: 3px;
@@ -176,4 +188,16 @@ canvas {
   margin: 10px 0 0;
   color: var(--dim);
   max-width: 78ch;
+}
+
+@media (max-width: 600px) {
+  .status {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
+  #heading {
+    text-align: left;
+  }
 }

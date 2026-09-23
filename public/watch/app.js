@@ -156,12 +156,15 @@ function renderWorms() {
       const row = document.createElement("li");
       row.dataset.dead = String(!worm.alive && !race);
       row.dataset.finished = String(worm.finishSeconds !== null);
+      row.dataset.policyMode = worm.policyMode ?? "";
       const swatch = document.createElement("span");
       swatch.className = "swatch";
       swatch.style.background = WORM_COLOURS[worm.id % WORM_COLOURS.length];
       const name = document.createElement("span");
       name.textContent = race
-        ? `Ghost ${worm.id + 1}`
+        ? worm.policyMode === "benchmark"
+          ? `Ghost ${worm.id + 1} · benchmark`
+          : `Ghost ${worm.id + 1} · sampled`
         : worm.alive
           ? `${worm.weapon ?? "—"} ×${worm.ammo}`
           : "waiting to respawn";
@@ -192,7 +195,8 @@ function renderWorms() {
     : `episode ${state.episode} · seed ${state.seed} · ${(state.elapsedTicks / 60).toFixed(1)}s`;
   element("heading").textContent = race
     ? `${state.map.name} ${state.map.width}×${state.map.height} · `
-      + `${state.worms.length} isolated ghosts · same start and goal · ${state.speed}× speed`
+      + `benchmark reference + ${Math.max(0, state.worms.length - 1)} sampled · `
+      + `same start and goal · ${state.speed}× speed`
     : `${state.map.name} ${state.map.width}×${state.map.height} · ${state.worms.length} worms · ${state.speed}× speed`;
 }
 

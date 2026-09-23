@@ -195,6 +195,7 @@ const state = () => {
       // is going anywhere on purpose, which is the whole question here.
       goal: race?.goal ?? progress?.goal ?? null,
       ghost: racing,
+      policyMode: racing ? (config.race.racerModes?.[id] ?? "sample") : null,
       finishSeconds: finish?.seconds ?? null,
       rank,
       score: scores[id],

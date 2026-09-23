@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.distributions import Categorical
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -185,6 +186,14 @@ def main(argv=None):
                 "fingerprint": manifest.get("fingerprint"),
                 "episodeTicks": manifest.get("episodeTicks", shape.get("episodeTicks", 1800)),
                 "scenarios": scenarios,
+                # The first ghost is the exact deterministic policy used to
+                # select best.pt. The others sample the same policy, so the
+                # screen shows both its score-producing path and its spread.
+                "racerModes": (
+                    ["benchmark"] * agents
+                    if args.greedy
+                    else ["benchmark", *(["sample"] * max(0, agents - 1))]
+                ),
             },
         )
         race = config["race"]
@@ -271,6 +280,20 @@ def main(argv=None):
                         vectors, patches, maps, carried, restart=restarts
                     )
                     heads = torch.stack([head.argmax(dim=1) for head in logits], dim=1)
+                elif race:
+                    # The fixed benchmark that selected best.pt is greedy.
+                    # Keep one visible racer on that exact rule while the
+                    # remaining ghosts show stochastic attempts from the same
+                    # weights. Sampling every ghost made Watch look worse than
+                    # the score it claimed to replay.
+                    logits, _, carried = policy(
+                        vectors, patches, maps, carried, restart=restarts
+                    )
+                    heads = torch.stack(
+                        [Categorical(logits=head).sample() for head in logits],
+                        dim=1,
+                    )
+                    heads[0] = torch.stack([head[0].argmax() for head in logits])
                 else:
                     heads, _, _, _, carried = policy.act(
                         vectors,
