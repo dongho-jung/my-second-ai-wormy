@@ -24,6 +24,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from policy import policy_from_shape
+from movement_benchmark import fixed_movement_world
 from run import DEFAULT_RUNS
 from workers import REPO, _read_frame
 
@@ -146,6 +147,48 @@ def main(argv=None):
                 flush=True,
             )
 
+    # A movement Watch is the fixed benchmark made visible. Every coloured
+    # worm is an independent simulation of the same checkpoint on the exact
+    # same manifest route; the browser overlays them as ghosts. Loading the
+    # manifest instead of drawing another random goal makes the picture auditable
+    # against the numbers that selected best.pt.
+    race = None
+    if (shape.get("world") or {}).get("goals"):
+        manifest_path = path.parent / "benchmark.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError(
+                f"movement run {path.parent.name} has no benchmark.json; "
+                "it predates fixed-route watching"
+            )
+        manifest = json.loads(manifest_path.read_text())
+        scenarios = manifest.get("scenarios")
+        if not isinstance(scenarios, list) or not scenarios:
+            raise RuntimeError(f"{manifest_path} has no fixed scenarios")
+        config = fixed_movement_world(
+            config,
+            shape,
+            levels=config["levelFiles"],
+            generated_maps=int(config.get("levelPool", 0)),
+            envs=1,
+            seed=int(manifest.get("seed", scenarios[0]["seed"])),
+            episode_ticks=int(manifest.get("episodeTicks", shape.get("episodeTicks", 1800))),
+        )
+        config.update(
+            agents=agents,
+            speed=args.speed,
+            port=args.port,
+            host=args.host,
+            publicOrigin=args.public_origin or None,
+            basePath=args.base_path or "",
+            race={
+                "schemaVersion": manifest.get("schemaVersion", 1),
+                "fingerprint": manifest.get("fingerprint"),
+                "episodeTicks": manifest.get("episodeTicks", shape.get("episodeTicks", 1800)),
+                "scenarios": scenarios,
+            },
+        )
+        race = config["race"]
+
     if args.seed is not None:
         config["seed"] = args.seed
 
@@ -164,9 +207,18 @@ def main(argv=None):
                 f"the policy wants a vector of {shape['vectorSize']} and the match "
                 f"gives {layout['vectorSize']}"
             )
+        saved_reward = checkpoint.get("reward")
         print(
             f"watching {path.parent.name} ({checkpoint.get('step', 0):,} steps"
-            + (f", reward {checkpoint['reward']:.2f}" if "reward" in checkpoint else "")
+            + (
+                f", reward {saved_reward:.2f}"
+                if isinstance(saved_reward, (int, float))
+                else ""
+            )
+            + (
+                f", {agents} isolated ghosts over {len(race['scenarios'])} fixed routes"
+                if race else ""
+            )
             + f") — {layout['viewer']}",
             flush=True,
         )
@@ -174,6 +226,7 @@ def main(argv=None):
         patch_bytes = layout["agents"] * layout["patchCells"]
         use_patch = shape.get("usePatch", True) and patch_bytes > 0
         map_bytes = layout["agents"] * layout.get("mapCells", 0)
+        restart_bytes = layout.get("restartBytes", 0)
         use_map = shape.get("useMap", False) and map_bytes > 0
         heads_count = len(layout["heads"])
         # Carried from one decision to the next: without this the policy is
@@ -202,13 +255,30 @@ def main(argv=None):
                     .reshape(layout["agents"], -1)
                     .copy()
                 ).to(device)
+            restarts = None
+            if restart_bytes:
+                restarts = torch.from_numpy(
+                    np.frombuffer(
+                        frame,
+                        dtype=np.uint8,
+                        count=restart_bytes,
+                        offset=vector_bytes + patch_bytes + map_bytes,
+                    ).copy()
+                ).to(device=device, dtype=torch.float32)
             with torch.no_grad():
                 if args.greedy:
-                    logits, _, carried = policy(vectors, patches, maps, carried)
+                    logits, _, carried = policy(
+                        vectors, patches, maps, carried, restart=restarts
+                    )
                     heads = torch.stack([head.argmax(dim=1) for head in logits], dim=1)
                 else:
                     heads, _, _, _, carried = policy.act(
-                        vectors, patches, maps, want_entropy=False, carried=carried
+                        vectors,
+                        patches,
+                        maps,
+                        want_entropy=False,
+                        carried=carried,
+                        restart=restarts,
                     )
             block = heads.to(torch.uint8).cpu().numpy().tobytes()
             viewer.stdin.write(struct.pack("<I", heads_count * layout["agents"]) + block)

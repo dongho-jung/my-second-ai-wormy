@@ -320,6 +320,7 @@ test("the worker speaks the frames it says it will", { skip }, async () => {
     assert.equal(layout.patchShape[0], 8);
     assert.equal(layout.mapChannels, 5);
     assert.equal(layout.mapCells, 5 * 32 * 32);
+    assert.deepEqual(layout.mapShape, [5, 32, 32]);
     assert.equal(layout.actionBytes, 2 * 3 * HEADS);
     assert.deepEqual(layout.order, ["vectors", "patches", "patches2", "maps", "rewards", "dones",
       "restarts", "stats"]);

@@ -211,6 +211,26 @@ test("a goal's age is counted, so a caller can give up on it", () => {
   assert.equal(progress.update({ x: 100, y: 100 }).goalSteps, 0, "no goal, no age");
 });
 
+test("best-distance progress permits a detour without paying twice for the return", () => {
+  const progress = new Progress({ teleportPx: 60 });
+  progress.setGoal({ x: 200, y: 100 }, { x: 100, y: 100 });
+  progress.update({ x: 100, y: 100 });
+
+  const away = progress.update({ x: 80, y: 100 });
+  assert.equal(away.goalDelta, -20, "signed progress still describes moving away");
+  assert.equal(away.goalBestDelta, 0, "a required retreat is neutral in best mode");
+
+  const back = progress.update({ x: 100, y: 100 });
+  assert.equal(back.goalBestDelta, 0, "returning over already credited ground pays nothing");
+
+  const closer = progress.update({ x: 120, y: 100 });
+  assert.equal(closer.goalBestDelta, 20, "only a new closest point pays");
+
+  progress.restart();
+  const respawned = progress.update({ x: 180, y: 100 });
+  assert.equal(respawned.goalBestDelta, 0, "a closer respawn is not movement progress");
+});
+
 test("weights are the one place the balance lives", () => {
   const brutal = { ...DEFAULT_WEIGHTS, kill: 10, death: 0 };
   const { reward } = combatReward(

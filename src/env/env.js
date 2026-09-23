@@ -221,6 +221,14 @@ export const DEFAULTS = {
   // the other half and no more.
   goalAboveShare: 0,
   goalAbovePx: 48,
+  // What share deliberately have solid terrain across the straight line from
+  // start to destination. These are the tasks that teach going around a ledge
+  // instead of blindly following the goal arrow into its underside.
+  goalDetourShare: 0,
+  // `signed` pays every pixel closer and charges every pixel farther. `best`
+  // pays only when the worm beats its closest distance so far: a necessary
+  // detour is neutral, while pacing over the same ground cannot farm reward.
+  goalProgressMode: "signed",
   // Decisions between re-reading the whole level for the map observation.
   // Reading it costs every pixel, so it is amortised: the terrain only changes
   // where somebody is digging, and four seconds of staleness at this scale is a
@@ -277,12 +285,45 @@ export function groundedGoal(terrain, rng, tries = 64) {
 const GOAL_MIN_PX = 40;
 
 /**
+ * Whether the straight route crosses a real thickness of solid terrain.
+ *
+ * The first and last few pixels are ignored: the worm starts on ground and a
+ * valid goal has ground below it, neither of which makes the route a detour.
+ * A run of several solid pixels catches walls and ledges without classifying a
+ * one-pixel fleck of dirt as a navigation problem.
+ */
+export function directRouteBlocked(terrain, from, to, { edgePx = 12, solidRunPx = 6 } = {}) {
+  if (!terrain || !from || !to) return false;
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance <= edgePx * 2 + solidRunPx) return false;
+  let run = 0;
+  for (let along = edgePx; along <= distance - edgePx; along++) {
+    const share = along / distance;
+    if (solidAt(terrain, from.x + dx * share, from.y + dy * share)) {
+      run++;
+      if (run >= solidRunPx) return true;
+    } else {
+      run = 0;
+    }
+  }
+  return false;
+}
+
+/**
  * The same, within `radius` pixels of `from`. Drawn from the square around the
  * point and kept when inside the circle and at least a few strides away, so a
  * short radius is a short walk and not a spot underfoot. Null when nothing
  * standable is that close, which a caller falls back from.
  */
-export function groundedGoalNear(terrain, rng, from, radius, { tries = 64, abovePx = 0 } = {}) {
+export function groundedGoalNear(
+  terrain,
+  rng,
+  from,
+  radius,
+  { tries = 64, abovePx = 0, blocked = false } = {},
+) {
   if (!terrain || !from || !(radius > GOAL_MIN_PX)) return null;
   const left = Math.max(0, Math.floor(from.x - radius));
   const right = Math.min(terrain.width - 1, Math.ceil(from.x + radius));
@@ -297,7 +338,11 @@ export function groundedGoalNear(terrain, rng, from, radius, { tries = 64, above
     if (distance > radius || distance < GOAL_MIN_PX) continue;
     if (solidAt(terrain, x, y)) continue;
     for (let below = 1; below <= GOAL_GROUND_PX; below++) {
-      if (solidAt(terrain, x, y + below)) return { x, y };
+      if (solidAt(terrain, x, y + below)) {
+        const goal = { x, y };
+        if (!blocked || directRouteBlocked(terrain, from, goal)) return goal;
+        break;
+      }
     }
   }
   return null;
@@ -328,9 +373,21 @@ function goalMaker(goals) {
       const radius = env.goalRadius();
       if (radius !== null) {
         const from = env.views[agent]?.self?.position;
+        // Draw this choice once. Retrying candidates must not silently change
+        // the requested class just because the first point was unsuitable.
+        const wantsDetour = env.goalDetourShare > 0 && env.rng() < env.goalDetourShare;
+        const wantsAbove = env.goalAboveShare > 0 && env.rng() < env.goalAboveShare;
+        if (wantsDetour) {
+          const around = groundedGoalNear(terrain, env.rng, from, radius, {
+            tries: 192,
+            abovePx: wantsAbove ? env.goalAbovePx : 0,
+            blocked: true,
+          });
+          if (around) return { ...around, detour: true };
+        }
         // Some of the time, somewhere a jump does not reach; the rest of the
         // time anywhere within reach, which may still be up.
-        if (env.goalAboveShare > 0 && env.rng() < env.goalAboveShare) {
+        if (wantsAbove) {
           const up = groundedGoalNear(terrain, env.rng, from, radius, { abovePx: env.goalAbovePx });
           if (up) return up;
         }
@@ -373,6 +430,10 @@ export class WormEnv {
     this.goalProgressFloor = settings.goalProgressFloor ?? 0;
     this.goalProgressStartAt = Math.max(0, Math.trunc(settings.goalProgressStartAt ?? 0));
     this.goalProgressScale = 1;
+    this.goalProgressMode = settings.goalProgressMode ?? "signed";
+    if (!["signed", "best"].includes(this.goalProgressMode)) {
+      throw new Error(`goalProgressMode must be signed or best, got ${this.goalProgressMode}`);
+    }
     if (this.goalProgressFullAt > 0) {
       const gone = Math.min(
         1,
@@ -442,6 +503,8 @@ export class WormEnv {
     this.ropeHold = Math.max(0, Math.trunc(settings.ropeHold ?? 0));
     this.goalAboveShare = Math.min(1, Math.max(0, settings.goalAboveShare ?? 0));
     this.goalAbovePx = Math.max(0, settings.goalAbovePx ?? 0);
+    this.goalDetourShare = Math.min(1, Math.max(0, settings.goalDetourShare ?? 0));
+    this.makeStart = typeof settings.starts === "function" ? settings.starts : null;
     this.reward = settings.reward ?? combatReward;
     // A fresh level per episode by default: one map teaches one map.
     this.makeLevel =
@@ -669,6 +732,19 @@ export class WormEnv {
         loadout,
       }),
     );
+    if (this.makeStart) {
+      this.worms.forEach((worm, agent) => {
+        const start = this.makeStart(this, agent);
+        if (!start) return;
+        worm.x = start.x;
+        worm.y = start.y;
+        worm.f = 0;
+        worm.b = 0;
+        worm.Wa = 0;
+        worm.Fa.Sc = false;
+        worm.Fa.jc = false;
+      });
+    }
     const [low, high] = this.inputLatencyTicks;
     // One delay per worm per episode: a connection does not change its mind
     // mid-match either.
@@ -745,6 +821,10 @@ export class WormEnv {
       progress.setGoal(this.makeGoal(this, agent) ?? null, position);
       if (progress.goal) {
         this.totals[agent].goalsAssigned = assigned + 1;
+        if (progress.goal.detour) {
+          this.totals[agent].goalsDetourAssigned =
+            (this.totals[agent].goalsDetourAssigned ?? 0) + 1;
+        }
         this.totals[agent].goalAssignedPx =
           (this.totals[agent].goalAssignedPx ?? 0) + (progress.goalDirectPx ?? 0);
         if (assigned === 0 && position) {
@@ -752,6 +832,7 @@ export class WormEnv {
           this.totals[agent].goalStartY = position.y;
           this.totals[agent].goalTargetX = progress.goal.x;
           this.totals[agent].goalTargetY = progress.goal.y;
+          this.totals[agent].goalDetour = progress.goal.detour ? 1 : 0;
         }
       }
       if (this.views[agent]) this.views[agent].goal = progress.goal;
@@ -916,9 +997,13 @@ export class WormEnv {
         this.deadlineCurriculum?.record(false);
         this.assignGoals(agent);
       }
+      const rewardedProgress =
+        this.goalProgressMode === "best"
+          ? { ...moved, goalDelta: moved.goalBestDelta }
+          : moved;
       const outcome = this.reward(
         events,
-        { ...moved, ...this.#aimAt(agent), ropeThrows: this.ropeThrown[agent] },
+        { ...rewardedProgress, ...this.#aimAt(agent), ropeThrows: this.ropeThrown[agent] },
         this.weights,
         this.shaping,
         this.goalProgressScale,

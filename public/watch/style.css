@@ -154,6 +154,10 @@ canvas {
   opacity: 0.45;
 }
 
+.worms li[data-finished="true"] {
+  border-color: color-mix(in srgb, var(--live) 55%, var(--edge));
+}
+
 .bar {
   grid-column: 1 / -1;
   height: 3px;

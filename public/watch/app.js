@@ -59,6 +59,28 @@ async function pullLevel() {
 function draw() {
   if (painted) context.drawImage(terrain, 0, 0);
   if (!state) return;
+  if (state.race) {
+    const { start, goal } = state.race;
+    context.strokeStyle = "#e8e0d4";
+    context.globalAlpha = 0.45;
+    context.lineWidth = 1;
+    context.setLineDash([3, 4]);
+    context.beginPath();
+    context.moveTo(start.x, start.y);
+    context.lineTo(goal.x, goal.y);
+    context.stroke();
+    context.setLineDash([]);
+    context.globalAlpha = 1;
+    context.fillStyle = "#78bc7b";
+    context.fillRect(Math.round(start.x) - 2, Math.round(start.y) - 2, 5, 5);
+    context.strokeStyle = "#f3e6d4";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.arc(goal.x, goal.y, GOAL_RADIUS_PX, 0, Math.PI * 2);
+    context.stroke();
+    context.fillStyle = "#f3e6d4";
+    context.fillRect(Math.round(goal.x) - 2, Math.round(goal.y) - 2, 5, 5);
+  }
   for (const shot of state.projectiles) {
     context.fillStyle = SHOT_COLOUR;
     context.fillRect(Math.round(shot.x), Math.round(shot.y), 1, 1);
@@ -70,7 +92,7 @@ function draw() {
     // so a crowd of them does not bury the worms. The circle is the arrival
     // radius the environment actually pays on, not a decoration: inside it the
     // goal is reached and the next one is handed out.
-    if (worm.goal) {
+    if (worm.goal && !state.race) {
       context.strokeStyle = colour;
       context.globalAlpha = 0.3;
       context.lineWidth = 1;
@@ -97,6 +119,7 @@ function draw() {
       context.stroke();
     }
     context.fillStyle = colour;
+    context.globalAlpha = worm.finishSeconds === null ? 0.9 : 0.65;
     context.fillRect(Math.round(worm.x) - 1, Math.round(worm.y) - 2, 3, 5);
     // Where it is aiming, which is most of what a worm is about to do.
     context.strokeStyle = colour;
@@ -106,38 +129,71 @@ function draw() {
     context.lineTo(worm.x + Math.cos(worm.aim) * 12, worm.y + Math.sin(worm.aim) * 12);
     context.stroke();
     context.globalAlpha = 1;
+    if (state.race) {
+      context.fillStyle = colour;
+      context.font = "9px ui-monospace, monospace";
+      context.fillText(String(worm.id + 1), Math.round(worm.x) + 4, Math.round(worm.y) - 4);
+    }
   }
 }
 
 function renderWorms() {
   if (!state) return;
+  const race = state.race;
+  const direct = race
+    ? Math.hypot(race.goal.x - race.start.x, race.goal.y - race.start.y)
+    : 0;
+  const worms = race
+    ? [...state.worms].sort((a, b) => {
+        if (a.rank && b.rank) return a.rank - b.rank;
+        if (a.rank) return -1;
+        if (b.rank) return 1;
+        return a.id - b.id;
+      })
+    : state.worms;
   element("worms").replaceChildren(
-    ...state.worms.map((worm) => {
+    ...worms.map((worm) => {
       const row = document.createElement("li");
-      row.dataset.dead = String(!worm.alive);
+      row.dataset.dead = String(!worm.alive && !race);
+      row.dataset.finished = String(worm.finishSeconds !== null);
       const swatch = document.createElement("span");
       swatch.className = "swatch";
       swatch.style.background = WORM_COLOURS[worm.id % WORM_COLOURS.length];
       const name = document.createElement("span");
-      name.textContent = worm.alive
-        ? `${worm.weapon ?? "—"} ×${worm.ammo}`
-        : "waiting to respawn";
+      name.textContent = race
+        ? `Ghost ${worm.id + 1}`
+        : worm.alive
+          ? `${worm.weapon ?? "—"} ×${worm.ammo}`
+          : "waiting to respawn";
       const facts = document.createElement("span");
       facts.className = "facts";
-      facts.textContent = `${worm.score.kills}k ${worm.score.deaths}d · ${Math.round(worm.health)} hp`;
+      const remaining = race
+        ? Math.hypot(race.goal.x - worm.x, race.goal.y - worm.y)
+        : 0;
+      facts.textContent = race
+        ? worm.finishSeconds !== null
+          ? `#${worm.rank} · ${worm.finishSeconds.toFixed(1)}s`
+          : `${Math.round(remaining)}px left`
+        : `${worm.score.kills}k ${worm.score.deaths}d · ${Math.round(worm.health)} hp`;
       const bar = document.createElement("span");
       bar.className = "bar";
       const fill = document.createElement("span");
-      fill.style.width = `${Math.max(0, Math.min(100, worm.health))}%`;
+      fill.style.width = race
+        ? `${Math.max(0, Math.min(100, (1 - remaining / Math.max(1, direct)) * 100))}%`
+        : `${Math.max(0, Math.min(100, worm.health))}%`;
       bar.append(fill);
       row.append(swatch, name, facts, bar);
       return row;
     }),
   );
-  element("episode").textContent =
-    `episode ${state.episode} · seed ${state.seed} · ${(state.elapsedTicks / 60).toFixed(1)}s`;
-  element("heading").textContent =
-    `${state.map.name} ${state.map.width}×${state.map.height} · ${state.worms.length} worms · ${state.speed}× speed`;
+  element("episode").textContent = race
+    ? `route ${race.scenario}/${race.scenarios} · seed ${state.seed} · `
+      + `${(state.elapsedTicks / 60).toFixed(1)}s${race.detour ? " · detour" : ""}`
+    : `episode ${state.episode} · seed ${state.seed} · ${(state.elapsedTicks / 60).toFixed(1)}s`;
+  element("heading").textContent = race
+    ? `${state.map.name} ${state.map.width}×${state.map.height} · `
+      + `${state.worms.length} isolated ghosts · same start and goal · ${state.speed}× speed`
+    : `${state.map.name} ${state.map.width}×${state.map.height} · ${state.worms.length} worms · ${state.speed}× speed`;
 }
 
 function subscribe() {
@@ -146,7 +202,7 @@ function subscribe() {
     state = JSON.parse(event.data);
     if (state.levelVersion !== levelVersion) void pullLevel();
     const chip = element("status");
-    chip.textContent = "playing";
+    chip.textContent = state.race?.done ? "results" : state.race ? "racing" : "playing";
     chip.dataset.tone = "true";
     element("alert").hidden = true;
     renderWorms();

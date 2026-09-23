@@ -52,6 +52,13 @@ export class Progress {
     // Keep the old shaping boundary: the first update establishes the distance
     // used by goalDelta and does not earn progress for changing destinations.
     this.goalDistance = null;
+    // The best straight-line distance reached so far. Some routes have to go
+    // away from the destination before they can go around a wall or climb a
+    // ledge. `goalBestDelta` rewards only a new closest point: the detour is
+    // neutral instead of punished, and walking back and forth cannot collect
+    // the same progress twice.
+    this.goalBestDistance = initialDistance;
+    this.skipGoalBestCredit = false;
     // The distance that actually has to be covered. Arrival is a circle rather
     // than one exact pixel, so paying or reporting the whole centre-to-centre
     // distance would make a perfect straight route look inefficient by the
@@ -75,6 +82,8 @@ export class Progress {
     this.stuckSteps = 0;
     this.goal = goal;
     this.goalDistance = null;
+    this.goalBestDistance = null;
+    this.skipGoalBestCredit = false;
     this.goalDirectPx = null;
     this.goalPathPx = 0;
     this.goalLastPosition = null;
@@ -91,6 +100,9 @@ export class Progress {
     this.stuckSteps = 0;
     this.cell = -1;
     this.goalDistance = null;
+    // A respawn may put the worm closer to its goal. Remember the previous
+    // record, but do not pay for a teleport on the first live frame.
+    this.skipGoalBestCredit = true;
     // A death or a respawn must not look like a very fast piece of travel.
     // Keep the goal and its clock, but start measuring its physical path again
     // from the first live position after the jump.
@@ -116,7 +128,10 @@ export class Progress {
     // A respawn moves a worm across the map between one step and the next, and
     // nothing before it says anything about where it is now.
     const previous = this.filled > 0 ? this.recent(0) : null;
-    if (previous && Math.hypot(position.x - previous[0], position.y - previous[1]) > teleportPx) {
+    const teleported = Boolean(
+      previous && Math.hypot(position.x - previous[0], position.y - previous[1]) > teleportPx,
+    );
+    if (teleported) {
       this.restart();
     }
 
@@ -144,6 +159,7 @@ export class Progress {
     }
 
     let goalDelta = 0;
+    let goalBestDelta = 0;
     let reachedGoal = false;
     if (this.goal) {
       const distance = Math.hypot(position.x - this.goal.x, position.y - this.goal.y);
@@ -160,6 +176,13 @@ export class Progress {
       this.goalLastPosition = [position.x, position.y];
       goalDelta = this.goalDistance === null ? 0 : this.goalDistance - distance;
       this.goalDistance = distance;
+      if (this.goalBestDistance === null || this.skipGoalBestCredit || teleported) {
+        this.goalBestDistance = Math.min(this.goalBestDistance ?? distance, distance);
+        this.skipGoalBestCredit = false;
+      } else if (distance < this.goalBestDistance) {
+        goalBestDelta = this.goalBestDistance - distance;
+        this.goalBestDistance = distance;
+      }
       if (distance <= goalRadiusPx) {
         // Arriving is paid once. Leaving it set would pay a worm to sit on the
         // spot for the rest of the episode.
@@ -169,7 +192,7 @@ export class Progress {
         this.goalLastPosition = null;
       }
     }
-    return this.facts(movedPx, stuck, novel, revisit, goalDelta, reachedGoal);
+    return this.facts(movedPx, stuck, novel, revisit, goalDelta, reachedGoal, goalBestDelta);
   }
 
   /**
@@ -188,7 +211,7 @@ export class Progress {
     );
   }
 
-  facts(movedPx, stuck, novel, revisit, goalDelta, reachedGoal) {
+  facts(movedPx, stuck, novel, revisit, goalDelta, reachedGoal, goalBestDelta = 0) {
     return {
       cells: this.cells ?? 1,
       movedPx: Number.isFinite(movedPx) ? movedPx : null,
@@ -197,6 +220,7 @@ export class Progress {
       novel,
       revisit,
       goalDelta,
+      goalBestDelta,
       reachedGoal,
       goalDistance: this.goalDistance,
       goalSteps: this.goalSteps ?? 0,

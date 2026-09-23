@@ -283,11 +283,13 @@ def compare_fixed_movement(args, left, right, shape, checkpoint_world):
     assert_same_scenarios(left_run, right_run)
 
     specs = [
-        ("fixed-scenario success", lambda one: float(one.reached)),
-        ("seconds per scenario", lambda one: one.seconds),
-        ("direct speed, px/s", lambda one: one.speed),
-        ("path efficiency", lambda one: one.efficiency),
-        ("assigned distance, px", lambda one: one.assigned_distance),
+        ("fixed-scenario success", lambda one: float(one.reached), lambda one: True),
+        ("seconds per scenario", lambda one: one.seconds, lambda one: True),
+        ("direct speed, px/s", lambda one: one.speed, lambda one: True),
+        ("path efficiency", lambda one: one.efficiency, lambda one: True),
+        ("assigned distance, px", lambda one: one.assigned_distance, lambda one: True),
+        ("detour success", lambda one: float(one.reached), lambda one: one.detour),
+        ("seconds per detour", lambda one: one.seconds, lambda one: one.detour),
     ]
     result = {
         "left": left.name,
@@ -313,15 +315,23 @@ def compare_fixed_movement(args, left, right, shape, checkpoint_world):
                 "start": [one.start_x, one.start_y],
                 "goal": [one.target_x, one.target_y],
                 "distance": one.assigned_distance,
+                "detour": one.detour,
             }
             for one in left_run.scenarios
         ],
     }
     print()
     print(f"{'':24s}{'left':>10s}{'right':>10s}{'left - right':>16s}{'95% interval':>22s}")
-    for label, value in specs:
-        lefts = np.asarray([value(one) for one in left_run.scenarios], dtype=np.float64)
-        rights = np.asarray([value(one) for one in right_run.scenarios], dtype=np.float64)
+    for label, value, include in specs:
+        selected = [
+            (left_one, right_one)
+            for left_one, right_one in zip(left_run.scenarios, right_run.scenarios)
+            if include(left_one)
+        ]
+        if not selected:
+            continue
+        lefts = np.asarray([value(left_one) for left_one, _ in selected], dtype=np.float64)
+        rights = np.asarray([value(right_one) for _, right_one in selected], dtype=np.float64)
         diffs = lefts - rights
         low, high = bootstrap(diffs, seed=args.seed)
         result["metrics"][label] = {

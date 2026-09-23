@@ -35,6 +35,7 @@ class MovementScenarioResult:
     target_x: float
     target_y: float
     assigned_distance: float
+    detour: bool
     reached: int
     seconds: float
     speed: float
@@ -76,13 +77,31 @@ class MovementBenchmarkResult:
         return float(np.mean([one.assigned_distance for one in self.scenarios]))
 
     @property
-    def rank(self) -> tuple[int, float, float, float]:
-        """Lexicographic checkpoint rank: reliability, then speed, then route.
+    def detours(self) -> tuple[MovementScenarioResult, ...]:
+        return tuple(one for one in self.scenarios if one.detour)
 
-        A faster checkpoint never replaces one that solved more scenarios.
-        Failed scenarios already cost the whole fixed horizon in ``seconds``.
+    @property
+    def detour_reached(self) -> int:
+        return sum(one.reached for one in self.detours)
+
+    @property
+    def detour_success(self) -> float:
+        return self.detour_reached / max(1, len(self.detours))
+
+    @property
+    def detour_seconds(self) -> float:
+        return float(np.mean([one.seconds for one in self.detours])) if self.detours else 0.0
+
+    @property
+    def rank(self) -> tuple[int, int, float, float, float]:
+        """Checkpoint rank: reliability, detour coverage, speed, then route.
+
+        A faster checkpoint never replaces one that solved more scenarios. If
+        two solve the same total, prefer the one that solves more obstructed
+        routes before comparing time. Failed scenarios already cost the whole
+        fixed horizon in ``seconds``.
         """
-        return (self.reached, -self.seconds, self.speed, self.efficiency)
+        return (self.reached, self.detour_reached, -self.seconds, self.speed, self.efficiency)
 
     @property
     def fingerprint(self) -> str:
@@ -101,6 +120,7 @@ class MovementBenchmarkResult:
                     "start": [one.start_x, one.start_y],
                     "goal": [one.target_x, one.target_y],
                     "distance": one.assigned_distance,
+                    "detour": one.detour,
                 }
                 for one in self.scenarios
             ],
@@ -115,6 +135,10 @@ class MovementBenchmarkResult:
             "benchmarkSpeed": self.speed,
             "benchmarkEfficiency": self.efficiency,
             "benchmarkDistance": self.distance,
+            "benchmarkDetourReached": self.detour_reached,
+            "benchmarkDetourEpisodes": len(self.detours),
+            "benchmarkDetourSuccess": self.detour_success,
+            "benchmarkDetourSeconds": self.detour_seconds,
             "benchmarkSuite": self.fingerprint,
         }
 
@@ -219,6 +243,7 @@ def run_movement_benchmark(
         "mapIndex",
         "goalsAssigned",
         "goalAssignedDistance",
+        "goalDetour",
         "goalStartX",
         "goalStartY",
         "goalTargetX",
@@ -311,6 +336,7 @@ def run_movement_benchmark(
                         target_x=float(row[fields["goalTargetX"]]),
                         target_y=float(row[fields["goalTargetY"]]),
                         assigned_distance=float(row[fields["goalAssignedDistance"]]),
+                        detour=bool(round(float(row[fields["goalDetour"]]))),
                         reached=reached,
                         seconds=float(row[fields["goalSeconds"]]),
                         speed=float(row[fields["goalSpeed"]]),
@@ -343,6 +369,7 @@ def assert_same_scenarios(
             or a.map_name != b.map_name
             or any(abs(x - y) > 1e-4 for x, y in zip(endpoints, other_endpoints))
             or abs(a.assigned_distance - b.assigned_distance) > 1e-4
+            or a.detour != b.detour
         ):
             raise RuntimeError(
                 "movement benchmark scenarios drifted apart at "

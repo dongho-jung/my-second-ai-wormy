@@ -192,8 +192,8 @@ takes a separate exam: 34 isolated one-worm scenarios with a fixed seed, map,
 spawn, destination and 30-second horizon. Actions are greedy, so repeated
 checks do not add sampling luck. The default suite visits each of the 17 room
 maps twice instead of leaving map coverage to a random draw. `best.pt` is
-selected lexicographically by
-fixed-scenario successes, then failure-aware time, speed and path efficiency.
+selected lexicographically by fixed-scenario successes, obstructed-scenario
+successes, then failure-aware time, speed and path efficiency.
 The full task list is written to `benchmark.json`; it is never used for
 gradients.
 
@@ -230,6 +230,8 @@ npm run train -- \
   --total-steps <additional-speed-phase-steps> \
   --goal-radius 1600 \
   --goal-above 0.5 \
+  --goal-detour 0.5 \
+  --goal-progress-mode best \
   --rope-hold 12 \
   --goal-patience 450 \
   --goals-per-episode 1 \
@@ -250,6 +252,15 @@ speed phase, while the arrival and speed rewards stay. A fixed 450-decision
 deadline gives every A/B run the same 30-second limit. `--goal-patience-min`
 can still enable an adaptive training curriculum, while the fixed benchmark
 remains the checkpoint selector.
+
+`--goal-detour 0.5` deliberately puts solid terrain across the direct line in
+half the tasks. These include ledges where the first useful move is sideways
+or away from the destination. `--goal-progress-mode best` pays only when the
+worm sets a new closest distance: taking the necessary step away is neutral,
+then rounding the obstruction and getting closer pays again. Returning over
+already credited ground pays nothing, so the policy cannot score by pacing.
+The fixed benchmark reports its obstructed subset separately as detour success
+and detour time, so an easy straight route cannot hide this failure mode.
 
 The monitor leads with fixed-exam success and failure-aware seconds. It also
 reports the random training tasks' assigned distance, `goalSeconds`, direct
@@ -386,11 +397,15 @@ npm run watch -- --agents 5 --speed 2
 ```
 
 There is also a **Watch** button on the training page, which starts this for the
-selected run and opens it.
+selected run and opens it. For a movement run it replays `benchmark.json`: all
+coloured worms get the exact same fixed map, start, goal and clock. Each ghost
+owns a separate engine world, including its own worms, projectiles and mutable
+terrain, so collisions, ropes, shots and digging cannot change another
+attempt. Finish rank and time are shown before the next fixed route starts.
 
-One match is played at the speed the game actually runs at and drawn in the
-browser on port 8769: the terrain the worms are digging through, where they are
-aiming, what they are holding, and the score.
+For a combat run, one match is played at the speed the game actually runs at
+and drawn in the browser on port 8769: the terrain the worms are digging
+through, where they are aiming, what they are holding, and the score.
 
 This is **the headless engine rendered, not a room on webliero.com**. The
 physics are identical — the same bundle, checked by the same checksum.

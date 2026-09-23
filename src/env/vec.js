@@ -65,6 +65,11 @@ export const EPISODE_STATS = [
   // checks these beside the seed to prove both policies received the same task.
   "goalsAssigned",
   "goalAssignedDistance",
+  // How many assigned tasks require crossing solid terrain on the direct line,
+  // and whether the first task is one of them. Fixed benchmarks use one task,
+  // so `goalDetour` splits the scoreboard into open and route-planning cases.
+  "goalsDetourAssigned",
+  "goalDetour",
   // The first task's exact endpoints. Benchmarks run one worm and one task, so
   // these make equality stronger than "the distances happened to match".
   "goalStartX",
@@ -165,6 +170,8 @@ const STAT_SOURCE = {
   goalsMissed: "goalsMissed",
   goalsAssigned: "goalsAssigned",
   goalAssignedDistance: "goalAssignedDistance",
+  goalsDetourAssigned: "goalsDetourAssigned",
+  goalDetour: "goalDetour",
   goalStartX: "goalStartX",
   goalStartY: "goalStartY",
   goalTargetX: "goalTargetX",
@@ -540,7 +547,7 @@ export class VecWormEnv {
       patch2Shape: this.wantsPatch2 ? this.spec.patch2.shape : null,
       patch2Scale: this.wantsPatch2 ? this.spec.patch2.scalePx : null,
       mapCells: this.wantsMap ? MAP_SIZE : 0,
-      mapShape: this.wantsMap ? [4, 32, 32] : null,
+      mapShape: this.wantsMap ? [MAP.channels.length, MAP.cells, MAP.cells] : null,
       statFields: EPISODE_STATS,
       // Spelled out on the wire so the other side cannot drift from it.
       doneCodes: DONE,

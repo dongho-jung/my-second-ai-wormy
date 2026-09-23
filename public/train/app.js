@@ -32,6 +32,10 @@ const SERIES = {
   benchmarkSpeed: { label: "fixed-scenario direct speed, px/s", good: "up" },
   benchmarkEfficiency: { label: "fixed-scenario path efficiency", good: "up" },
   benchmarkDistance: { label: "fixed-scenario mean distance, px" },
+  benchmarkDetourSuccess: { label: "fixed detour-scenario success", good: "up" },
+  benchmarkDetourReached: { label: "fixed detour scenarios reached", good: "up" },
+  benchmarkDetourEpisodes: { label: "fixed detour scenarios tested" },
+  benchmarkDetourSeconds: { label: "seconds per fixed detour scenario, failures included", good: "down" },
   benchmarkWallSeconds: { label: "seconds the fixed benchmark took" },
   bestReward: { label: "best reward kept", good: "up" },
   goalsReached: { label: "destinations reached a match", good: "up" },
@@ -121,6 +125,10 @@ const MOVEMENT_SERIES = new Set([
   "benchmarkSpeed",
   "benchmarkEfficiency",
   "benchmarkDistance",
+  "benchmarkDetourSuccess",
+  "benchmarkDetourReached",
+  "benchmarkDetourEpisodes",
+  "benchmarkDetourSeconds",
   "benchmarkWallSeconds",
   "bestGoals",
   "goalsReached",
@@ -190,6 +198,12 @@ const FIGURES = [
     () => run?.meta?.task === "movement",
   ],
   ["benchmarkSeconds", "fixed seconds", (value) => value.toFixed(1), () => run?.meta?.task === "movement"],
+  [
+    "benchmarkDetourSuccess",
+    "fixed detours",
+    (value) => `${Math.round(value * 100)}%`,
+    () => run?.meta?.task === "movement",
+  ],
   ["goalsReached", "training goals", (value) => value.toFixed(2), () => run?.meta?.task === "movement"],
   ["goalSeconds", "seconds/goal", (value) => value.toFixed(1), () => run?.meta?.task === "movement"],
   [
@@ -455,9 +469,13 @@ const HEADLINES = [
       const reached = latest("benchmarkReached");
       const episodes = latest("benchmarkEpisodes");
       const seconds = latest("benchmarkSeconds");
+      const detourReached = latest("benchmarkDetourReached");
+      const detourEpisodes = latest("benchmarkDetourEpisodes");
       return `${Number.isFinite(reached) ? Math.round(reached) : "—"}/`
         + `${Number.isFinite(episodes) ? Math.round(episodes) : "—"} fixed routes · `
-        + `${Number.isFinite(seconds) ? seconds.toFixed(1) : "—"}s including failures`;
+        + `${Number.isFinite(seconds) ? seconds.toFixed(1) : "—"}s including failures · `
+        + `${Number.isFinite(detourReached) ? Math.round(detourReached) : "—"}/`
+        + `${Number.isFinite(detourEpisodes) ? Math.round(detourEpisodes) : "—"} detours`;
     },
     say: (move) => {
       if (!move) return "Every checkpoint receives the same map, spawn and destination in an isolated world.";
@@ -910,6 +928,8 @@ const GROUPS = [
       "benchmarkSuccess", "benchmarkSeconds", "benchmarkSpeed", "benchmarkEfficiency",
       "bestBenchmarkSuccess", "bestBenchmarkSeconds", "benchmarkReached", "benchmarkEpisodes",
       "benchmarkDistance",
+      "benchmarkDetourSuccess", "benchmarkDetourSeconds",
+      "benchmarkDetourReached", "benchmarkDetourEpisodes",
       "goalsReached", "goalsMissed", "goalSuccess", "goalSeconds", "goalSpeed",
       "goalPathEfficiency", "bestGoals", "killsVsPast", "damageVsPast", "deathsVsPast",
       "selfDamageVsPast", "probeKills", "probeDeaths", "probeSuicides", "combat",
@@ -1216,12 +1236,12 @@ async function watchSelected() {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error ?? "the viewer did not start");
     window.open(body.url, "wormy-watch");
-    button.textContent = "Watch";
+    button.textContent = run?.meta?.task === "movement" ? "Watch fixed race" : "Watch";
   } catch (error) {
     const alert = element("alert");
     alert.textContent = `Could not start the viewer: ${error.message}`;
     alert.hidden = false;
-    button.textContent = "Watch";
+    button.textContent = run?.meta?.task === "movement" ? "Watch fixed race" : "Watch";
   } finally {
     renderWatchButton();
   }
@@ -1230,9 +1250,12 @@ async function watchSelected() {
 function renderWatchButton() {
   const button = element("watch");
   const checkpoint = run?.checkpoint;
+  button.textContent = run?.meta?.task === "movement" ? "Watch fixed race" : "Watch";
   button.disabled = !checkpoint;
   button.title = checkpoint
-    ? `Play ${checkpoint === "best.pt" ? "the best policy" : "the latest policy"} of this run and watch it`
+    ? run?.meta?.task === "movement"
+      ? `Race isolated copies of ${checkpoint === "best.pt" ? "the best policy" : "the latest policy"} on the fixed benchmark routes`
+      : `Play ${checkpoint === "best.pt" ? "the best policy" : "the latest policy"} of this run and watch it`
     : "This run has no saved policy to watch";
 }
 

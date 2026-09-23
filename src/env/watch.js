@@ -18,7 +18,8 @@ import { actionFromHeads, ACTION_HEADS } from "./actions.js";
 import { loadEngine } from "./engine.js";
 import { readFileSync } from "node:fs";
 import { WormEnv } from "./env.js";
-import { MAP_SIZE } from "./observation.js";
+import { GhostRace } from "./race.js";
+import { MAP, MAP_SIZE } from "./observation.js";
 import { gzipSync } from "node:zlib";
 
 const HEADS = ACTION_HEADS.length;
@@ -60,9 +61,17 @@ const engine = await loadEngine(config.engine);
 // cycles them. Without these the viewer generates its own dirt fields, and a
 // policy trained on a room's real maps is watched somewhere it has never been —
 // which is how the dashboard came to say "Random Dirt" all evening.
-const stock = (config.levelFiles ?? []).map((path) =>
-  engine.readAnyLevel(path.split("/").pop(), readFileSync(path)),
-);
+const stock = (config.levelFiles ?? []).map((path) => {
+  const file = path.split("/").pop();
+  return { file, level: engine.readAnyLevel(file, readFileSync(path)) };
+});
+const levels = new Map();
+for (const { file, level } of stock) {
+  for (const name of [file, level.name]) {
+    levels.set(name, level);
+    levels.set(name.toLowerCase(), level);
+  }
+}
 // The whole world the checkpoint carries, then the few things that are about
 // watching rather than about the game.
 //
@@ -74,15 +83,25 @@ const stock = (config.levelFiles ?? []).map((path) =>
 //
 // Anything the environment does not know is ignored, so the viewer's own keys
 // riding along is harmless.
-const env = new WormEnv(engine, {
+const world = {
   ...config,
-  ...(stock.length ? { level: (_, seed) => stock[seed % stock.length] } : {}),
+  ...(stock.length ? { level: (_, seed) => stock[seed % stock.length].level } : {}),
   agents,
   // The page draws all three, whatever the run was trained to hand out.
   observations: ["vector", "patchBytes", "map"],
   seed: config.seed ?? Math.floor(Math.random() * 0xffffffff),
-});
-env.reset();
+};
+const racing = Array.isArray(config.race?.scenarios) && config.race.scenarios.length > 0;
+const env = racing
+  ? new GhostRace(engine, {
+      racers: agents,
+      scenarios: config.race.scenarios,
+      levels,
+      world,
+      episodeTicks: config.race.episodeTicks,
+    })
+  : new WormEnv(engine, world);
+if (!racing) env.reset();
 
 /** Below this, packing costs more than it saves. */
 const GZIP_OVER = 4096;
@@ -114,42 +133,73 @@ const levelPayload = () => {
 
 const state = () => {
   const level = env.world.level;
+  const race = racing ? env.info() : null;
+  const racers = race?.racers ?? env.worms.map((worm, id) => ({
+    id,
+    worm,
+    loadout: env.loadouts[id],
+    progress: env.progress[id],
+    finish: null,
+    rank: null,
+  }));
+  const projectiles = (racing ? env.envs : [env]).flatMap((one, worldIndex) =>
+    [one.world.Ib, one.world.Zb].flatMap((pool) => {
+      const out = [];
+      for (let slot = 0; slot < pool.$; slot++) {
+        const entity = pool.list[slot];
+        if (!entity.u) continue;
+        out.push({
+          x: entity.x,
+          y: entity.y,
+          owner: racing ? worldIndex : (entity.H < 0 ? null : entity.H),
+        });
+      }
+      return out;
+    }),
+  );
   return {
     tick: env.world.qb,
-    elapsedTicks: env.info().elapsedTicks,
+    elapsedTicks: race?.elapsedTicks ?? env.info().elapsedTicks,
     episode: env.episode,
     episodes,
     seed: env.episodeSeed,
     speed,
     levelVersion,
+    mode: racing ? "ghost-race" : "match",
+    race: race
+      ? {
+          scenario: race.scenario,
+          scenarios: race.scenarios,
+          start: race.start,
+          goal: race.goal,
+          detour: race.detour,
+          fingerprint: config.race.fingerprint ?? null,
+          done: race.done,
+        }
+      : null,
     map: { name: level.name, width: level.width, height: level.height },
-    worms: env.worms.map((worm, agent) => ({
-      id: agent,
+    worms: racers.map(({ id, worm, loadout, progress, finish, rank }) => ({
+      id,
       alive: Boolean(worm.u),
-      x: worm.x,
-      y: worm.y,
+      x: finish?.x ?? worm.x,
+      y: finish?.y ?? worm.y,
       health: worm.Xa,
       facing: worm.direction === 1 ? "right" : "left",
       aim: worm.direction === 1 ? -worm.Oa : Math.PI + worm.Oa,
       weapon: worm.O[worm.Ka]?.type.name ?? null,
       ammo: worm.O[worm.Ka]?.ha ?? 0,
-      loadout: env.loadouts[agent].map((id) => engine.weaponNames[id]),
-      rope: worm.Fa.Sc ? { x: worm.Fa.x, y: worm.Fa.y, attached: worm.Fa.jc } : null,
+      loadout: loadout.map((weapon) => engine.weaponNames[weapon]),
+      rope: !finish && worm.Fa.Sc ? { x: worm.Fa.x, y: worm.Fa.y, attached: worm.Fa.jc } : null,
       // Where this worm was told to go, in a run that hands out destinations.
       // Without it the page shows a worm moving and no way to tell whether it
       // is going anywhere on purpose, which is the whole question here.
-      goal: env.progress[agent]?.goal ?? null,
-      score: scores[agent],
+      goal: race?.goal ?? progress?.goal ?? null,
+      ghost: racing,
+      finishSeconds: finish?.seconds ?? null,
+      rank,
+      score: scores[id],
     })),
-    projectiles: [env.world.Ib, env.world.Zb].flatMap((pool) => {
-      const out = [];
-      for (let slot = 0; slot < pool.$; slot++) {
-        const entity = pool.list[slot];
-        if (!entity.u) continue;
-        out.push({ x: entity.x, y: entity.y, owner: entity.H < 0 ? null : entity.H });
-      }
-      return out;
-    }),
+    projectiles,
   };
 };
 
@@ -341,6 +391,7 @@ function writeFrame(...parts) {
 const vectors = new Float32Array(agents * env.spec.vectorSize);
 const patches = new Uint8Array(agents * env.spec.patch.cells);
 const maps = new Uint8Array(agents * MAP_SIZE);
+const resets = new Uint8Array(agents);
 const gather = () => {
   for (let agent = 0; agent < agents; agent++) {
     vectors.set(env.observations[agent].vector, agent * env.spec.vectorSize);
@@ -358,10 +409,11 @@ writeFrame(
       patchCells: env.spec.patch.cells,
       patchShape: env.spec.patch.shape,
       mapCells: MAP_SIZE,
-      mapShape: [4, 32, 32],
+      mapShape: [MAP.channels.length, MAP.cells, MAP.cells],
       heads: ACTION_HEADS.map(([name, choices]) => ({ name, choices: choices.length })),
       actionBytes: agents * HEADS,
-      viewer: origin,
+      restartBytes: agents,
+      viewer: reachableAt,
       engineSha256: engine.sha256,
       frameskip: env.frameskip,
       episodeTicks: env.episodeTicks,
@@ -370,7 +422,8 @@ writeFrame(
   ),
 );
 gather();
-writeFrame(vectors, patches, maps);
+resets.fill(1);
+writeFrame(vectors, patches, maps, resets);
 
 const broadcast = () => {
   if (!clients.size) return;
@@ -382,31 +435,51 @@ const broadcast = () => {
 // them a second. Waiting that long between steps is what makes it watchable.
 const stepMs = (env.frameskip / 60) * 1000 / speed;
 let dueAt = performance.now();
+let resetRaceAt = 0;
+const RACE_PAUSE_MS = 3000;
 
 const advance = (heads) => {
-  const before = env.worms.map((worm) => ({ alive: Boolean(worm.u) }));
+  resets.fill(0);
+  if (racing && env.done) {
+    if (performance.now() >= resetRaceAt) {
+      episodes++;
+      env.reset();
+      resets.fill(1);
+      levelVersion++;
+    }
+    gather();
+    broadcast();
+    writeFrame(vectors, patches, maps, resets);
+    return;
+  }
   const out = env.step(Array.from({ length: agents }, (_, agent) =>
     actionFromHeads(heads, agent * HEADS),
   ));
-  for (const [agent, events] of out.info.events.entries()) {
-    scores[agent].kills += events.killed;
-    scores[agent].deaths += events.died;
-    scores[agent].damage += events.damageDealt;
-    void before[agent];
+  if (!racing) {
+    for (const [agent, events] of out.info.events.entries()) {
+      scores[agent].kills += events.killed;
+      scores[agent].deaths += events.died;
+      scores[agent].damage += events.damageDealt;
+    }
   }
   if (out.done) {
-    episodes++;
-    env.reset();
-    levelVersion++;
-    for (const score of scores) {
-      score.kills = 0;
-      score.deaths = 0;
-      score.damage = 0;
+    if (racing) {
+      resetRaceAt = performance.now() + RACE_PAUSE_MS;
+    } else {
+      episodes++;
+      env.reset();
+      resets.fill(1);
+      levelVersion++;
+      for (const score of scores) {
+        score.kills = 0;
+        score.deaths = 0;
+        score.damage = 0;
+      }
     }
   }
   gather();
   broadcast();
-  writeFrame(vectors, patches, maps);
+  writeFrame(vectors, patches, maps, resets);
 };
 
 let held = Buffer.alloc(0);

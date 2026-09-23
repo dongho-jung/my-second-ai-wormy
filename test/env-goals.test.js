@@ -7,7 +7,7 @@ import {
   GoalCurriculum,
   GoalDeadlineCurriculum,
 } from "../src/env/curriculum.js";
-import { groundedGoal, groundedGoalNear } from "../src/env/env.js";
+import { directRouteBlocked, groundedGoal, groundedGoalNear } from "../src/env/env.js";
 import { VECTOR_OFFSETS, encodeVector } from "../src/env/observation.js";
 import { solidAt, terrainOf } from "../src/env/terrain.js";
 import { viewFromSnapshot } from "../src/env/view.js";
@@ -95,6 +95,33 @@ test("a near goal is within the radius, a few strides off, and standable", () =>
   assert.equal(groundedGoalNear(terrain, rng, from, 30), null);
   // And nowhere standable within reach is null rather than a guess: the sky.
   assert.equal(groundedGoalNear(terrain, rng, { x: 200, y: 10 }, 60), null);
+});
+
+test("a detour goal has a real wall across the direct route", () => {
+  const width = 220;
+  const height = 180;
+  const data = new Uint8Array(width * height);
+  // Floor for both endpoints, then a thick hanging ledge between them. The
+  // route exists around its left edge, but the goal arrow points through it.
+  for (let y = 150; y < height; y++) for (let x = 0; x < width; x++) data[y * width + x] = 1;
+  for (let y = 70; y < 90; y++) for (let x = 70; x < 190; x++) data[y * width + x] = 1;
+  const materialFlags = new Uint8Array(256).fill(8);
+  materialFlags[1] = 3;
+  const terrain = terrainOf({ data, width, height, materialFlags });
+  const below = { x: 130, y: 135 };
+  const above = { x: 130, y: 60 };
+
+  assert.equal(directRouteBlocked(terrain, below, above), true);
+  assert.equal(directRouteBlocked(terrain, { x: 20, y: 135 }, { x: 20, y: 60 }), false);
+
+  const rng = rngOver(Array.from({ length: 997 }, (_, i) => ((i * 313) % 997) / 997));
+  const goal = groundedGoalNear(terrain, rng, below, 140, {
+    tries: 1000,
+    abovePx: 48,
+    blocked: true,
+  });
+  assert.ok(goal, "the sampler should find the ledge above");
+  assert.equal(directRouteBlocked(terrain, below, goal), true);
 });
 
 test("the radius moves out when the worms keep arriving, and back when they do not", () => {

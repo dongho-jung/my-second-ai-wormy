@@ -272,6 +272,10 @@ def parse_args(argv=None):
                             "above the worm, where a jump does not reach. With half of them up "
                             "there, the success curriculum cannot move on until the rope is used")
     where.add_argument("--goal-above-px", type=int, default=48)
+    where.add_argument("--goal-detour", type=float, default=0.0,
+                       help="share of destinations whose direct start-to-goal line crosses a "
+                            "wall or ledge. These force the policy to practise going around "
+                            "instead of following the goal arrow into solid ground")
     where.add_argument("--goal-radius", default=None,
                        help="how far from the worm a destination is drawn, in pixels: one number, "
                             "or from-to to grow it over --goal-grow of the run. The movement task's "
@@ -307,6 +311,10 @@ def parse_args(argv=None):
                        help="reward per pixel closed on a destination. The movement default is "
                             "0.02; expose it here so a speed fine-tune can reduce the old distance "
                             "shaping without changing the environment's defaults")
+    where.add_argument("--goal-progress-mode", default="signed", choices=["signed", "best"],
+                       help="signed rewards every pixel closer and charges every pixel farther; "
+                            "best pays only a new closest distance, so a necessary detour is "
+                            "neutral and retracing the same progress pays nothing")
     where.add_argument("--goal-arrival-reward", type=float, default=None,
                        help="reward paid once for reaching a destination. The movement default is 2")
     where.add_argument("--goal-speed-reward", type=float, default=0.0,
@@ -577,13 +585,19 @@ def main(argv=None):
         or args.goal_speed_reward != 0
         or args.goal_progress_decay != 0
         or args.goal_progress_floor != 0
+        or args.goal_progress_mode != "signed"
+        or args.goal_detour != 0
     )
     if args.task != "movement" and speed_options:
-        raise SystemExit("goal speed and deadline options only mean something with --task movement")
+        raise SystemExit("goal training options only mean something with --task movement")
     if not 0 <= args.goal_progress_decay <= 1:
         raise SystemExit("--goal-progress-decay must be between 0 and 1")
     if not 0 <= args.goal_progress_floor <= 1:
         raise SystemExit("--goal-progress-floor must be between 0 and 1")
+    if not 0 <= args.goal_above <= 1:
+        raise SystemExit("--goal-above must be between 0 and 1")
+    if not 0 <= args.goal_detour <= 1:
+        raise SystemExit("--goal-detour must be between 0 and 1")
     if args.goal_speed_reward < 0 or args.goal_speed_cap <= 0:
         raise SystemExit("--goal-speed-reward must be non-negative and --goal-speed-cap positive")
     if args.goals_per_episode < 0:
@@ -672,6 +686,8 @@ def main(argv=None):
         config["goalRadiusPx"] = radius if len(radius) > 1 else radius[0]
         config["goalPatience"] = 450 if args.goal_patience is None else args.goal_patience
         config["goalsPerEpisode"] = args.goals_per_episode
+        config["goalProgressMode"] = args.goal_progress_mode
+        config["goalDetourShare"] = args.goal_detour
         config["endOnGoals"] = args.goals_per_episode > 0
         # Task completion naturally desynchronises worlds. A cut-short warm-up
         # would also hide whether its boundary was terminal from the value head.
@@ -890,6 +906,8 @@ def main(argv=None):
             "goalPatienceMin": config.get("goalPatienceMin"),
             "goalsPerEpisode": config.get("goalsPerEpisode"),
             "goalProgressReward": args.goal_progress_reward,
+            "goalProgressMode": args.goal_progress_mode,
+            "goalDetour": args.goal_detour,
             "goalArrivalReward": args.goal_arrival_reward,
             "goalSpeedReward": args.goal_speed_reward,
             "goalSpeedCap": args.goal_speed_cap if args.goal_speed_reward else None,
@@ -1126,6 +1144,8 @@ def main(argv=None):
             f"benchmark | fixed scenarios {result.reached}/{result.episodes} "
             f"({result.success:.1%}), {result.seconds:.1f}s including failures, "
             f"{result.speed:.0f}px/s, {result.efficiency:.0%} direct | "
+            f"detours {result.detour_reached}/{len(result.detours)} "
+            f"({result.detour_success:.1%}) | "
             f"{line['benchmarkWallSeconds']:.1f}s",
             flush=True,
         )
@@ -1153,6 +1173,10 @@ def main(argv=None):
                 benchmarkSeconds=result.seconds,
                 benchmarkSpeed=result.speed,
                 benchmarkEfficiency=result.efficiency,
+                benchmarkDetourReached=result.detour_reached,
+                benchmarkDetourEpisodes=len(result.detours),
+                benchmarkDetourSuccess=result.detour_success,
+                benchmarkDetourSeconds=result.detour_seconds,
             )
 
     if demo_batch:
