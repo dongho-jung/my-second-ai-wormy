@@ -157,17 +157,73 @@ test("one policy can drive any number of worms", { skip }, async () => {
   }
 });
 
+test("a resolved movement task is terminal and then opens a fresh task", { skip }, async () => {
+  const engine = await loadEngine();
+  const vec = new VecWormEnv(engine, {
+    envs: 1,
+    agents: 1,
+    observations: ["vector"],
+    goals: "random",
+    goalsPerEpisode: 1,
+    endOnGoals: true,
+    goalRadiusPx: 100,
+    episodeTicks: 3600,
+    seed: 41,
+  }).reset();
+  const position = vec.envs[0].views[0].self.position;
+  vec.envs[0].progress[0].setGoal({ ...position }, position);
+
+  vec.step(new Uint8Array(HEADS));
+  assert.equal(vec.dones[0], DONE.terminal);
+  const stats = Object.fromEntries(
+    EPISODE_STATS.map((field, index) => [field, vec.stats[index]]),
+  );
+  assert.equal(stats.goalsReached, 1);
+  assert.equal(stats.goalsAssigned, 1);
+
+  vec.step(new Uint8Array(HEADS));
+  assert.equal(vec.dones[0], DONE.first);
+  assert.equal(vec.envs[0].done, false);
+});
+
+test("a fixed exam cycles through maps instead of sampling an accidental subset", { skip }, async () => {
+  const engine = await loadEngine();
+  const vec = new VecWormEnv(engine, {
+    envs: 2,
+    agents: 1,
+    observations: ["vector"],
+    levelPool: 3,
+    levelSequence: "roundRobin",
+    levelStride: 2,
+    seed: 19,
+  }).reset();
+  assert.deepEqual(vec.envs.map((env) => env.levelIndex), [0, 1]);
+
+  vec.envs.forEach((env) => env.reset());
+  assert.deepEqual(vec.envs.map((env) => env.levelIndex), [2, 0]);
+  vec.envs.forEach((env) => env.reset());
+  assert.deepEqual(vec.envs.map((env) => env.levelIndex), [1, 2]);
+});
+
 test("episode stats distinguish fast direct routes from merely reaching", () => {
   const fake = {
     opponents: 1,
+    levels: [{}],
     stats: new Float32Array(EPISODE_STATS.length),
   };
   const env = {
     info: () => ({
+      elapsedTicks: 3600,
       totals: [
         {
           goalsReached: 2,
           goalsMissed: 0,
+          goalsAssigned: 2,
+          goalAssignedPx: 640,
+          goalStartX: 10,
+          goalStartY: 20,
+          goalTargetX: 300,
+          goalTargetY: 400,
           goalStepsReached: 150,
           goalDirectPx: 600,
           goalPathPx: 750,
@@ -176,6 +232,12 @@ test("episode stats distinguish fast direct routes from merely reaching", () => 
         {
           goalsReached: 1,
           goalsMissed: 1,
+          goalsAssigned: 2,
+          goalAssignedPx: 760,
+          goalStartX: 30,
+          goalStartY: 40,
+          goalTargetX: 500,
+          goalTargetY: 600,
           goalStepsReached: 90,
           goalDirectPx: 300,
           goalPathPx: 600,
@@ -196,6 +258,10 @@ test("episode stats distinguish fast direct routes from merely reaching", () => 
     EPISODE_STATS.map((field, index) => [field, fake.stats[index]]),
   );
   assert.equal(stats.goalsReached, 1.5);
+  assert.equal(stats.goalsAssigned, 2);
+  assert.equal(stats.goalAssignedDistance, 350);
+  assert.equal(stats.goalStartX, 20);
+  assert.equal(stats.goalTargetY, 500);
   assert.equal(stats.goalSeconds, 5.5);
   assert.equal(stats.goalSpeed, 55);
   assert.ok(Math.abs(stats.goalPathEfficiency - 0.65) < 1e-6);

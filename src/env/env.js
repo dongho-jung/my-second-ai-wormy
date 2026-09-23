@@ -168,6 +168,14 @@ export const DEFAULTS = {
   // 0 keeps it for the whole episode. A worm sent somewhere it cannot get to
   // otherwise spends the rest of its minute learning nothing.
   goalPatience: 0,
+  // How many destinations one worm receives in an episode. Zero is unlimited.
+  // A fixed benchmark uses one: every policy then attempts the same task once
+  // instead of a lucky sequence of short goals paying over and over.
+  goalsPerEpisode: 0,
+  // End once every worm has resolved that quota. Training can immediately
+  // draw a fresh task instead of filling the rest of the clock with no goal.
+  // Validation leaves this off so every policy gets the same fixed horizon.
+  endOnGoals: false,
   // When set below goalPatience, success tightens the deadline toward this
   // value and failure loosens it again. Off by default.
   goalPatienceMin: null,
@@ -416,6 +424,8 @@ export class WormEnv {
           })
         : null;
     this.goalPatience = Math.max(0, Math.trunc(settings.goalPatience ?? 0));
+    this.goalsPerEpisode = Math.max(0, Math.trunc(settings.goalsPerEpisode ?? 0));
+    this.endOnGoals = Boolean(settings.endOnGoals);
     this.deadlineCurriculum =
       settings.goalPatienceMin !== null &&
       settings.goalPatienceMin !== undefined &&
@@ -464,6 +474,7 @@ export class WormEnv {
     this.episodeSeed = null;
     this.episodeStartTick = 0;
     this.done = true;
+    this.terminated = false;
     // True on the one step whose observation is an episode's last.
     this.ending = false;
   }
@@ -685,6 +696,7 @@ export class WormEnv {
     this.totals = this.worms.map(() => ({}));
     this.episodeStartTick = this.world.qb;
     this.done = false;
+    this.terminated = false;
     this.ending = false;
     this.refreshViews();
     // Goals are drawn after the views exist, because picking a spot means
@@ -717,17 +729,31 @@ export class WormEnv {
 
   /**
    * Hand every worm a destination, if this run has any. Called at the start of
-   * an episode and again whenever one arrives, so a worm practises the whole
-   * episode rather than once.
+   * an episode and after one resolves, until that worm has received its quota.
    */
   assignGoals(only = null) {
     if (!this.makeGoal) return;
     this.progress.forEach((progress, agent) => {
       if (only !== null && only !== agent) return;
-      progress.setGoal(
-        this.makeGoal(this, agent) ?? null,
-        this.views[agent]?.self?.position ?? null,
-      );
+      const assigned = this.totals[agent].goalsAssigned ?? 0;
+      if (this.goalsPerEpisode > 0 && assigned >= this.goalsPerEpisode) {
+        progress.setGoal(null);
+        if (this.views[agent]) this.views[agent].goal = null;
+        return;
+      }
+      const position = this.views[agent]?.self?.position ?? null;
+      progress.setGoal(this.makeGoal(this, agent) ?? null, position);
+      if (progress.goal) {
+        this.totals[agent].goalsAssigned = assigned + 1;
+        this.totals[agent].goalAssignedPx =
+          (this.totals[agent].goalAssignedPx ?? 0) + (progress.goalDirectPx ?? 0);
+        if (assigned === 0 && position) {
+          this.totals[agent].goalStartX = position.x;
+          this.totals[agent].goalStartY = position.y;
+          this.totals[agent].goalTargetX = progress.goal.x;
+          this.totals[agent].goalTargetY = progress.goal.y;
+        }
+      }
       if (this.views[agent]) this.views[agent].goal = progress.goal;
     });
   }
@@ -860,9 +886,8 @@ export class WormEnv {
       if (this.views[agent]?.self?.rope?.attached) {
         this.totals[agent].ropeHeld = (this.totals[agent].ropeHeld ?? 0) + 1;
       }
-      // Arriving clears the goal. Hand out the next one now rather than at the
-      // next episode: a minute is long enough for several trips, and one
-      // arrival per episode is very few samples of the thing being taught.
+      // Arriving clears the goal. Hand out another only while this episode's
+      // quota has room; fixed-task runs deliberately stop at one.
       if (moved.reachedGoal) {
         // Straight onto the running total, not through `events`. That buffer is
         // reused across steps and `tallyDamage` clears only the fields it owns,
@@ -926,23 +951,28 @@ export class WormEnv {
       if (respawned.some(Boolean)) this.refreshViews();
     }
     this.encodeObservations();
-    // Nothing in this environment ever really ends. Worms respawn, the world
-    // keeps running, and what stops an episode is a clock this project set for
-    // its own convenience — so every ending here is a truncation, and the
-    // observation being returned is the last one of the episode rather than
-    // the first one of the next. Whoever is learning from this has to value
-    // that state rather than treat it as worth nothing, which is why the reset
-    // waits for the next call instead of happening here.
-    this.done =
-      this.world.qb - this.episodeStartTick >= this.episodeTicks ||
-      (this.terminateOnKill && killed);
+    // A task quota is a real episode boundary: once every worm has either
+    // arrived or used its deadline, there is no future goal reward to value.
+    // The ordinary clock remains a truncation of a world that could continue.
+    const goalsResolved =
+      this.endOnGoals &&
+      this.goalsPerEpisode > 0 &&
+      this.totals.every((one) => {
+        const assigned = one.goalsAssigned ?? 0;
+        const resolved = (one.goalsReached ?? 0) + (one.goalsMissed ?? 0);
+        return assigned >= this.goalsPerEpisode && resolved >= assigned;
+      });
+    const clockEnded = this.world.qb - this.episodeStartTick >= this.episodeTicks;
+    this.terminated = goalsResolved;
+    this.done = goalsResolved || clockEnded || (this.terminateOnKill && killed);
     this.ending = this.done;
     return {
       observations: this.observations,
       rewards,
       done: this.done,
       // The episode is over and this is its final state; `reset()` has not run.
-      truncated: this.done,
+      terminated: this.terminated,
+      truncated: this.done && !this.terminated,
       respawned,
       info: { ...this.info(), events: this.events, parts },
     };

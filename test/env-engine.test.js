@@ -500,6 +500,53 @@ test("reliable arrivals tighten a world's goal deadline", { skip }, async () => 
   assert.ok(env.totals[0].goalStepsReached >= 2, "arrival time is retained for the episode stats");
 });
 
+test("a one-goal episode cannot farm another easier destination", { skip }, async () => {
+  const engine = await loadEngine();
+  const env = new WormEnv(engine, {
+    agents: 1,
+    observations: ["vector"],
+    goals: "random",
+    goalsPerEpisode: 1,
+    endOnGoals: true,
+    goalRadiusPx: 100,
+    seed: 4,
+  });
+  env.reset();
+  const { position } = env.views[0].self;
+  env.progress[0].setGoal({ ...position }, position);
+  const out = env.step([0]);
+  assert.equal(env.totals[0].goalsReached, 1);
+  assert.equal(env.totals[0].goalsAssigned, 1);
+  assert.equal(env.progress[0].goal, null, "arrival leaves no second goal to farm");
+  assert.equal(out.terminated, true, "resolving the only task ends the episode");
+  assert.equal(out.truncated, false, "a completed task is not a clock cutoff");
+});
+
+test("the same seed fixes a movement exam's map, start and destination", { skip }, async () => {
+  const engine = await loadEngine();
+  const options = {
+    agents: 1,
+    observations: ["vector"],
+    goals: "random",
+    goalsPerEpisode: 1,
+    goalRadiusPx: 1600,
+    goalAboveShare: 0.5,
+    seed: 913,
+  };
+  const left = new WormEnv(engine, options);
+  const right = new WormEnv(engine, options);
+  left.reset();
+  right.reset();
+  const task = (env) => ({
+    map: env.world.level.name,
+    start: { ...env.views[0].self.position },
+    goal: { ...env.progress[0].goal },
+  });
+  assert.deepEqual(task(left), task(right));
+  assert.equal(left.totals[0].goalsAssigned, 1);
+  assert.equal(right.totals[0].goalsAssigned, 1);
+});
+
 test("a dead worm is dropped from the world and comes back whole", { skip }, async () => {
   const { world, worms } = await arena({ seed: 77 });
   const [worm] = worms;

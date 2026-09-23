@@ -182,10 +182,20 @@ npm run train -- --task movement --agents 6 --rope-throw-cost 0.01
 ```
 
 `--task movement` turns the fighting terms off, holds the trigger shut, and
-hands every worm a place on the map to reach — another as soon as it arrives,
-or after `--goal-patience` decisions without arriving. The score is
-`goalsReached`, destinations a worm reaches in a minute, and `best.pt` is
-picked on it.
+hands every worm one place on the map to reach. Once every worm either arrives
+or uses its `--goal-patience`, a fresh episode begins with new random tasks.
+Training stays varied so the policy cannot memorise a route, but one lucky
+sequence of short destinations cannot collect repeated arrival rewards.
+
+Before the first update and every 20 updates after that, the current policy
+takes a separate exam: 34 isolated one-worm scenarios with a fixed seed, map,
+spawn, destination and 30-second horizon. Actions are greedy, so repeated
+checks do not add sampling luck. The default suite visits each of the 17 room
+maps twice instead of leaving map coverage to a random draw. `best.pt` is
+selected lexicographically by
+fixed-scenario successes, then failure-aware time, speed and path efficiency.
+The full task list is written to `benchmark.json`; it is never used for
+gradients.
 
 The destinations start close. `--goal-radius 96-1600` draws them within 96 px
 of the worm at first — a walk or a jump — and moves the limit out to 1,600 px,
@@ -222,7 +232,7 @@ npm run train -- \
   --goal-above 0.5 \
   --rope-hold 12 \
   --goal-patience 450 \
-  --goal-patience-min 120 \
+  --goals-per-episode 1 \
   --goal-arrival-reward 8 \
   --goal-speed-reward 1 \
   --goal-speed-cap 16 \
@@ -236,19 +246,16 @@ npm run train -- \
 saved counter continues from the checkpoint's step. The speed bonus is paid
 only on arrival and uses direct pixels per decision, capped before its weight
 is applied. The old per-pixel shaping fades over the requested share of this
-speed phase, while the arrival and speed rewards stay. At the same time, the
-deadline curriculum tightens from
-450 decisions toward 120 whenever at least 85% of a world's last
-`--goal-window` resolved destinations were reached; at 50% or below it gives
-time back. This makes the policy earn harder deadlines instead of advancing on
-a clock.
+speed phase, while the arrival and speed rewards stay. A fixed 450-decision
+deadline gives every A/B run the same 30-second limit. `--goal-patience-min`
+can still enable an adaptive training curriculum, while the fixed benchmark
+remains the checkpoint selector.
 
-The monitor reports `goalSeconds`, direct `goalSpeed`, and
-`goalPathEfficiency` as well as goals reached and missed. A goal still active
-when the sixty-second episode ends is censored from the success share rather
-than counted either way. Death and respawn time remains on the goal clock, and
-the teleport itself is excluded from route length, so dying cannot masquerade
-as fast travel.
+The monitor leads with fixed-exam success and failure-aware seconds. It also
+reports the random training tasks' assigned distance, `goalSeconds`, direct
+`goalSpeed`, and `goalPathEfficiency`, plus goals reached and missed. Death and
+respawn time remains on the goal clock, and the teleport itself is excluded
+from route length, so dying cannot masquerade as fast travel.
 
 Compare the result with its parent on fixed conditions before keeping it:
 
@@ -262,12 +269,13 @@ npm run evaluate -- \
   --episodes 96
 ```
 
-Movement evaluation freezes both curricula and plays the same seeded maps with
-the seats swapped. Its primary score is destinations per sixty-second episode;
-seconds per destination, direct speed, path efficiency and misses explain the
-result. This selects the faster policy directly. Mutating whole neural networks
-and keeping the lucky few would spend far more simulations rediscovering a
-policy that PPO can already improve from the working checkpoint.
+Movement evaluation runs the policies separately on the exact same fixed map,
+spawn and destination list. Each scenario has one worm, one goal and one
+deadline, so neither terrain interference nor a lucky goal sequence can decide
+the result. Success is primary; failures cost the full horizon, then time,
+direct speed and path efficiency explain the difference. Mutating whole neural
+networks and keeping the lucky few would spend far more simulations
+rediscovering a policy that PPO can already improve from the working checkpoint.
 
 Five of the community maps draw much of their walls in a colour that has no
 material flags: a worm walks into it and a rope flies through it. The patch
@@ -421,13 +429,12 @@ npm run evaluate -- --left latest --right still                   # the newest r
 Nothing on the training page can compare two runs: every figure there is a
 policy measured against itself or its own recent past, and a run that improves
 slowly and one that improves quickly can show the same **is it beating its past
-self**. This seats the two checkpoints in the same free-for-all and plays
-every map once each way — two pools of worlds on the same seeds, the sides
-swapped between them, so a seat effect and the map's own swing drop out of the
-difference — and reports combat metrics for fighting checkpoints or destination
-rate, time, speed and route efficiency for movement checkpoints, with a
-bootstrap interval on the difference. Movement comparisons use the far end of
-the checkpoint's goal radius by default and freeze both curricula; pass
+self**. Combat evaluation seats the checkpoints in the same free-for-all and
+swaps sides on matched maps. Movement evaluation instead isolates each policy
+and gives both the exact same fixed map, spawn and one-goal scenarios. It
+reports success, failure-aware time, speed and route efficiency with a bootstrap
+interval on the paired difference. Movement comparisons use the far end of the
+checkpoint's goal radius by default and freeze both curricula; pass
 `--goal-radius` and `--goal-patience` to set the held-out conditions explicitly.
 `random` and `still` are two bars that never move, so a policy
 can be measured against the same thing early in a run and late in it. Both
@@ -559,7 +566,7 @@ src/env/     engine · actions · view · observation · progress · reward · e
   ↓ vec.js (many worlds) → worker.js (binary frames)
 train/       ppo.py · policy.py · evaluate.py  (PyTorch, MPS)
   ↓
-artifacts/runs/<id>/  metrics.jsonl · best.pt · policy.pt
+artifacts/runs/<id>/  metrics.jsonl · benchmark.json · best.pt · policy.pt
   ↓ src/train/monitor.js            ↓ src/env/watch.js
 public/train/  training page (8768)   public/watch/  match viewer (8769)
 ```

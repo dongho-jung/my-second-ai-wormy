@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
 import random
 import signal
 import sys
@@ -28,6 +29,12 @@ from torch import nn
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import demos as demo_store
+from movement_benchmark import (
+    DEFAULT_EPISODES as DEFAULT_BENCHMARK_EPISODES,
+    DEFAULT_TICKS as DEFAULT_BENCHMARK_TICKS,
+    VALIDATION_SEED as DEFAULT_BENCHMARK_SEED,
+    run_movement_benchmark,
+)
 from policy import MAP_CHANNELS, PATCH_CHANNELS, WormPolicy
 from run import Run
 from workers import REPO, WorkerPool
@@ -239,9 +246,10 @@ def parse_args(argv=None):
     where.add_argument("--task", default="fight", choices=["fight", "movement"],
                        help="what the run practises. 'movement' zeroes the fighting "
                             "rewards, holds the fire key and weapon switching shut, and "
-                            "hands every worm a random place on the map to reach — "
-                            "another one as soon as it arrives. Walking, digging and the "
-                            "rope are what is left. The observation carries the goal in "
+                            "hands every worm a random place on the map to reach. By default "
+                            "each gets one task and a fresh episode begins once all resolve, "
+                            "so short-goal sequences cannot farm reward. Walking, digging and "
+                            "the rope are what is left. The observation carries the goal in "
                             "both tasks (zeros when there is none), so the vector is the "
                             "same size either way and a movement policy can be --resume d "
                             "into a fighting run")
@@ -286,6 +294,10 @@ def parse_args(argv=None):
                        help="decisions a destination is kept before another is handed out, so one "
                             "the worm cannot reach does not eat the whole minute. The movement "
                             "task's default is 450, thirty seconds; 0 keeps a goal all episode")
+    where.add_argument("--goals-per-episode", type=int, default=1,
+                       help="destinations assigned to each worm in one episode. The movement "
+                            "default is 1, so a lucky sequence of short goals cannot farm the "
+                            "arrival reward; 0 restores unlimited successive goals")
     where.add_argument("--goal-patience-min", type=int, default=None,
                        help="tighten --goal-patience toward this many decisions whenever at least "
                             "85%% of the last --goal-window destinations were reached, and loosen "
@@ -308,6 +320,20 @@ def parse_args(argv=None):
                             "reward toward --goal-progress-floor. Arrival and speed rewards stay")
     where.add_argument("--goal-progress-floor", type=float, default=0.0,
                        help="share of the per-pixel reward left after its fade; 0 removes it")
+    benchmark = parser.add_argument_group("fixed movement benchmark")
+    benchmark.add_argument("--benchmark-every", type=int, default=20,
+                           help="updates between fixed one-goal validation suites in a movement "
+                                "run. The resumed or fresh starting policy is checked before any "
+                                "update; 0 disables validation")
+    benchmark.add_argument("--benchmark-episodes", type=int, default=DEFAULT_BENCHMARK_EPISODES,
+                           help="fixed validation scenarios per check")
+    benchmark.add_argument("--benchmark-seed", type=int, default=DEFAULT_BENCHMARK_SEED,
+                           help="seed naming the fixed validation suite")
+    benchmark.add_argument("--benchmark-ticks", type=int, default=DEFAULT_BENCHMARK_TICKS,
+                           help="fixed ticks allowed for each validation scenario")
+    benchmark.add_argument("--benchmark-workers", type=int, default=2)
+    benchmark.add_argument("--benchmark-envs", type=int, default=6,
+                           help="isolated one-worm validation worlds per benchmark worker")
     where.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     where.add_argument("--label", default=None, help="a name for this run on the monitor page")
     where.add_argument("--resume", default=None,
@@ -343,6 +369,12 @@ SHOWN = (
     "goalRadiusPx",
     "goalPatience",
     "goalProgressScale",
+    "benchmarkSuccess",
+    "benchmarkSeconds",
+    "benchmarkSpeed",
+    "benchmarkEfficiency",
+    "bestBenchmarkSuccess",
+    "bestBenchmarkSeconds",
     "ropeThrows",
     "ropeHeld",
 )
@@ -554,6 +586,17 @@ def main(argv=None):
         raise SystemExit("--goal-progress-floor must be between 0 and 1")
     if args.goal_speed_reward < 0 or args.goal_speed_cap <= 0:
         raise SystemExit("--goal-speed-reward must be non-negative and --goal-speed-cap positive")
+    if args.goals_per_episode < 0:
+        raise SystemExit("--goals-per-episode must be non-negative")
+    if args.benchmark_every < 0:
+        raise SystemExit("--benchmark-every must be non-negative")
+    if min(
+        args.benchmark_episodes,
+        args.benchmark_ticks,
+        args.benchmark_workers,
+        args.benchmark_envs,
+    ) <= 0:
+        raise SystemExit("benchmark episodes, ticks, workers and envs must be positive")
     for name, value in (
         ("--goal-progress-reward", args.goal_progress_reward),
         ("--goal-arrival-reward", args.goal_arrival_reward),
@@ -628,6 +671,12 @@ def main(argv=None):
         radius = [float(part) for part in str(args.goal_radius or "96-1600").split("-")]
         config["goalRadiusPx"] = radius if len(radius) > 1 else radius[0]
         config["goalPatience"] = 450 if args.goal_patience is None else args.goal_patience
+        config["goalsPerEpisode"] = args.goals_per_episode
+        config["endOnGoals"] = args.goals_per_episode > 0
+        # Task completion naturally desynchronises worlds. A cut-short warm-up
+        # would also hide whether its boundary was terminal from the value head.
+        if config["endOnGoals"]:
+            config["stagger"] = False
         if args.goal_patience_min is not None:
             if args.goal_patience_min <= 0 or config["goalPatience"] <= 0:
                 raise SystemExit("--goal-patience-min and --goal-patience must both be positive")
@@ -769,6 +818,14 @@ def main(argv=None):
         "patchChannels": PATCH_CHANNELS,
         "mapChannels": MAP_CHANNELS,
     }
+    benchmark_shape = {
+        "vectorSize": layout.vector_size,
+        "headSizes": layout.head_sizes,
+        **shape_of,
+        "agents": layout.agents,
+        "frameskip": layout.frameskip,
+        "episodeTicks": layout.episode_ticks,
+    }
     if layout.patch_channels != PATCH_CHANNELS or layout.map_channels != MAP_CHANNELS:
         pool.close()
         raise RuntimeError(
@@ -831,12 +888,17 @@ def main(argv=None):
             "goalCurriculum": args.goal_curriculum,
             "goalPatience": config.get("goalPatience"),
             "goalPatienceMin": config.get("goalPatienceMin"),
+            "goalsPerEpisode": config.get("goalsPerEpisode"),
             "goalProgressReward": args.goal_progress_reward,
             "goalArrivalReward": args.goal_arrival_reward,
             "goalSpeedReward": args.goal_speed_reward,
             "goalSpeedCap": args.goal_speed_cap if args.goal_speed_reward else None,
             "goalProgressDecay": args.goal_progress_decay,
             "goalProgressFloor": args.goal_progress_floor,
+            "benchmarkEvery": args.benchmark_every if args.task == "movement" else 0,
+            "benchmarkEpisodes": args.benchmark_episodes if args.task == "movement" else 0,
+            "benchmarkSeed": args.benchmark_seed if args.task == "movement" else None,
+            "benchmarkTicks": args.benchmark_ticks if args.task == "movement" else 0,
             "ropeThrowCost": args.rope_throw_cost,
             "ropeCooldown": args.rope_cooldown,
             "ropeHold": args.rope_hold,
@@ -920,9 +982,9 @@ def main(argv=None):
     # What a `dones` byte means. `first` is the opening observation of a new
     # episode — the only place the memory is cleared. `last` is the closing one
     # of an old episode, which is worth what it is worth: the clock ran out, the
-    # match did not. The action sampled at a `last` state is spent, because the
-    # world restarts instead of applying it, so those steps are held out of the
-    # update rather than learned from as though they had consequences.
+    # match did not. `terminal` means every assigned movement task resolved and
+    # has no future goal value. An action sampled at either closing state is
+    # spent because the world restarts instead of applying it.
     DONE_ONGOING = float(layout.done_codes["ongoing"])
     DONE_FIRST = float(layout.done_codes["first"])
     DONE_LAST = float(layout.done_codes["last"])
@@ -930,6 +992,7 @@ def main(argv=None):
     # (the match was still going) and, like `last`, the action sampled there
     # is never applied, so it is held out of the update the same way.
     DONE_CUT = float(layout.done_codes.get("cut", -1))
+    DONE_TERMINAL = float(layout.done_codes.get("terminal", -2))
     obs_v = torch.zeros(args.steps, slots, layout.vector_size, device=device)
     obs_p = (
         torch.zeros(args.steps, slots, layout.patch_cells, dtype=torch.uint8, device=device)
@@ -996,19 +1059,16 @@ def main(argv=None):
         return None
 
     finished = []          # episodes that ended since the last update
-    # The last policy is not the best one: self-play wanders, and a run watched
-    # afterwards should be the best it ever played, not wherever it happened to
-    # stop. Kept on a smoothed score so one lucky batch cannot win it — and the
-    # score is the learners' combat reward with no ladder in it, because the
-    # ladder fades over a run: on the total reward a later, better policy reads
-    # lower than an earlier one, and "best" freezes halfway through.
-    # What "best" is scored on. A fight is scored on damage, kills and deaths;
-    # a movement run has none of those and is scored on destinations reached —
-    # on `combat`, which is zero throughout, best.pt was the first checkpoint
-    # ever written and a resume from a movement run carried on from nothing.
-    score_field = "goalsReached" if args.task == "movement" else "combat"
-    best_name = "bestGoals" if args.task == "movement" else "bestCombat"
+    # The last policy is not necessarily the best one. Combat keeps its smoothed
+    # ladder-free score. Movement is judged elsewhere: the same fixed, isolated
+    # one-goal scenarios every time, so a lucky rollout of short goals cannot
+    # choose best.pt.
+    score_field = "combat"
+    best_name = "bestBenchmarkSuccess" if args.task == "movement" else "bestCombat"
     best_score = None
+    best_seconds = None
+    best_rank = None
+    benchmark_suite = None
     smoothed = None
     # An episode is longer than a rollout, so most updates end with none of them
     # finished. The last numbers stay on the line rather than reading as zero.
@@ -1024,6 +1084,76 @@ def main(argv=None):
         if not demo_batch or args.bc_coef <= 0:
             return 0.0
         return args.bc_coef * min(1.0, demo_batch["acting"] / max(1, args.bc_full_frames))
+
+    def check_movement(line):
+        """Score the current weights on the unchanged validation suite."""
+        nonlocal benchmark_suite, best_rank, best_score, best_seconds
+        checked_at = time.perf_counter()
+        result = run_movement_benchmark(
+            policy,
+            benchmark_shape,
+            config,
+            levels=config["levelFiles"],
+            generated_maps=config["levelPool"],
+            episodes=args.benchmark_episodes,
+            workers=args.benchmark_workers,
+            envs=args.benchmark_envs,
+            seed=args.benchmark_seed,
+            episode_ticks=args.benchmark_ticks,
+            device=device,
+        )
+        if benchmark_suite is None:
+            benchmark_suite = result.fingerprint
+            (run.path / "benchmark.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "seed": args.benchmark_seed,
+                        "fingerprint": benchmark_suite,
+                        **result.manifest(),
+                    },
+                    indent=2,
+                ) + "\n"
+            )
+        elif result.fingerprint != benchmark_suite:
+            raise RuntimeError(
+                "the fixed movement benchmark changed within one run: "
+                f"{benchmark_suite} became {result.fingerprint}"
+            )
+        line.update(result.metrics())
+        line["benchmarkWallSeconds"] = time.perf_counter() - checked_at
+        print(
+            f"benchmark | fixed scenarios {result.reached}/{result.episodes} "
+            f"({result.success:.1%}), {result.seconds:.1f}s including failures, "
+            f"{result.speed:.0f}px/s, {result.efficiency:.0%} direct | "
+            f"{line['benchmarkWallSeconds']:.1f}s",
+            flush=True,
+        )
+        if best_rank is None or result.rank > best_rank:
+            best_rank = result.rank
+            best_score = result.success
+            best_seconds = result.seconds
+            line["bestBenchmarkSuccess"] = best_score
+            line["bestBenchmarkSeconds"] = best_seconds
+            save(
+                policy,
+                layout,
+                shape_of,
+                total_steps,
+                run.path / "best.pt",
+                score=best_score,
+                reward=line.get("episodeReward"),
+                goalRadius=line.get("goalRadiusPx", latest.get("goalRadiusPx")),
+                goalPatience=line.get("goalPatience", latest.get("goalPatience")),
+                benchmarkSeed=args.benchmark_seed,
+                benchmarkSuite=result.fingerprint,
+                benchmarkReached=result.reached,
+                benchmarkEpisodes=result.episodes,
+                benchmarkSuccess=result.success,
+                benchmarkSeconds=result.seconds,
+                benchmarkSpeed=result.speed,
+                benchmarkEfficiency=result.efficiency,
+            )
 
     if demo_batch:
         print(
@@ -1089,6 +1219,18 @@ def main(argv=None):
     minibatch = max(1, lanes_per_batch * span)
 
     try:
+        if args.task == "movement" and args.benchmark_every > 0:
+            initial = {
+                "step": total_steps,
+                "update": 0,
+                "goalRadiusPx": float(goal_radius_now() or 0),
+                "goalPatience": float(
+                    config.get("goalPatienceStart", config.get("goalPatience", 0))
+                ),
+            }
+            check_movement(initial)
+            run.record(**initial)
+            latest.update({key: value for key, value in initial.items() if key in SHOWN})
         while total_steps - resumed_at < args.total_steps:
             # Exploration is worth paying for early and worth stopping later:
             # the bonus is a fixed size while the advantages are normalised, so
@@ -1155,7 +1297,7 @@ def main(argv=None):
                 # cleared between steps, so counting the restart byte as well
                 # would file every episode twice, the second time from a buffer
                 # that had already been read.
-                closed = env_done == int(DONE_LAST)
+                closed = (env_done == int(DONE_LAST)) | (env_done == int(DONE_TERMINAL))
                 if closed.any():
                     finished.extend(stats[closed])
                 total_steps += slots
@@ -1178,13 +1320,13 @@ def main(argv=None):
                     # Two different questions, and they used to share one answer.
                     #
                     # "Is the state ahead worth anything?" — yes, unless it is
-                    # the opening of a fresh episode, which is a state this
-                    # action did not lead to. The closing state of an old
-                    # episode is worth exactly what the value head says: the
-                    # match was still going when this project stopped watching,
-                    # and calling it worthless taught every worm that the world
-                    # ends a minute in.
-                    carry_value = (flag != DONE_FIRST).to(rews.dtype)
+                    # the opening of a fresh episode, which this action did not
+                    # lead to, or a completed task with no future goal reward.
+                    # A clock-truncated closing state is still worth what the
+                    # value head says because the match could have continued.
+                    carry_value = (
+                        (flag != DONE_FIRST) & (flag != DONE_TERMINAL)
+                    ).to(rews.dtype)
                     # "Does the advantage run back past here?" — only through
                     # the middle of an episode. Not across either boundary.
                     carry_run = (flag == DONE_ONGOING).to(rews.dtype)
@@ -1194,7 +1336,11 @@ def main(argv=None):
                 returns = advantages + vals
                 # The steps whose action was never applied — and, if some worms
                 # are older copies, everything they did as well.
-                valid = ((dones != DONE_LAST) & (dones != DONE_CUT)).to(rews.dtype)
+                valid = (
+                    (dones != DONE_LAST) &
+                    (dones != DONE_CUT) &
+                    (dones != DONE_TERMINAL)
+                ).to(rews.dtype)
                 if frozen:
                     valid = valid * (~is_opponent).to(rews.dtype)
 
@@ -1449,7 +1595,16 @@ def main(argv=None):
                     line["goalRadiusPx"] = float(radius_now)
             if episodes is not None:
                 for index, field in enumerate(layout.stat_fields):
-                    if field == "seed":
+                    if field in {
+                        "seed",
+                        "seedLow",
+                        "seedHigh",
+                        "mapIndex",
+                        "goalStartX",
+                        "goalStartY",
+                        "goalTargetX",
+                        "goalTargetY",
+                    }:
                         continue
                     name = {"reward": "episodeReward", "steps": "episodeSteps"}.get(field, field)
                     line[name] = float(episodes[:, index].mean())
@@ -1462,6 +1617,12 @@ def main(argv=None):
                     # Active goals at the episode boundary are censored rather
                     # than silently called a success or a failure.
                     line["goalSuccess"] = line.get("goalsReached", 0) / resolved_goals
+            if (
+                args.task == "movement"
+                and args.benchmark_every > 0
+                and updates % args.benchmark_every == 0
+            ):
+                check_movement(line)
             if args.probe_every and updates % args.probe_every == 0:
                 probed_at = time.perf_counter()
                 policy.eval()
@@ -1524,7 +1685,7 @@ def main(argv=None):
                 f"kl {line['approxKL']:.4f} lr {line['learningRate']:.1e}",
                 flush=True,
             )
-            if score_field in line:
+            if args.task != "movement" and score_field in line:
                 smoothed = (
                     line[score_field]
                     if smoothed is None
@@ -1562,6 +1723,14 @@ def main(argv=None):
         steps=total_steps,
         updates=updates,
         **{best_name: best_score},
+        **(
+            {
+                "bestBenchmarkSeconds": best_seconds,
+                "benchmarkSuite": benchmark_suite,
+            }
+            if args.task == "movement"
+            else {}
+        ),
     )
 
 

@@ -111,9 +111,8 @@ class Layout:
             episode_ticks=raw["episodeTicks"],
             maps=raw["maps"],
             stock_maps=raw.get("stockMaps", 0),
-            # What the `dones` byte means. Three states, not two: an episode
-            # here ends on a clock rather than on anything the game did, so its
-            # last observation is sent to be valued rather than thrown away.
+            # What the `dones` byte means. A clock cutoff is valued; a fully
+            # resolved task is terminal. Both send their final observation.
             done_codes=raw.get("doneCodes", {"ongoing": 0, "first": 1, "last": 2}),
         )
 
@@ -130,6 +129,10 @@ class WorkerPool:
             # Every worker gets its own seed, or they would all play the same
             # match in parallel.
             own = dict(config, seed=int(config.get("seed", 1)) + index * 7919)
+            if config.get("levelSequence") == "roundRobin":
+                per_worker = int(config.get("envs", 8))
+                own["levelOffset"] = int(config.get("levelOffset", 0)) + index * per_worker
+                own["levelStride"] = workers * per_worker
             process = subprocess.Popen(
                 [node, str(WORKER), json.dumps(own)],
                 stdin=subprocess.PIPE,

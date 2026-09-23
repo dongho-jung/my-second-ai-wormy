@@ -1,12 +1,9 @@
-"""Two policies in the same matches, and which one comes out ahead.
+"""Two checkpoints under conditions that make their scores comparable.
 
-Nothing on the training page can compare two runs. Every figure there is a
-policy measured against itself, or against its own recent past, and a run that
-improves slowly and one that improves quickly can show the same "beating its
-past self" number. So this seats one checkpoint against another — or against a
-fixed baseline — in the same free-for-all, on the same maps, with the sides
-swapped every other match, and reports the difference with a confidence
-interval.
+Combat policies share matches and swap seats. Movement policies run alone on
+the exact same fixed map, spawn and one-goal tasks, so terrain interference and
+lucky goal sequences cannot decide which one looks faster. Both report paired
+differences with a confidence interval.
 
     npm run evaluate -- --left artifacts/runs/<a>/best.pt --right artifacts/runs/<b>/best.pt
     npm run evaluate -- --left artifacts/runs/<a> --right random
@@ -32,6 +29,11 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from policy import policy_from_shape
+from movement_benchmark import (
+    DEFAULT_TICKS as DEFAULT_BENCHMARK_TICKS,
+    assert_same_scenarios,
+    run_movement_benchmark,
+)
 from ppo import stock_levels
 from run import DEFAULT_RUNS
 from watch import newest_checkpoint
@@ -50,21 +52,6 @@ COMBAT_METRICS = [
     ("deaths, own doing", "suicides", "suicidesVsPast"),
 ]
 
-# A destination is private to one worm, but the paired seating still matters:
-# the policies dig the same terrain and can block or move one another. The
-# front-minus-back fields let the evaluator recover each side after the swap,
-# exactly as for combat. Reached is primary because a sixty-second episode
-# makes it goals/minute; the other three explain whether a win came from faster,
-# straighter travel or merely easier goals.
-MOVEMENT_METRICS = [
-    ("destinations reached", "goalsReached", "goalsVsPast"),
-    ("seconds per destination", "goalSeconds", "goalSecondsVsPast"),
-    ("direct speed, px/s", "goalSpeed", "goalSpeedVsPast"),
-    ("path efficiency", "goalPathEfficiency", "goalEfficiencyVsPast"),
-    ("destinations missed", "goalsMissed", "goalsMissedVsPast"),
-]
-
-
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--left", default=None,
@@ -82,7 +69,8 @@ def parse_args(argv=None):
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--greedy", action="store_true",
                         help="each side takes its most likely key instead of sampling. Training "
-                             "samples, so sampling is the fairer default")
+                             "samples, so sampling is the fairer combat default. Movement exams "
+                             "are always greedy so repeated checks are deterministic")
     parser.add_argument("--levels-dir", default=str(REPO / "artifacts" / "maps" / "dsds-cs"),
                         help="the maps to play on. The checkpoint's own list is not used: its paths "
                              "belong to the machine it trained on")
@@ -95,8 +83,8 @@ def parse_args(argv=None):
                         help="fixed movement-evaluation radius. By default the far end of the "
                              "checkpoint's range; no curriculum runs during an evaluation")
     parser.add_argument("--goal-patience", type=int, default=None,
-                        help="fixed movement-evaluation deadline in decisions. By default the "
-                             "checkpoint's original maximum; no deadline curriculum runs")
+                        help="fixed movement-exam horizon in decisions; converted to ticks. "
+                             "--episode-ticks takes precedence")
     parser.add_argument("--device", default="cpu", choices=["cpu", "mps", "cuda"])
     parser.add_argument("--torch-threads", type=int, default=2)
     parser.add_argument("--json", default=None, help="also write the result here")
@@ -246,6 +234,149 @@ def history(args):
     return results
 
 
+def compare_fixed_movement(args, left, right, shape, checkpoint_world):
+    """Run each policy alone on the exact same one-goal scenario suite."""
+    levels = stock_levels(args)
+    shared_world = dict(checkpoint_world)
+    if args.goal_radius is not None:
+        shared_world["goalRadiusPx"] = args.goal_radius
+    if args.episode_ticks is not None:
+        ticks = args.episode_ticks
+    elif args.goal_patience is not None and args.goal_patience > 0:
+        ticks = args.goal_patience * int(shared_world.get("frameskip", 4))
+    else:
+        ticks = DEFAULT_BENCHMARK_TICKS
+
+    def run(side):
+        side_shape = side.shape or shape
+        side_world = dict(shared_world)
+        # Observation scale belongs to the network, while physics, map, spawn
+        # and goal all belong to the shared exam.
+        if side.shape is not None:
+            own_world = side.shape.get("world") or {}
+            if "patchScale" in own_world:
+                side_world["patchScale"] = own_world["patchScale"]
+        side_world.pop("patchScale2", None)
+        return run_movement_benchmark(
+            side.policy,
+            side_shape,
+            side_world,
+            levels=levels,
+            generated_maps=args.maps,
+            episodes=args.episodes,
+            workers=args.workers,
+            envs=args.envs,
+            seed=args.seed,
+            episode_ticks=ticks,
+            device=torch.device(args.device),
+            baseline=side.name if side.baseline else None,
+        )
+
+    print(
+        f"{left.name} (left) against {right.name} (right): {args.episodes} fixed, "
+        f"isolated one-goal scenarios; identical map, spawn and destination; greedy actions",
+        flush=True,
+    )
+    started = time.perf_counter()
+    left_run = run(left)
+    right_run = run(right)
+    assert_same_scenarios(left_run, right_run)
+
+    specs = [
+        ("fixed-scenario success", lambda one: float(one.reached)),
+        ("seconds per scenario", lambda one: one.seconds),
+        ("direct speed, px/s", lambda one: one.speed),
+        ("path efficiency", lambda one: one.efficiency),
+        ("assigned distance, px", lambda one: one.assigned_distance),
+    ]
+    result = {
+        "left": left.name,
+        "right": right.name,
+        "episodes": args.episodes,
+        "agents": 1,
+        "maps": len(levels) + args.maps,
+        "paired": True,
+        "isolated": True,
+        "oneGoal": True,
+        "greedy": True,
+        "benchmarkSuite": left_run.fingerprint,
+        "seed": args.seed,
+        "episodeTicks": ticks,
+        "task": "movement",
+        "primary": specs[0][0],
+        "metrics": {},
+        "scenarios": [
+            {
+                "seed": one.seed,
+                "mapIndex": one.map_index,
+                "map": one.map_name,
+                "start": [one.start_x, one.start_y],
+                "goal": [one.target_x, one.target_y],
+                "distance": one.assigned_distance,
+            }
+            for one in left_run.scenarios
+        ],
+    }
+    print()
+    print(f"{'':24s}{'left':>10s}{'right':>10s}{'left - right':>16s}{'95% interval':>22s}")
+    for label, value in specs:
+        lefts = np.asarray([value(one) for one in left_run.scenarios], dtype=np.float64)
+        rights = np.asarray([value(one) for one in right_run.scenarios], dtype=np.float64)
+        diffs = lefts - rights
+        low, high = bootstrap(diffs, seed=args.seed)
+        result["metrics"][label] = {
+            "left": float(lefts.mean()),
+            "right": float(rights.mean()),
+            "difference": float(diffs.mean()),
+            "interval": [low, high],
+        }
+        print(
+            f"{label:24s}{lefts.mean():10.2f}{rights.mean():10.2f}{diffs.mean():+16.2f}"
+            f"{'[' + f'{low:+.2f}, {high:+.2f}' + ']':>22s}"
+        )
+
+    ahead = behind = level = 0
+    for a, b in zip(left_run.scenarios, right_run.scenarios):
+        if a.reached != b.reached:
+            comparison = 1 if a.reached > b.reached else -1
+        elif a.reached and abs(a.seconds - b.seconds) > 1e-9:
+            comparison = 1 if a.seconds < b.seconds else -1
+        else:
+            comparison = 0
+        ahead += comparison > 0
+        behind += comparison < 0
+        level += comparison == 0
+    result["pairs"] = {"left_ahead": ahead, "right_ahead": behind, "level": level}
+
+    primary = result["metrics"][specs[0][0]]
+    low, high = primary["interval"]
+    if low > 0:
+        verdict = f"{left.name} solves more of the fixed scenarios"
+    elif high < 0:
+        verdict = f"{right.name} solves more of the fixed scenarios"
+    else:
+        seconds = result["metrics"]["seconds per scenario"]
+        slow_low, slow_high = seconds["interval"]
+        if slow_high < 0:
+            verdict = f"{left.name} is faster on the fixed scenarios"
+        elif slow_low > 0:
+            verdict = f"{right.name} is faster on the fixed scenarios"
+        else:
+            verdict = "the fixed scenarios cannot distinguish the policies yet"
+    result["verdict"] = verdict
+    result["wallSeconds"] = time.perf_counter() - started
+    print()
+    print(
+        f"left won {ahead} of {args.episodes} identical scenarios, right won {behind}, "
+        f"the same in {level}"
+    )
+    print(verdict, flush=True)
+    if args.json:
+        Path(args.json).write_text(json.dumps(result, indent=2) + "\n")
+        print(f"written to {args.json}")
+    return result
+
+
 def compare(args, left_spec, right_spec):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -264,7 +395,7 @@ def compare(args, left_spec, right_spec):
         args.task == "movement"
         or (args.task == "auto" and bool(checkpoint_world.get("goals")))
     )
-    metrics = MOVEMENT_METRICS if movement else COMBAT_METRICS
+    metrics = COMBAT_METRICS
     for side in (left, right):
         if side.baseline or side is anchor:
             continue
@@ -275,6 +406,8 @@ def compare(args, left_spec, right_spec):
                     f"{shape.get(key)} on one side and {side.shape.get(key)} on the other. "
                     "They were trained on different observations, and a match encodes one"
                 )
+    if movement:
+        return compare_fixed_movement(args, left, right, shape, checkpoint_world)
     # Two policies that look at the ground through different patch scales can
     # still share a match: the world cuts the same ground twice and each side
     # is shown the cut it learned on.

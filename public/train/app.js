@@ -23,9 +23,21 @@ const SERIES = {
   combat: { label: "combat score: damage, kills, deaths, learners only", good: "up" },
   bestCombat: { label: "best combat score kept", good: "up" },
   bestGoals: { label: "best destinations a match kept", good: "up" },
+  bestBenchmarkSuccess: { label: "best fixed-scenario success", good: "up" },
+  bestBenchmarkSeconds: { label: "best fixed-scenario seconds", good: "down" },
+  benchmarkSuccess: { label: "fixed-scenario success", good: "up" },
+  benchmarkReached: { label: "fixed scenarios reached", good: "up" },
+  benchmarkEpisodes: { label: "fixed scenarios tested" },
+  benchmarkSeconds: { label: "seconds per fixed scenario, failures included", good: "down" },
+  benchmarkSpeed: { label: "fixed-scenario direct speed, px/s", good: "up" },
+  benchmarkEfficiency: { label: "fixed-scenario path efficiency", good: "up" },
+  benchmarkDistance: { label: "fixed-scenario mean distance, px" },
+  benchmarkWallSeconds: { label: "seconds the fixed benchmark took" },
   bestReward: { label: "best reward kept", good: "up" },
   goalsReached: { label: "destinations reached a match", good: "up" },
   goalsMissed: { label: "destinations given up on a match", good: "down" },
+  goalsAssigned: { label: "destinations assigned a match" },
+  goalAssignedDistance: { label: "mean assigned distance, px" },
   goalSuccess: { label: "resolved destinations reached", good: "up" },
   goalSeconds: { label: "seconds per reached destination", good: "down" },
   goalSpeed: { label: "straight-line speed to destinations, px/s", good: "up" },
@@ -95,11 +107,26 @@ const SERIES = {
 
 // Not charts: the x axis itself, and the things that are one value per record
 // rather than a curve.
-const NOT_A_SERIES = new Set(["step", "episode", "seed", "elapsedSeconds", "update"]);
+const NOT_A_SERIES = new Set([
+  "step", "episode", "seed", "seedLow", "seedHigh", "mapIndex", "elapsedSeconds", "update",
+  "goalStartX", "goalStartY", "goalTargetX", "goalTargetY",
+]);
 const MOVEMENT_SERIES = new Set([
+  "bestBenchmarkSuccess",
+  "bestBenchmarkSeconds",
+  "benchmarkSuccess",
+  "benchmarkReached",
+  "benchmarkEpisodes",
+  "benchmarkSeconds",
+  "benchmarkSpeed",
+  "benchmarkEfficiency",
+  "benchmarkDistance",
+  "benchmarkWallSeconds",
   "bestGoals",
   "goalsReached",
   "goalsMissed",
+  "goalsAssigned",
+  "goalAssignedDistance",
   "goalSuccess",
   "goalSeconds",
   "goalSpeed",
@@ -150,8 +177,20 @@ const FIGURES = [
   ["step", "steps", (value) => count(value)],
   ["stepsPerSecond", "steps/s", (value) => count(Math.round(value))],
   ["episodeReward", "reward", (value) => value.toFixed(2)],
-  ["bestGoals", "best goals/min", (value) => value.toFixed(2), () => run?.meta?.task === "movement"],
-  ["goalsReached", "goals/min", (value) => value.toFixed(2), () => run?.meta?.task === "movement"],
+  [
+    "bestBenchmarkSuccess",
+    "best fixed test",
+    (value) => `${Math.round(value * 100)}%`,
+    () => run?.meta?.task === "movement",
+  ],
+  [
+    "benchmarkSuccess",
+    "fixed test",
+    (value) => `${Math.round(value * 100)}%`,
+    () => run?.meta?.task === "movement",
+  ],
+  ["benchmarkSeconds", "fixed seconds", (value) => value.toFixed(1), () => run?.meta?.task === "movement"],
+  ["goalsReached", "training goals", (value) => value.toFixed(2), () => run?.meta?.task === "movement"],
   ["goalSeconds", "seconds/goal", (value) => value.toFixed(1), () => run?.meta?.task === "movement"],
   [
     "goalSpeed",
@@ -407,7 +446,29 @@ const CHANGED = 0.08;
 const HEADLINES = [
   {
     when: () => run?.meta?.task === "movement",
-    title: "How fast does it reach a destination?",
+    title: "How many identical test routes does it solve?",
+    good: "up",
+    track: "benchmarkSuccess",
+    read: () => latest("benchmarkSuccess"),
+    show: percent,
+    unit: () => {
+      const reached = latest("benchmarkReached");
+      const episodes = latest("benchmarkEpisodes");
+      const seconds = latest("benchmarkSeconds");
+      return `${Number.isFinite(reached) ? Math.round(reached) : "—"}/`
+        + `${Number.isFinite(episodes) ? Math.round(episodes) : "—"} fixed routes · `
+        + `${Number.isFinite(seconds) ? seconds.toFixed(1) : "—"}s including failures`;
+    },
+    say: (move) => {
+      if (!move) return "Every checkpoint receives the same map, spawn and destination in an isolated world.";
+      if (move.change > CHANGED) return "Solving more of the unchanged validation routes.";
+      if (move.change < -CHANGED) return "Solving fewer of the unchanged validation routes.";
+      return "Success on the unchanged validation routes is flat.";
+    },
+  },
+  {
+    when: () => run?.meta?.task === "movement",
+    title: "How fast is it inside the random training worlds?",
     good: "down",
     track: "goalSeconds",
     read: () => latest("goalSeconds"),
@@ -415,7 +476,9 @@ const HEADLINES = [
     unit: () => {
       const goals = latest("goalsReached");
       const speed = latest("goalSpeed");
-      return `${Number.isFinite(goals) ? goals.toFixed(2) : "—"} goals/min · `
+      const distance = latest("goalAssignedDistance");
+      return `${Number.isFinite(goals) ? goals.toFixed(2) : "—"} training goals · `
+        + `${Number.isFinite(distance) ? distance.toFixed(0) : "—"}px assigned · `
         + `${Number.isFinite(speed) ? speed.toFixed(0) : "—"} direct px/s`;
     },
     say: (move) => {
@@ -844,6 +907,9 @@ const GROUPS = [
     open: true,
     of: [
       "goalsVsPast", "goalSecondsVsPast", "goalSpeedVsPast", "goalEfficiencyVsPast",
+      "benchmarkSuccess", "benchmarkSeconds", "benchmarkSpeed", "benchmarkEfficiency",
+      "bestBenchmarkSuccess", "bestBenchmarkSeconds", "benchmarkReached", "benchmarkEpisodes",
+      "benchmarkDistance",
       "goalsReached", "goalsMissed", "goalSuccess", "goalSeconds", "goalSpeed",
       "goalPathEfficiency", "bestGoals", "killsVsPast", "damageVsPast", "deathsVsPast",
       "selfDamageVsPast", "probeKills", "probeDeaths", "probeSuicides", "combat",
@@ -875,7 +941,7 @@ const GROUPS = [
   },
   {
     title: "How fast it is going",
-    of: ["stepsPerSecond", "ticksPerSecond", "envShare", "rolloutShare", "episodeSteps", "episodes", "probeSeconds"],
+    of: ["stepsPerSecond", "ticksPerSecond", "envShare", "rolloutShare", "episodeSteps", "episodes", "probeSeconds", "benchmarkWallSeconds"],
   },
 ];
 

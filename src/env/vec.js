@@ -60,6 +60,17 @@ export const EPISODE_STATS = [
   // swapped for another. Many of these against few reached is a worm that
   // cannot get where it is sent, whatever the reward curve says.
   "goalsMissed",
+  // Every assigned destination, including one still unresolved at the episode
+  // boundary, and its mean initial straight-line distance. A fixed benchmark
+  // checks these beside the seed to prove both policies received the same task.
+  "goalsAssigned",
+  "goalAssignedDistance",
+  // The first task's exact endpoints. Benchmarks run one worm and one task, so
+  // these make equality stronger than "the distances happened to match".
+  "goalStartX",
+  "goalStartY",
+  "goalTargetX",
+  "goalTargetY",
   // Speed is measured on completed destinations. Seconds says what a person
   // sees, direct px/s separates it from the random distance of each goal, and
   // path efficiency says how much of the travelled route actually shortened
@@ -114,6 +125,13 @@ export const EPISODE_STATS = [
   // fading over a run, the total reward of a later, better policy reads lower
   // than an earlier one's, and "best" would freeze halfway through.
   "combat",
+  // Small, exact index into this worker's configured level list. Fixed exams
+  // retain it beside the endpoints so "same seed" is not the only map proof.
+  "mapIndex",
+  // Float32 cannot hold every uint32 seed exactly. Split halves retain the
+  // replay key while the legacy combined field remains available.
+  "seedLow",
+  "seedHigh",
   "seed",
 ];
 
@@ -145,6 +163,12 @@ const STAT_SOURCE = {
   fromRopeThrow: "fromRopeThrow",
   goalsReached: "goalsReached",
   goalsMissed: "goalsMissed",
+  goalsAssigned: "goalsAssigned",
+  goalAssignedDistance: "goalAssignedDistance",
+  goalStartX: "goalStartX",
+  goalStartY: "goalStartY",
+  goalTargetX: "goalTargetX",
+  goalTargetY: "goalTargetY",
   goalSeconds: "goalSeconds",
   goalSpeed: "goalSpeed",
   goalPathEfficiency: "goalPathEfficiency",
@@ -157,12 +181,9 @@ export const HEADS = ACTION_HEADS.length;
 /**
  * What the `dones` byte says about the observation sent beside it.
  *
- * Three states rather than two, because an episode here ends on a clock this
- * project set and not on anything the game did. Whoever is learning from this
- * has to be able to tell "the match is over, this state is worth nothing" from
- * "we stopped watching, this state is worth whatever it was worth" — and only
- * the second one ever happens here. So the last observation of an episode is
- * sent and marked, and the world restarts on the next call.
+ * More than a boolean because a fixed clock and a completed task mean
+ * different things to the value function. The last observation is always sent
+ * and marked, and the world restarts on the next call.
  */
 export const DONE = {
   /** Mid-episode. The usual. */
@@ -175,12 +196,25 @@ export const DONE = {
   // world plays — so its last observation is still valued like a truncation,
   // but nothing is filed about it: it was not a whole episode.
   cut: 3,
+  /** A complete task. Its closing observation has no future value. */
+  terminal: 4,
 };
 
 export class VecWormEnv {
   constructor(
     engine,
-    { envs = 8, levelPool = 16, levelFiles = [], seed = 1, stagger = false, opponents = 0, ...options } = {},
+    {
+      envs = 8,
+      levelPool = 16,
+      levelFiles = [],
+      levelSequence = "seed",
+      levelOffset = 0,
+      levelStride = null,
+      seed = 1,
+      stagger = false,
+      opponents = 0,
+      ...options
+    } = {},
   ) {
     if (!Number.isInteger(envs) || envs < 1) {
       throw new Error(`envs must be a whole number of at least 1, got ${envs}`);
@@ -214,12 +248,26 @@ export class VecWormEnv {
       ...stock,
     ];
     this.stockLevels = stock.length;
-    const level = (_engine, episodeSeed) =>
-      this.levels[episodeSeed % this.levels.length];
+    if (!["seed", "roundRobin"].includes(levelSequence)) {
+      throw new Error(`levelSequence must be seed or roundRobin, got ${levelSequence}`);
+    }
+    const firstLevel = Math.trunc(levelOffset);
+    const stride = Math.max(1, Math.trunc(levelStride ?? envs));
     this.envs = Array.from(
       { length: envs },
-      (_, index) =>
-        new WormEnv(engine, {
+      (_, index) => {
+        let episode = 0;
+        let environment = null;
+        const level = (_engine, episodeSeed) => {
+          let at = episodeSeed % this.levels.length;
+          if (levelSequence === "roundRobin") {
+            const scheduled = firstLevel + index + episode++ * stride;
+            at = ((scheduled % this.levels.length) + this.levels.length) % this.levels.length;
+          }
+          if (environment) environment.levelIndex = at;
+          return this.levels[at];
+        };
+        environment = new WormEnv(engine, {
           ...options,
           // Every world gets its own stream of episodes, so a row of them is a
           // row of different fights and not the same one N times.
@@ -237,7 +285,9 @@ export class VecWormEnv {
             ),
             ...(options.patchScale2 ? ["patchBytes2"] : []),
           ],
-        }),
+        });
+        return environment;
+      },
     );
     this.agents = this.envs[0].agents;
     // How many worms at the end of each match are older copies of the policy
@@ -359,7 +409,7 @@ export class VecWormEnv {
         this.rewards[index * this.agents + agent] = out.rewards[agent];
         this.restarts[index * this.agents + agent] = out.respawned[agent] ? 1 : 0;
       }
-      if (out.truncated) {
+      if (out.done) {
         if (this.warming[index]) {
           this.warming[index] = 0;
           this.dones[index] = DONE.cut;
@@ -368,7 +418,7 @@ export class VecWormEnv {
         // Written while the totals are still this episode's; the reset that
         // clears them does not run until the next call.
         this.writeStats(index, env);
-        this.dones[index] = DONE.last;
+        this.dones[index] = out.terminated ? DONE.terminal : DONE.last;
         this.episodes++;
       }
     }
@@ -376,7 +426,9 @@ export class VecWormEnv {
   }
 
   writeStats(index, env) {
-    const totals = env.info().totals;
+    const info = env.info();
+    const totals = info.totals;
+    const episodeSteps = (info.elapsedTicks ?? env.episodeTicks) / env.frameskip;
     const valueOf = (one, field) => {
       const reached = one.goalsReached ?? 0;
       if (field === "goalSeconds") {
@@ -388,6 +440,10 @@ export class VecWormEnv {
             ? (one.goalStepsReached ?? 0) / reached
             : env.goalDeadline() || env.episodeTicks / env.frameskip;
         return decisions * env.frameskip / 60;
+      }
+      if (field === "goalAssignedDistance") {
+        const assigned = one.goalsAssigned ?? 0;
+        return assigned > 0 ? (one.goalAssignedPx ?? 0) / assigned : 0;
       }
       if (field === "goalSpeed") {
         const decisions = one.goalStepsReached ?? 0;
@@ -418,14 +474,19 @@ export class VecWormEnv {
         : 0;
     const at = index * EPISODE_STATS.length;
     for (const [offset, field] of EPISODE_STATS.entries()) {
-      if (field === "steps") this.stats[at + offset] = env.episodeTicks / env.frameskip;
+      if (field === "steps") this.stats[at + offset] = episodeSteps;
       else if (field === "ropeShare") {
-        this.stats[at + offset] = mean("ropeHeld") / (env.episodeTicks / env.frameskip);
+        this.stats[at + offset] = mean("ropeHeld") / Math.max(1, episodeSteps);
       }
       else if (field === "shaping") this.stats[at + offset] = env.shaping;
       else if (field === "goalRadiusPx") this.stats[at + offset] = env.goalRadius() ?? 0;
       else if (field === "goalPatience") this.stats[at + offset] = env.goalDeadline();
       else if (field === "goalProgressScale") this.stats[at + offset] = env.goalProgressScale;
+      else if (field === "mapIndex") {
+        this.stats[at + offset] = env.levelIndex ?? env.episodeSeed % this.levels.length;
+      }
+      else if (field === "seedLow") this.stats[at + offset] = env.episodeSeed & 0xffff;
+      else if (field === "seedHigh") this.stats[at + offset] = env.episodeSeed >>> 16;
       else if (field === "seed") this.stats[at + offset] = env.episodeSeed;
       else if (field === "killsVsPast") this.stats[at + offset] = versus("killed");
       else if (field === "damageVsPast") this.stats[at + offset] = versus("damageDealt");
