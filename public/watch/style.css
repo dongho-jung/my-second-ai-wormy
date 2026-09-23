@@ -166,6 +166,11 @@ canvas {
   border-color: color-mix(in srgb, var(--live) 55%, var(--edge));
 }
 
+.worms li[data-dnf="true"] {
+  border-color: color-mix(in srgb, var(--bad) 55%, var(--edge));
+  opacity: 0.72;
+}
+
 .worms li[data-policy-mode="benchmark"] {
   border-color: color-mix(in srgb, var(--warn) 55%, var(--edge));
 }

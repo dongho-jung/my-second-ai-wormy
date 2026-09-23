@@ -175,10 +175,11 @@ const state = () => {
           detour: race.detour,
           fingerprint: config.race.fingerprint ?? null,
           done: race.done,
+          settled: race.settled,
         }
       : null,
     map: { name: level.name, width: level.width, height: level.height },
-    worms: racers.map(({ id, worm, loadout, progress, finish, rank }) => ({
+    worms: racers.map(({ id, worm, loadout, progress, finish, rank, dnf = false }) => ({
       id,
       alive: Boolean(worm.u),
       x: finish?.x ?? worm.x,
@@ -198,6 +199,7 @@ const state = () => {
       policyMode: racing ? (config.race.racerModes?.[id] ?? "sample") : null,
       finishSeconds: finish?.seconds ?? null,
       rank,
+      dnf,
       score: scores[id],
     })),
     projectiles,
@@ -456,6 +458,10 @@ const advance = (heads) => {
   const out = env.step(Array.from({ length: agents }, (_, agent) =>
     actionFromHeads(heads, agent * HEADS),
   ));
+  const restarted = out.restarted ?? out.respawned ?? [];
+  for (let agent = 0; agent < Math.min(agents, restarted.length); agent++) {
+    resets[agent] = restarted[agent] ? 1 : 0;
+  }
   if (!racing) {
     for (const [agent, events] of out.info.events.entries()) {
       scores[agent].kills += events.killed;

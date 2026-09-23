@@ -234,7 +234,7 @@ npm run train -- \
   --goal-progress-mode best \
   --rope-hold 12 \
   --goal-patience 450 \
-  --goals-per-episode 1 \
+  --goals-per-episode 0 \
   --goal-arrival-reward 8 \
   --goal-speed-reward 1 \
   --goal-speed-cap 16 \
@@ -252,6 +252,15 @@ speed phase, while the arrival and speed rewards stay. A fixed 450-decision
 deadline gives every A/B run the same 30-second limit. `--goal-patience-min`
 can still enable an adaptive training curriculum, while the fixed benchmark
 remains the checkpoint selector.
+
+Zero goals per episode means an unlimited succession rather than no goals. A
+worm that arrives or uses its deadline receives another random destination on
+the same step, and only that worm's recurrent memory is cleared for the new
+route. Fast worms therefore keep producing navigation samples instead of
+waiting without a goal for the slowest worm. `goalIdleSteps` records any such
+unused decisions; it should remain zero in a continuous movement run. The
+held-out benchmark still gives one policy one fixed task, so repeated easy
+destinations cannot inflate checkpoint selection.
 
 `--goal-detour 0.5` deliberately puts solid terrain across the direct line in
 half the tasks. These include ledges where the first useful move is sideways
@@ -403,7 +412,9 @@ owns a separate engine world, including its own worms, projectiles and mutable
 terrain, so collisions, ropes, shots and digging cannot change another
 attempt. Ghost 1 uses the greedy actions that produced the fixed benchmark
 score; the remaining ghosts sample the same policy to show its variation.
-Finish rank and time are shown before the next fixed route starts.
+Finish rank and time are shown before the next fixed route starts. Once no new
+ghost has arrived for three game seconds, remaining stragglers are marked DNF;
+one failed sample no longer holds the viewer for the whole 30-second horizon.
 
 For a combat run, one match is played at the speed the game actually runs at
 and drawn in the browser on port 8769: the terrain the worms are digging

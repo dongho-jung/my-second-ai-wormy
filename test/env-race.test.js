@@ -57,6 +57,7 @@ test("a fixed race gives every ghost exact endpoints and no shared world state",
       loadout: [0, 2, 3, 5, 10],
     },
     episodeTicks: 120,
+    settleTicks: 8,
   });
 
   assert.equal(race.envs.length, 3);
@@ -83,4 +84,22 @@ test("a fixed race gives every ghost exact endpoints and no shared world state",
   assert.equal(race.envs[0].lastActions[0].keys, KEYS.right);
   assert.equal(race.envs[1].lastActions[0].keys, KEYS.left);
   assert.equal(race.envs[2].lastActions[0].keys, 0);
+
+  // A close pack gets a short chance to finish, but a failed sample no longer
+  // holds Watch on the route for the whole fixed horizon.
+  for (const [id, env] of race.envs.entries()) {
+    const position = env.views[0].self.position;
+    env.progress[0].setGoal(
+      id === 0 ? { ...position } : { x: position.x + 10_000, y: position.y + 10_000 },
+      position,
+    );
+  }
+  for (let step = 0; step < 6 && !race.done; step++) race.step([0, 0, 0]);
+  assert.equal(race.done, true);
+  assert.equal(race.info().settled, true, "no new arrival for the grace period closes the race");
+  assert.equal(race.info().racers[0].rank, 1);
+  assert.deepEqual(
+    race.info().racers.map((one) => one.dnf),
+    [false, true, true],
+  );
 });

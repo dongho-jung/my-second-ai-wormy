@@ -186,6 +186,36 @@ test("a resolved movement task is terminal and then opens a fresh task", { skip 
   assert.equal(vec.envs[0].done, false);
 });
 
+test("continuous movement turns over one worm's task and recurrent memory immediately", { skip }, async () => {
+  const engine = await loadEngine();
+  const vec = new VecWormEnv(engine, {
+    envs: 1,
+    agents: 2,
+    observations: ["vector"],
+    goals: "random",
+    goalsPerEpisode: 0,
+    endOnGoals: false,
+    goalRadiusPx: 100,
+    goalPatience: 450,
+    episodeTicks: 3600,
+    seed: 42,
+  }).reset();
+  const env = vec.envs[0];
+  const first = env.views[0].self.position;
+  const second = env.views[1].self.position;
+  env.progress[0].setGoal({ ...first }, first);
+  env.progress[1].setGoal({ x: second.x + 10_000, y: second.y + 10_000 }, second);
+
+  vec.step(new Uint8Array(2 * HEADS));
+
+  assert.equal(vec.dones[0], DONE.ongoing, "one arrival does not hold or end the shared world");
+  assert.deepEqual(Array.from(vec.restarts), [1, 0], "only the new task forgets its old route");
+  assert.equal(env.totals[0].goalsReached, 1);
+  assert.equal(env.totals[0].goalsAssigned, 2, "the finisher receives another task immediately");
+  assert.ok(env.progress[0].goal, "the finisher never spends a decision without a destination");
+  assert.equal(env.totals[0].goalIdleSteps ?? 0, 0);
+});
+
 test("a fixed exam cycles through maps instead of sampling an accidental subset", { skip }, async () => {
   const engine = await loadEngine();
   const vec = new VecWormEnv(engine, {

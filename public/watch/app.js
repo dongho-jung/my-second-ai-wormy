@@ -156,6 +156,7 @@ function renderWorms() {
       const row = document.createElement("li");
       row.dataset.dead = String(!worm.alive && !race);
       row.dataset.finished = String(worm.finishSeconds !== null);
+      row.dataset.dnf = String(Boolean(worm.dnf));
       row.dataset.policyMode = worm.policyMode ?? "";
       const swatch = document.createElement("span");
       swatch.className = "swatch";
@@ -176,7 +177,9 @@ function renderWorms() {
       facts.textContent = race
         ? worm.finishSeconds !== null
           ? `#${worm.rank} · ${worm.finishSeconds.toFixed(1)}s`
-          : `${Math.round(remaining)}px left`
+          : worm.dnf
+            ? `DNF · ${Math.round(remaining)}px left`
+            : `${Math.round(remaining)}px left`
         : `${worm.score.kills}k ${worm.score.deaths}d · ${Math.round(worm.health)} hp`;
       const bar = document.createElement("span");
       bar.className = "bar";
@@ -192,6 +195,7 @@ function renderWorms() {
   element("episode").textContent = race
     ? `route ${race.scenario}/${race.scenarios} · seed ${state.seed} · `
       + `${(state.elapsedTicks / 60).toFixed(1)}s${race.detour ? " · detour" : ""}`
+      + `${race.settled ? " · stragglers DNF" : ""}`
     : `episode ${state.episode} · seed ${state.seed} · ${(state.elapsedTicks / 60).toFixed(1)}s`;
   element("heading").textContent = race
     ? `${state.map.name} ${state.map.width}×${state.map.height} · `

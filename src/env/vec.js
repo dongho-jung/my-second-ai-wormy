@@ -64,6 +64,9 @@ export const EPISODE_STATS = [
   // boundary, and its mean initial straight-line distance. A fixed benchmark
   // checks these beside the seed to prove both policies received the same task.
   "goalsAssigned",
+  // Decisions taken with no destination while another worm held the shared
+  // episode open. Continuous movement training should keep this at zero.
+  "goalIdleSteps",
   "goalAssignedDistance",
   // How many assigned tasks require crossing solid terrain on the direct line,
   // and whether the first task is one of them. Fixed benchmarks use one task,
@@ -169,6 +172,7 @@ const STAT_SOURCE = {
   goalsReached: "goalsReached",
   goalsMissed: "goalsMissed",
   goalsAssigned: "goalsAssigned",
+  goalIdleSteps: "goalIdleSteps",
   goalAssignedDistance: "goalAssignedDistance",
   goalsDetourAssigned: "goalsDetourAssigned",
   goalDetour: "goalDetour",
@@ -311,7 +315,8 @@ export class VecWormEnv {
     this.maps = new Uint8Array(slots * MAP_SIZE);
     this.rewards = new Float32Array(slots);
     this.dones = new Uint8Array(envs);
-    // Per worm, not per match: which ones came back from the dead this step.
+    // Per worm, not per match: which policy lanes crossed a memory boundary
+    // this step, either by respawning or by receiving a fresh movement task.
     this.restarts = new Uint8Array(slots);
     // Which worlds are still on their cut-short first episode.
     this.warming = new Uint8Array(envs);
@@ -414,7 +419,8 @@ export class VecWormEnv {
       const out = env.step(this.actions);
       for (let agent = 0; agent < this.agents; agent++) {
         this.rewards[index * this.agents + agent] = out.rewards[agent];
-        this.restarts[index * this.agents + agent] = out.respawned[agent] ? 1 : 0;
+        const restarted = out.restarted ?? out.respawned;
+        this.restarts[index * this.agents + agent] = restarted[agent] ? 1 : 0;
       }
       if (out.done) {
         if (this.warming[index]) {

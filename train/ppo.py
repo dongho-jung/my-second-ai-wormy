@@ -1693,6 +1693,7 @@ def main(argv=None):
                 # Destinations reached a match. Zero in a fighting run, which
                 # sets no goals, and the whole point of a movement one.
                 f"goals {latest.get('goalsReached', 0):4.1f}/{latest.get('goalsMissed', 0):3.1f} "
+                f"idle {latest.get('goalIdleSteps', 0):4.0f} "
                 f"at {latest.get('goalRadiusPx', 0):4.0f}px in "
                 f"{latest.get('goalSeconds', 0):4.1f}s "
                 f"({latest.get('goalSpeed', 0):4.0f}px/s, "

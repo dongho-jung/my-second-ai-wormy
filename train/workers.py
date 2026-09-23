@@ -162,11 +162,11 @@ class WorkerPool:
     def observations(self):
         """Vectors, patches, maps, rewards, dones, restarts and finished-episode stats.
 
-        `restarts` is one byte per worm: it came back from the dead on this
-        step, so a policy's memory of it should start over even though the
-        match, and its `dones` byte, carry on. The second patch cut, when one
-        was asked for, is kept on `self.patches2` rather than widening the
-        tuple every caller unpacks.
+        `restarts` is one byte per worm: it came back from the dead or received
+        a fresh movement task on this step, so a policy's old life or route
+        should start over even though the match, and its `dones` byte, carry
+        on. The second patch cut, when one was asked for, is kept on
+        `self.patches2` rather than widening the tuple every caller unpacks.
         """
         layout = self.layout
         vectors = np.empty((self.slots, layout.vector_size), dtype=np.float32)

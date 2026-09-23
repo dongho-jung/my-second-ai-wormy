@@ -37,12 +37,19 @@ export class GhostRace {
     levels,
     world = {},
     episodeTicks = null,
+    // Once arrivals stop changing, the remaining ghosts are stragglers rather
+    // than useful race information. Three game seconds still lets a close
+    // pack finish without making every route wait for one failed sample.
+    settleTicks = 180,
   }) {
     if (!Number.isInteger(racers) || racers < 1) {
       throw new Error(`ghost race racers must be a positive integer, got ${racers}`);
     }
     if (!Array.isArray(scenarios) || !scenarios.length) {
       throw new Error("ghost race needs at least one fixed scenario");
+    }
+    if (!Number.isInteger(settleTicks) || settleTicks < 0) {
+      throw new Error(`ghost race settleTicks must be a non-negative integer, got ${settleTicks}`);
     }
     this.engine = engine;
     this.agents = racers;
@@ -53,6 +60,9 @@ export class GhostRace {
     this.episode = 0;
     this.finished = [];
     this.done = true;
+    this.settleTicks = settleTicks;
+    this.lastFinishTick = null;
+    this.settled = false;
 
     const level = () => {
       const found = this.levels.get(this.current.map)
@@ -108,6 +118,8 @@ export class GhostRace {
     this.episode++;
     this.finished = Array.from({ length: this.agents }, () => null);
     this.done = false;
+    this.lastFinishTick = null;
+    this.settled = false;
     for (const env of this.envs) {
       env.reset({ seed: this.current.seed });
       const worm = env.worms[0];
@@ -133,12 +145,17 @@ export class GhostRace {
     }
     const events = [];
     const rewards = [];
+    const respawned = [];
+    const restarted = [];
     let clockEnded = true;
+    let newFinish = false;
     for (let racer = 0; racer < this.agents; racer++) {
       const env = this.envs[racer];
       const out = env.step([actions[racer]]);
       events.push(out.info.events[0]);
       rewards.push(out.rewards[0]);
+      respawned.push(Boolean(out.respawned?.[0]));
+      restarted.push(Boolean((out.restarted ?? out.respawned)?.[0]));
       clockEnded = clockEnded && out.done;
       if (!this.finished[racer] && (env.totals[0].goalsReached ?? 0) > 0) {
         const worm = env.worms[0];
@@ -149,14 +166,24 @@ export class GhostRace {
           y: worm.y,
           pathPx: env.totals[0].goalPathPx ?? 0,
         };
+        newFinish = true;
       }
     }
-    this.done = clockEnded || this.finished.every(Boolean);
+    if (newFinish) this.lastFinishTick = this.elapsedTicks;
+    const allFinished = this.finished.every(Boolean);
+    this.settled = Boolean(
+      !allFinished
+      && this.lastFinishTick !== null
+      && this.elapsedTicks - this.lastFinishTick >= this.settleTicks
+    );
+    this.done = clockEnded || allFinished || this.settled;
     return {
       observations: this.observations,
       rewards,
       done: this.done,
-      terminated: this.finished.every(Boolean),
+      terminated: allFinished,
+      respawned,
+      restarted,
       info: { ...this.info(), events },
     };
   }
@@ -178,6 +205,7 @@ export class GhostRace {
       goal: this.current.goal,
       detour: this.current.detour,
       done: this.done,
+      settled: this.settled,
       racers: this.envs.map((env, id) => {
         const worm = env.worms[0];
         const finish = this.finished[id];
@@ -188,6 +216,7 @@ export class GhostRace {
           progress: env.progress[0],
           finish,
           rank: ranks.get(id) ?? null,
+          dnf: this.done && !finish,
         };
       }),
     };

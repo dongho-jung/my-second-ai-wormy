@@ -950,15 +950,24 @@ export class WormEnv {
     tallyDamage(this.watch, this.agents, this.events);
     const rewards = [];
     const parts = [];
+    // A new destination is a new recurrent task even when the surrounding
+    // world stays alive. Tell the policy which lanes must forget the route it
+    // was following; otherwise a fast worm carries its old plan into the next
+    // goal while it is supposed to be producing useful work for the slow one.
+    const taskRestarted = new Array(this.agents).fill(false);
     for (let agent = 0; agent < this.agents; agent++) {
       const worm = this.worms[agent];
       const events = this.events[agent];
       events.died = this.alive[agent] && !worm.u ? 1 : 0;
       this.alive[agent] = Boolean(worm.u);
+      const hadGoal = Boolean(this.progress[agent].goal);
       const moved = this.progress[agent].update(
         worm.u ? worm : this.views[agent].self.position ?? worm,
         Boolean(worm.u),
       );
+      if (this.makeGoal && !hadGoal) {
+        this.totals[agent].goalIdleSteps = (this.totals[agent].goalIdleSteps ?? 0) + 1;
+      }
       // Decisions spent hanging off an attached rope. Read after the views were
       // refreshed, so this is the state the worm is in now rather than the one
       // it acted from. Against `ropeThrows` it says whether a throw turns into
@@ -984,6 +993,7 @@ export class WormEnv {
         this.curriculum?.record(true);
         this.deadlineCurriculum?.record(true);
         this.assignGoals(agent);
+        taskRestarted[agent] = Boolean(this.progress[agent].goal);
       } else if (
         this.goalDeadline() > 0 &&
         this.progress[agent].goal &&
@@ -996,6 +1006,7 @@ export class WormEnv {
         this.curriculum?.record(false);
         this.deadlineCurriculum?.record(false);
         this.assignGoals(agent);
+        taskRestarted[agent] = Boolean(this.progress[agent].goal);
       }
       const rewardedProgress =
         this.goalProgressMode === "best"
@@ -1035,6 +1046,7 @@ export class WormEnv {
       }
       if (respawned.some(Boolean)) this.refreshViews();
     }
+    const restarted = respawned.map((one, agent) => one || taskRestarted[agent]);
     this.encodeObservations();
     // A task quota is a real episode boundary: once every worm has either
     // arrived or used its deadline, there is no future goal reward to value.
@@ -1059,6 +1071,10 @@ export class WormEnv {
       terminated: this.terminated,
       truncated: this.done && !this.terminated,
       respawned,
+      // Per-policy-lane memory boundary. This includes physical respawns and
+      // immediate movement-task turnover while preserving `respawned` for
+      // callers that need the literal game event.
+      restarted,
       info: { ...this.info(), events: this.events, parts },
     };
   }
