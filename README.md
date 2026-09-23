@@ -217,7 +217,7 @@ checkpoint into a speed phase instead of starting the movement lesson again:
 npm run train -- \
   --task movement \
   --resume artifacts/runs/<parent>/best.pt \
-  --total-steps <absolute-target-step> \
+  --total-steps <additional-speed-phase-steps> \
   --goal-radius 1600 \
   --goal-above 0.5 \
   --rope-hold 12 \
@@ -232,11 +232,12 @@ npm run train -- \
   --label "speed fine-tune"
 ```
 
-`--total-steps` is the absolute counter stored in the checkpoint, not a number
-of extra steps. The speed bonus is paid only on arrival and uses direct pixels
-per decision, capped before its weight is applied. The old per-pixel shaping
-fades over the requested share of the *remaining* run, while the arrival and
-speed rewards stay. At the same time, the deadline curriculum tightens from
+`--total-steps` is the number of decisions to add after the checkpoint; the
+saved counter continues from the checkpoint's step. The speed bonus is paid
+only on arrival and uses direct pixels per decision, capped before its weight
+is applied. The old per-pixel shaping fades over the requested share of this
+speed phase, while the arrival and speed rewards stay. At the same time, the
+deadline curriculum tightens from
 450 decisions toward 120 whenever at least 85% of a world's last
 `--goal-window` resolved destinations were reached; at 50% or below it gives
 time back. This makes the policy earn harder deadlines instead of advancing on

@@ -682,11 +682,9 @@ def main(argv=None):
         # already. Without this a resumed run started both over from the top.
         config["decisionsDone"] = int(carried.get("step", 0)) // worms
     if args.goal_progress_decay > 0:
-        started = int(carried.get("step", 0)) if carried is not None else 0
-        remaining = max(0, args.total_steps - started)
         config["goalProgressStartAt"] = config.get("decisionsDone", 0)
         config["goalProgressFullAt"] = max(
-            1, int(remaining * args.goal_progress_decay / worms)
+            1, int(args.total_steps * args.goal_progress_decay / worms)
         )
         config["goalProgressFloor"] = args.goal_progress_floor
     if args.shaping_decay > 0:
