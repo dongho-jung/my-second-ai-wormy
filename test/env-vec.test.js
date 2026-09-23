@@ -157,6 +157,57 @@ test("one policy can drive any number of worms", { skip }, async () => {
   }
 });
 
+test("episode stats distinguish fast direct routes from merely reaching", () => {
+  const fake = {
+    opponents: 1,
+    stats: new Float32Array(EPISODE_STATS.length),
+  };
+  const env = {
+    info: () => ({
+      totals: [
+        {
+          goalsReached: 2,
+          goalsMissed: 0,
+          goalStepsReached: 150,
+          goalDirectPx: 600,
+          goalPathPx: 750,
+          fromGoalSpeed: 12,
+        },
+        {
+          goalsReached: 1,
+          goalsMissed: 1,
+          goalStepsReached: 90,
+          goalDirectPx: 300,
+          goalPathPx: 600,
+          fromGoalSpeed: 4,
+        },
+      ],
+    }),
+    episodeTicks: 3600,
+    frameskip: 4,
+    shaping: 1,
+    goalProgressScale: 0.5,
+    goalRadius: () => 1600,
+    goalDeadline: () => 300,
+    episodeSeed: 7,
+  };
+  VecWormEnv.prototype.writeStats.call(fake, 0, env);
+  const stats = Object.fromEntries(
+    EPISODE_STATS.map((field, index) => [field, fake.stats[index]]),
+  );
+  assert.equal(stats.goalsReached, 1.5);
+  assert.equal(stats.goalSeconds, 5.5);
+  assert.equal(stats.goalSpeed, 55);
+  assert.ok(Math.abs(stats.goalPathEfficiency - 0.65) < 1e-6);
+  assert.equal(stats.goalPatience, 300);
+  assert.equal(stats.goalProgressScale, 0.5);
+  assert.equal(stats.fromGoalSpeed, 8);
+  assert.equal(stats.goalsVsPast, 1);
+  assert.equal(stats.goalSecondsVsPast, -1);
+  assert.equal(stats.goalSpeedVsPast, 10);
+  assert.ok(Math.abs(stats.goalEfficiencyVsPast - 0.3) < 1e-6);
+});
+
 test("the worker speaks the frames it says it will", { skip }, async () => {
   const worker = fileURLToPath(new URL("../src/env/worker.js", import.meta.url));
   const config = JSON.stringify({

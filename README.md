@@ -206,6 +206,68 @@ in this mod is a grappling hook — it flies at 8 px a tick, holds at a fixed
 way to cover the same ground. Both are measured in
 `docs/movement-runs-2026-09-22.md`.
 
+### Fine-tuning a movement policy for speed
+
+Once the success curriculum has reached its far radius, more of the same
+reward mostly teaches reliability. Per-pixel progress telescopes to nearly the
+same total whether a route takes three seconds or twenty. Carry the best
+checkpoint into a speed phase instead of starting the movement lesson again:
+
+```bash
+npm run train -- \
+  --task movement \
+  --resume artifacts/runs/<parent>/best.pt \
+  --total-steps <absolute-target-step> \
+  --goal-radius 1600 \
+  --goal-above 0.5 \
+  --rope-hold 12 \
+  --goal-patience 450 \
+  --goal-patience-min 120 \
+  --goal-arrival-reward 8 \
+  --goal-speed-reward 1 \
+  --goal-speed-cap 16 \
+  --goal-progress-decay 0.25 \
+  --goal-progress-floor 0.1 \
+  --keep-every 100 \
+  --label "speed fine-tune"
+```
+
+`--total-steps` is the absolute counter stored in the checkpoint, not a number
+of extra steps. The speed bonus is paid only on arrival and uses direct pixels
+per decision, capped before its weight is applied. The old per-pixel shaping
+fades over the requested share of the *remaining* run, while the arrival and
+speed rewards stay. At the same time, the deadline curriculum tightens from
+450 decisions toward 120 whenever at least 85% of a world's last
+`--goal-window` resolved destinations were reached; at 50% or below it gives
+time back. This makes the policy earn harder deadlines instead of advancing on
+a clock.
+
+The monitor reports `goalSeconds`, direct `goalSpeed`, and
+`goalPathEfficiency` as well as goals reached and missed. A goal still active
+when the sixty-second episode ends is censored from the success share rather
+than counted either way. Death and respawn time remains on the goal clock, and
+the teleport itself is excluded from route length, so dying cannot masquerade
+as fast travel.
+
+Compare the result with its parent on fixed conditions before keeping it:
+
+```bash
+npm run evaluate -- \
+  --left artifacts/runs/<speed>/best.pt \
+  --right artifacts/runs/<parent>/best.pt \
+  --task movement \
+  --goal-radius 1600 \
+  --goal-patience 450 \
+  --episodes 96
+```
+
+Movement evaluation freezes both curricula and plays the same seeded maps with
+the seats swapped. Its primary score is destinations per sixty-second episode;
+seconds per destination, direct speed, path efficiency and misses explain the
+result. This selects the faster policy directly. Mutating whole neural networks
+and keeping the lucky few would spend far more simulations rediscovering a
+policy that PPO can already improve from the working checkpoint.
+
 Five of the community maps draw much of their walls in a colour that has no
 material flags: a worm walks into it and a rope flies through it. The patch
 and the map show that ground as its own kind, `ghost`, so the policy can see
@@ -361,9 +423,12 @@ slowly and one that improves quickly can show the same **is it beating its past
 self**. This seats the two checkpoints in the same free-for-all and plays
 every map once each way — two pools of worlds on the same seeds, the sides
 swapped between them, so a seat effect and the map's own swing drop out of the
-difference — and reports kills, deaths, damage dealt, damage to itself and
-deaths of its own doing for each side, with a bootstrap interval on the
-difference. `random` and `still` are two bars that never move, so a policy
+difference — and reports combat metrics for fighting checkpoints or destination
+rate, time, speed and route efficiency for movement checkpoints, with a
+bootstrap interval on the difference. Movement comparisons use the far end of
+the checkpoint's goal radius by default and freeze both curricula; pass
+`--goal-radius` and `--goal-patience` to set the held-out conditions explicitly.
+`random` and `still` are two bars that never move, so a policy
 can be measured against the same thing early in a run and late in it. Both
 sides must have been trained on the same vector; two patch scales can share a
 match, because the world cuts the same ground twice and shows each side the

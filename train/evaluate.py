@@ -42,12 +42,26 @@ BASELINES = ("random", "still")
 # What is compared, as the all-worm mean the worker reports and the front-minus
 # back difference beside it. Deaths and self damage are in the list so that
 # "kills more" is not mistaken for "plays better" when it also dies more.
-METRICS = [
+COMBAT_METRICS = [
     ("kills", "kills", "killsVsPast"),
     ("deaths", "deaths", "deathsVsPast"),
     ("damage dealt", "damageDealt", "damageVsPast"),
     ("damage to itself", "selfDamage", "selfDamageVsPast"),
     ("deaths, own doing", "suicides", "suicidesVsPast"),
+]
+
+# A destination is private to one worm, but the paired seating still matters:
+# the policies dig the same terrain and can block or move one another. The
+# front-minus-back fields let the evaluator recover each side after the swap,
+# exactly as for combat. Reached is primary because a sixty-second episode
+# makes it goals/minute; the other three explain whether a win came from faster,
+# straighter travel or merely easier goals.
+MOVEMENT_METRICS = [
+    ("destinations reached", "goalsReached", "goalsVsPast"),
+    ("seconds per destination", "goalSeconds", "goalSecondsVsPast"),
+    ("direct speed, px/s", "goalSpeed", "goalSpeedVsPast"),
+    ("path efficiency", "goalPathEfficiency", "goalEfficiencyVsPast"),
+    ("destinations missed", "goalsMissed", "goalsMissedVsPast"),
 ]
 
 
@@ -75,6 +89,14 @@ def parse_args(argv=None):
     parser.add_argument("--stock-levels", type=int, default=64, help="how many of them; 0 for none")
     parser.add_argument("--maps", type=int, default=0, help="generated dirt levels to mix in")
     parser.add_argument("--episode-ticks", type=int, default=None)
+    parser.add_argument("--task", default="auto", choices=["auto", "fight", "movement"],
+                        help="metrics to compare. auto reads whether the checkpoint's world has goals")
+    parser.add_argument("--goal-radius", type=float, default=None,
+                        help="fixed movement-evaluation radius. By default the far end of the "
+                             "checkpoint's range; no curriculum runs during an evaluation")
+    parser.add_argument("--goal-patience", type=int, default=None,
+                        help="fixed movement-evaluation deadline in decisions. By default the "
+                             "checkpoint's original maximum; no deadline curriculum runs")
     parser.add_argument("--device", default="cpu", choices=["cpu", "mps", "cuda"])
     parser.add_argument("--torch-threads", type=int, default=2)
     parser.add_argument("--json", default=None, help="also write the result here")
@@ -199,13 +221,14 @@ def history(args):
         print(f"\n--- against {path.name} ---", flush=True)
         results.append((path, compare(args, str(final), str(path))))
     print()
-    print(f"{'earlier self':>22s}{'kills, later - earlier':>26s}{'95% interval':>20s}{'pairs won':>12s}")
+    primary_label = results[0][1]["primary"] if results else "primary score"
+    print(f"{'earlier self':>22s}{(primary_label + ', later - earlier'):>34s}{'95% interval':>20s}{'pairs won':>12s}")
     for path, result in results:
-        kills = result["metrics"]["kills"]
-        low, high = kills["interval"]
+        primary = result["metrics"][result["primary"]]
+        low, high = primary["interval"]
         pairs = result["pairs"]
         print(
-            f"{path.stem.split('-', 1)[1]:>22s}{kills['difference']:+26.2f}"
+            f"{path.stem.split('-', 1)[1]:>22s}{primary['difference']:+34.2f}"
             f"{'[' + f'{low:+.2f}, {high:+.2f}' + ']':>20s}"
             f"{pairs['left_ahead']:>6d}/{result['episodes']:<5d}"
         )
@@ -213,7 +236,7 @@ def history(args):
     # in a terminal: each entry is one comparison, oldest self first.
     out = Path(args.json) if args.json else run / "history.json"
     out.write_text(json.dumps(
-        {"final": final.name, "against": [
+        {"final": final.name, "primary": results[0][1]["primary"] if results else None, "against": [
             {"checkpoint": path.name, "steps": int(path.stem.split("-", 1)[1]), **result}
             for path, result in results
         ]},
@@ -236,6 +259,12 @@ def compare(args, left_spec, right_spec):
         left.head_sizes = right.head_sizes
     anchor = right if left.baseline else left
     shape = anchor.shape
+    checkpoint_world = shape.get("world") or {}
+    movement = (
+        args.task == "movement"
+        or (args.task == "auto" and bool(checkpoint_world.get("goals")))
+    )
+    metrics = MOVEMENT_METRICS if movement else COMBAT_METRICS
     for side in (left, right):
         if side.baseline or side is anchor:
             continue
@@ -268,7 +297,7 @@ def compare(args, left_spec, right_spec):
     front = agents - back
 
     config = {
-        **(shape.get("world") or {}),
+        **checkpoint_world,
         "agents": agents,
         "observationFoes": trained_agents - 1,
         "envs": args.envs,
@@ -288,6 +317,21 @@ def compare(args, left_spec, right_spec):
         config["patchScale2"] = second_scale
     if args.episode_ticks:
         config["episodeTicks"] = args.episode_ticks
+    if movement:
+        radius = config.get("goalRadiusPx")
+        if args.goal_radius is not None:
+            radius = args.goal_radius
+        elif isinstance(radius, list):
+            radius = max(radius)
+        config["goalRadiusPx"] = radius
+        config["goalRadiusMode"] = "steps"
+        config.pop("goalCurriculum", None)
+        config.pop("goalRadiusStart", None)
+        if args.goal_patience is not None:
+            config["goalPatience"] = args.goal_patience
+        config.pop("goalPatienceMin", None)
+        config.pop("goalPatienceStart", None)
+        config.pop("goalDeadlineCurriculum", None)
 
     pools = [WorkerPool(args.workers, config) for _ in range(2)]
     layout = pools[0].layout
@@ -376,7 +420,7 @@ def compare(args, left_spec, right_spec):
         n_left = front if left_front else back
         n_right = per_match - n_left
         sign = 1.0 if left_front else -1.0
-        for label, mean_field, versus_field in METRICS:
+        for label, mean_field, versus_field in metrics:
             mean = float(row[at[mean_field]])
             diff = sign * float(row[at[versus_field]])
             out[label] = (mean + n_right * diff / per_match, mean - n_left * diff / per_match)
@@ -384,7 +428,7 @@ def compare(args, left_spec, right_spec):
 
     # Per finished pair of episodes, per metric: the left side's mean and the
     # right's, each averaged over the two seatings.
-    rows = {label: {"left": [], "right": []} for label, _, _ in METRICS}
+    rows = {label: {"left": [], "right": []} for label, _, _ in metrics}
     finished = 0
     started = time.perf_counter()
     steps = 0
@@ -403,16 +447,17 @@ def compare(args, left_spec, right_spec):
                     break
                 once = sides_of(outcomes[0][1][match], seating[0]["left_front"])
                 twice = sides_of(outcomes[1][1][match], seating[1]["left_front"])
-                for label, _, _ in METRICS:
+                for label, _, _ in metrics:
                     rows[label]["left"].append((once[label][0] + twice[label][0]) / 2)
                     rows[label]["right"].append((once[label][1] + twice[label][1]) / 2)
                 finished += 1
                 if finished % 8 == 0 or finished == args.episodes:
-                    kills_left = np.mean(rows["kills"]["left"])
-                    kills_right = np.mean(rows["kills"]["right"])
+                    primary = metrics[0][0]
+                    score_left = np.mean(rows[primary]["left"])
+                    score_right = np.mean(rows[primary]["right"])
                     print(
-                        f"{finished:4d}/{args.episodes} paired episodes | kills a match "
-                        f"left {kills_left:5.2f} right {kills_right:5.2f} | "
+                        f"{finished:4d}/{args.episodes} paired episodes | {primary} "
+                        f"left {score_left:5.2f} right {score_right:5.2f} | "
                         f"{steps * slots * 2 / (time.perf_counter() - started):,.0f} steps/s",
                         flush=True,
                     )
@@ -431,11 +476,13 @@ def compare(args, left_spec, right_spec):
         "paired": True,
         "greedy": args.greedy,
         "seed": args.seed,
+        "task": "movement" if movement else "fight",
+        "primary": metrics[0][0],
         "metrics": {},
     }
     print()
     print(f"{'':18s}{'left':>9s}{'right':>9s}{'left - right':>15s}{'95% interval':>22s}")
-    for label, _, _ in METRICS:
+    for label, _, _ in metrics:
         lefts = np.asarray(rows[label]["left"])
         rights = np.asarray(rows[label]["right"])
         diffs = lefts - rights
@@ -450,24 +497,25 @@ def compare(args, left_spec, right_spec):
             f"{label:18s}{lefts.mean():9.2f}{rights.mean():9.2f}{diffs.mean():+15.2f}"
             f"{'[' + f'{low:+.2f}, {high:+.2f}' + ']':>22s}"
         )
-    # Pair by pair, who killed more: the number a person asks for first.
-    lefts = np.asarray(rows["kills"]["left"])
-    rights = np.asarray(rows["kills"]["right"])
+    # Pair by pair, who won the task's primary score.
+    primary_label = metrics[0][0]
+    lefts = np.asarray(rows[primary_label]["left"])
+    rights = np.asarray(rows[primary_label]["right"])
     ahead = int((lefts > rights).sum())
     behind = int((lefts < rights).sum())
     level = int(len(lefts) - ahead - behind)
     result["pairs"] = {"left_ahead": ahead, "right_ahead": behind, "level": level}
-    kills = result["metrics"]["kills"]
-    low, high = kills["interval"]
+    primary = result["metrics"][primary_label]
+    low, high = primary["interval"]
     if low > 0:
-        verdict = f"{left.name} is ahead on kills"
+        verdict = f"{left.name} is ahead on {primary_label}"
     elif high < 0:
-        verdict = f"{right.name} is ahead on kills"
+        verdict = f"{right.name} is ahead on {primary_label}"
     else:
-        verdict = "no difference on kills that these paired episodes can tell apart"
+        verdict = f"no difference on {primary_label} that these paired episodes can tell apart"
     result["verdict"] = verdict
     print()
-    print(f"left killed more in {ahead} of {len(lefts)} paired episodes, fewer in {behind}, the same in {level}")
+    print(f"left scored higher in {ahead} of {len(lefts)} paired episodes, lower in {behind}, the same in {level}")
     print(verdict, flush=True)
     if args.json:
         Path(args.json).write_text(json.dumps(result, indent=2) + "\n")

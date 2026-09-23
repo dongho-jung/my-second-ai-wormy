@@ -61,3 +61,48 @@ export class GoalCurriculum {
     return this.radius;
   }
 }
+
+/**
+ * The same outcome feedback, applied to time instead of distance.
+ *
+ * A movement policy first learns to reach destinations with a generous
+ * deadline. Once that is reliable, repeatedly shortening a fixed schedule by
+ * hand just guesses at what it can do. This tightens the deadline one notch
+ * when the current one is easy, loosens it when too many goals are missed, and
+ * stays within the requested range. Values are decisions, not engine ticks.
+ */
+export class GoalDeadlineCurriculum {
+  constructor({ from, to, start = null, window, up, down, step } = {}) {
+    if (!(to > 0) || !(from >= to)) {
+      throw new Error(`a goal deadline curriculum needs from >= to > 0, got ${from}..${to}`);
+    }
+    this.from = from;
+    this.to = to;
+    this.window = window ?? CURRICULUM_DEFAULTS.window;
+    this.up = up ?? CURRICULUM_DEFAULTS.up;
+    this.down = down ?? CURRICULUM_DEFAULTS.down;
+    this.step = step ?? CURRICULUM_DEFAULTS.step;
+    this.patience = clamp(start ?? from, to, from);
+    this.reached = 0;
+    this.missed = 0;
+    this.decisions = 0;
+  }
+
+  /** One destination's outcome. Returns the deadline for the next one. */
+  record(reached) {
+    if (reached) this.reached++;
+    else this.missed++;
+    const seen = this.reached + this.missed;
+    if (seen < this.window) return this.patience;
+    const share = this.reached / seen;
+    if (share >= this.up) {
+      this.patience = Math.max(this.to, this.patience / (1 + this.step));
+    } else if (share <= this.down) {
+      this.patience = Math.min(this.from, this.patience * (1 + this.step));
+    }
+    this.reached = 0;
+    this.missed = 0;
+    this.decisions++;
+    return this.patience;
+  }
+}

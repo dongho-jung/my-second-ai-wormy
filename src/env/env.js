@@ -18,7 +18,7 @@ import {
   observe,
   shotSolution,
 } from "./observation.js";
-import { GoalCurriculum } from "./curriculum.js";
+import { GoalCurriculum, GoalDeadlineCurriculum } from "./curriculum.js";
 import { Progress } from "./progress.js";
 import {
   addEvents,
@@ -168,6 +168,11 @@ export const DEFAULTS = {
   // 0 keeps it for the whole episode. A worm sent somewhere it cannot get to
   // otherwise spends the rest of its minute learning nothing.
   goalPatience: 0,
+  // When set below goalPatience, success tightens the deadline toward this
+  // value and failure loosens it again. Off by default.
+  goalPatienceMin: null,
+  goalPatienceStart: null,
+  goalDeadlineCurriculum: null,
   // Weights laid over `weights` after it is resolved, so a run can turn one
   // knob (`--rope-throw-cost`, `--suicide-cost`) without restating a table.
   weightOverrides: null,
@@ -219,6 +224,14 @@ export const DEFAULTS = {
   // knows how many worms are playing and this environment does not.
   shapingFullAt: 0,
   shapingFloor: 0,
+  // Distance-to-goal is scaffolding too: useful while a policy is learning
+  // which way to go, but indifferent to a slow or winding route once it gets
+  // there. A speed fine-tune can fade just this term while leaving the arrival
+  // and speed rewards intact. The schedule begins at goalProgressStartAt so a
+  // resumed run can start a fresh fade instead of inheriting the old clock.
+  goalProgressFullAt: 0,
+  goalProgressFloor: 0,
+  goalProgressStartAt: 0,
   // Decisions this world is taken to have made before it started: a run
   // carrying on from a checkpoint hands over how far the ladder had already
   // faded, so the fade does not start again from the top.
@@ -348,6 +361,17 @@ export class WormEnv {
       const gone = Math.min(1, this.decisions / this.shapingFullAt);
       this.shaping = 1 - (1 - this.shapingFloor) * gone;
     }
+    this.goalProgressFullAt = Math.max(0, settings.goalProgressFullAt ?? 0);
+    this.goalProgressFloor = settings.goalProgressFloor ?? 0;
+    this.goalProgressStartAt = Math.max(0, Math.trunc(settings.goalProgressStartAt ?? 0));
+    this.goalProgressScale = 1;
+    if (this.goalProgressFullAt > 0) {
+      const gone = Math.min(
+        1,
+        Math.max(0, this.decisions - this.goalProgressStartAt) / this.goalProgressFullAt,
+      );
+      this.goalProgressScale = 1 - (1 - this.goalProgressFloor) * gone;
+    }
     // Shared by every worm in this world: the terrain is the same for all of
     // them, and only where they are differs.
     this.mapTerrain = new Uint8Array(MAP_TERRAIN_SIZE);
@@ -392,6 +416,17 @@ export class WormEnv {
           })
         : null;
     this.goalPatience = Math.max(0, Math.trunc(settings.goalPatience ?? 0));
+    this.deadlineCurriculum =
+      settings.goalPatienceMin !== null &&
+      settings.goalPatienceMin !== undefined &&
+      this.goalPatience > 0
+        ? new GoalDeadlineCurriculum({
+            from: this.goalPatience,
+            to: settings.goalPatienceMin,
+            start: settings.goalPatienceStart ?? null,
+            ...(settings.goalDeadlineCurriculum ?? {}),
+          })
+        : null;
     this.lockWeapons = Boolean(settings.lockWeapons);
     this.ropeCooldown = Math.max(0, Math.trunc(settings.ropeCooldown ?? 0));
     this.ropeHold = Math.max(0, Math.trunc(settings.ropeHold ?? 0));
@@ -675,6 +710,11 @@ export class WormEnv {
     return from + (to - from) * gone;
   }
 
+  /** Decisions the current destination gets before it is replaced. */
+  goalDeadline() {
+    return this.deadlineCurriculum?.patience ?? this.goalPatience;
+  }
+
   /**
    * Hand every worm a destination, if this run has any. Called at the start of
    * an episode and again whenever one arrives, so a worm practises the whole
@@ -684,7 +724,10 @@ export class WormEnv {
     if (!this.makeGoal) return;
     this.progress.forEach((progress, agent) => {
       if (only !== null && only !== agent) return;
-      progress.setGoal(this.makeGoal(this, agent) ?? null);
+      progress.setGoal(
+        this.makeGoal(this, agent) ?? null,
+        this.views[agent]?.self?.position ?? null,
+      );
       if (this.views[agent]) this.views[agent].goal = progress.goal;
     });
   }
@@ -771,6 +814,13 @@ export class WormEnv {
       const gone = Math.min(1, this.decisions / this.shapingFullAt);
       this.shaping = 1 - (1 - this.shapingFloor) * gone;
     }
+    if (this.goalProgressFullAt > 0) {
+      const gone = Math.min(
+        1,
+        Math.max(0, this.decisions - this.goalProgressStartAt) / this.goalProgressFullAt,
+      );
+      this.goalProgressScale = 1 - (1 - this.goalProgressFloor) * gone;
+    }
 
     this.watch.clear();
     for (let tick = 0; tick < this.frameskip; tick++) {
@@ -819,18 +869,26 @@ export class WormEnv {
         // so anything else left in it is added again on every later decision of
         // the episode.
         this.totals[agent].goalsReached = (this.totals[agent].goalsReached ?? 0) + 1;
+        this.totals[agent].goalStepsReached =
+          (this.totals[agent].goalStepsReached ?? 0) + moved.goalSteps;
+        this.totals[agent].goalDirectPx =
+          (this.totals[agent].goalDirectPx ?? 0) + moved.goalDirectPx;
+        this.totals[agent].goalPathPx =
+          (this.totals[agent].goalPathPx ?? 0) + moved.goalPathPx;
         this.curriculum?.record(true);
+        this.deadlineCurriculum?.record(true);
         this.assignGoals(agent);
       } else if (
-        this.goalPatience > 0 &&
+        this.goalDeadline() > 0 &&
         this.progress[agent].goal &&
-        moved.goalSteps >= this.goalPatience
+        moved.goalSteps >= this.goalDeadline()
       ) {
         // Kept this long and not reached: give it up and hand out another, so
         // a destination the worm cannot get to does not eat the whole episode.
         // Counted, because many of these is the finding, not the reaching.
         this.totals[agent].goalsMissed = (this.totals[agent].goalsMissed ?? 0) + 1;
         this.curriculum?.record(false);
+        this.deadlineCurriculum?.record(false);
         this.assignGoals(agent);
       }
       const outcome = this.reward(
@@ -838,6 +896,7 @@ export class WormEnv {
         { ...moved, ...this.#aimAt(agent), ropeThrows: this.ropeThrown[agent] },
         this.weights,
         this.shaping,
+        this.goalProgressScale,
       );
       rewards.push(outcome.reward);
       parts.push(outcome.parts);
@@ -936,7 +995,9 @@ export class WormEnv {
       vectorSize: this.spec.vectorSize,
       inputLatencyTicks: this.latency,
       shaping: this.shaping,
+      goalProgressScale: this.goalProgressScale,
       goalRadiusPx: this.goalRadius(),
+      goalPatience: this.goalDeadline(),
       totals: this.totals,
     };
   }

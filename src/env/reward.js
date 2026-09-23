@@ -62,6 +62,15 @@ export const DEFAULT_WEIGHTS = {
   // Per pixel of progress toward a goal, when one is set, and for arriving.
   goalProgress: 0.02,
   reachedGoal: 2,
+  // Per pixel/decision of straight-line speed, paid once on arrival. Off by
+  // default so old runs keep exactly their reward. A speed fine-tune turns it
+  // on after the policy already knows how to arrive; unlike distance shaping,
+  // the same route is then worth more when it is completed sooner.
+  goalSpeed: 0,
+  // A respawn, an engine impulse or one unusually short goal must not turn one
+  // arrival into an unbounded update. Sixteen pixels a decision is already
+  // roughly the grappling hook's full pull at the default frameskip.
+  goalSpeedCap: 16,
   // Per rope throw the engine actually hears. Zero: a throw is free, which is
   // what every run so far has had. The rope in this mod is a grappling hook —
   // once it holds, the worm is reeled toward the anchor on its own — so a
@@ -193,7 +202,13 @@ export function tallyDamage({ damage, kills }, agents, into = emptyEvents(agents
  * because a single number cannot be tuned: when a run goes wrong the question is
  * always which term was doing the talking.
  */
-export function combatReward(events, progress, weights = DEFAULT_WEIGHTS, shaping = 1) {
+export function combatReward(
+  events,
+  progress,
+  weights = DEFAULT_WEIGHTS,
+  shaping = 1,
+  goalProgressScale = 1,
+) {
   // Named apart from the events they come from: one is health, the other is
   // points, and a running total that adds both under one name is neither.
   const parts = {
@@ -209,8 +224,12 @@ export function combatReward(events, progress, weights = DEFAULT_WEIGHTS, shapin
     fromOnTarget: (progress.onTarget ?? 0) * weights.onTarget,
     fromAimedShot: (progress.aimedShot ?? 0) * weights.aimedShot,
     fromGoal:
-      progress.goalDelta * weights.goalProgress +
+      progress.goalDelta * weights.goalProgress * goalProgressScale +
       (progress.reachedGoal ? weights.reachedGoal : 0),
+    fromGoalSpeed: progress.reachedGoal
+      ? Math.min(progress.goalSpeed ?? 0, weights.goalSpeedCap ?? Infinity) *
+        (weights.goalSpeed ?? 0)
+      : 0,
     fromRopeThrow: -((progress.ropeThrows ?? 0) * (weights.ropeThrow ?? 0)) || 0,
   };
   if (shaping !== 1) {

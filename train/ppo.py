@@ -205,9 +205,9 @@ def parse_args(argv=None):
                             "there are enough of them. The cloning loss is a sum of seven "
                             "cross-entropies; the policy loss, against normalised advantages, is "
                             "around 0.0005. At 0.5 the recordings pulled a hundred times harder "
-                            "than the reward and a run memorised 2,571 frames to 99.9%. At 0.05 "
+                            "than the reward and a run memorised 2,571 frames to 99.9%%. At 0.05 "
                             "they pulled seven times harder, which is subtler and ends the same "
-                            "way: 99.5% agreement with the recordings while the kills fell. "
+                            "way: 99.5%% agreement with the recordings while the kills fell. "
                             "0 ignores them")
     shown.add_argument("--bc-full-frames", type=int, default=20_000,
                        help="how many frames of play the coefficient above is worth in full. Below "
@@ -286,6 +286,28 @@ def parse_args(argv=None):
                        help="decisions a destination is kept before another is handed out, so one "
                             "the worm cannot reach does not eat the whole minute. The movement "
                             "task's default is 450, thirty seconds; 0 keeps a goal all episode")
+    where.add_argument("--goal-patience-min", type=int, default=None,
+                       help="tighten --goal-patience toward this many decisions whenever at least "
+                            "85%% of the last --goal-window destinations were reached, and loosen "
+                            "it again when half or fewer were. This is the speed curriculum: unset "
+                            "keeps one fixed deadline")
+    where.add_argument("--goal-progress-reward", type=float, default=None,
+                       help="reward per pixel closed on a destination. The movement default is "
+                            "0.02; expose it here so a speed fine-tune can reduce the old distance "
+                            "shaping without changing the environment's defaults")
+    where.add_argument("--goal-arrival-reward", type=float, default=None,
+                       help="reward paid once for reaching a destination. The movement default is 2")
+    where.add_argument("--goal-speed-reward", type=float, default=0.0,
+                       help="extra arrival reward per pixel/decision of straight-line speed. 0 is "
+                            "off; this directly prefers the same destination reached sooner")
+    where.add_argument("--goal-speed-cap", type=float, default=16.0,
+                       help="cap the speed used by --goal-speed-reward, so a short goal, impulse or "
+                            "respawn cannot dominate an update")
+    where.add_argument("--goal-progress-decay", type=float, default=0.0,
+                       help="share of the remaining run over which to fade the per-pixel goal "
+                            "reward toward --goal-progress-floor. Arrival and speed rewards stay")
+    where.add_argument("--goal-progress-floor", type=float, default=0.0,
+                       help="share of the per-pixel reward left after its fade; 0 removes it")
     where.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     where.add_argument("--label", default=None, help="a name for this run on the monitor page")
     where.add_argument("--resume", default=None,
@@ -314,7 +336,13 @@ SHOWN = (
     "stuckSteps",
     "goalsReached",
     "goalsMissed",
+    "goalSuccess",
+    "goalSeconds",
+    "goalSpeed",
+    "goalPathEfficiency",
     "goalRadiusPx",
+    "goalPatience",
+    "goalProgressScale",
     "ropeThrows",
     "ropeHeld",
 )
@@ -510,6 +538,29 @@ def main(argv=None):
     torch.set_num_threads(args.torch_threads)
     device = pick_device(args.device)
 
+    speed_options = (
+        args.goal_patience_min is not None
+        or args.goal_progress_reward is not None
+        or args.goal_arrival_reward is not None
+        or args.goal_speed_reward != 0
+        or args.goal_progress_decay != 0
+        or args.goal_progress_floor != 0
+    )
+    if args.task != "movement" and speed_options:
+        raise SystemExit("goal speed and deadline options only mean something with --task movement")
+    if not 0 <= args.goal_progress_decay <= 1:
+        raise SystemExit("--goal-progress-decay must be between 0 and 1")
+    if not 0 <= args.goal_progress_floor <= 1:
+        raise SystemExit("--goal-progress-floor must be between 0 and 1")
+    if args.goal_speed_reward < 0 or args.goal_speed_cap <= 0:
+        raise SystemExit("--goal-speed-reward must be non-negative and --goal-speed-cap positive")
+    for name, value in (
+        ("--goal-progress-reward", args.goal_progress_reward),
+        ("--goal-arrival-reward", args.goal_arrival_reward),
+    ):
+        if value is not None and value < 0:
+            raise SystemExit(f"{name} must be non-negative")
+
     latency = [int(part) for part in str(args.input_latency).split("-")]
     # A checkpoint to carry on from is read once, here, because two things
     # below have to know about it before the workers start: how far the ladder
@@ -572,9 +623,20 @@ def main(argv=None):
         config["goals"] = "random"
         config["weights"] = "movement"
         config["lockWeapons"] = True
+        if speed_options:
+            config["progress"] = {"goalClockWhileDead": True}
         radius = [float(part) for part in str(args.goal_radius or "96-1600").split("-")]
         config["goalRadiusPx"] = radius if len(radius) > 1 else radius[0]
         config["goalPatience"] = 450 if args.goal_patience is None else args.goal_patience
+        if args.goal_patience_min is not None:
+            if args.goal_patience_min <= 0 or config["goalPatience"] <= 0:
+                raise SystemExit("--goal-patience-min and --goal-patience must both be positive")
+            if args.goal_patience_min > config["goalPatience"]:
+                raise SystemExit("--goal-patience-min cannot be greater than --goal-patience")
+            config["goalPatienceMin"] = args.goal_patience_min
+            config["goalDeadlineCurriculum"] = {"window": args.goal_window}
+            if carried is not None and carried.get("goalPatience"):
+                config["goalPatienceStart"] = float(carried["goalPatience"])
         config["goalRadiusMode"] = args.goal_curriculum
         if args.goal_above > 0:
             config["goalAboveShare"] = args.goal_above
@@ -593,6 +655,13 @@ def main(argv=None):
         overrides["suicide"] = args.suicide_cost
     if args.rope_throw_cost:
         overrides["ropeThrow"] = args.rope_throw_cost
+    if args.goal_progress_reward is not None:
+        overrides["goalProgress"] = args.goal_progress_reward
+    if args.goal_arrival_reward is not None:
+        overrides["reachedGoal"] = args.goal_arrival_reward
+    if args.goal_speed_reward:
+        overrides["goalSpeed"] = args.goal_speed_reward
+        overrides["goalSpeedCap"] = args.goal_speed_cap
     if overrides:
         config["weightOverrides"] = overrides
 
@@ -612,6 +681,14 @@ def main(argv=None):
         # Carrying on: the ladder had faded and the goals had moved out this far
         # already. Without this a resumed run started both over from the top.
         config["decisionsDone"] = int(carried.get("step", 0)) // worms
+    if args.goal_progress_decay > 0:
+        started = int(carried.get("step", 0)) if carried is not None else 0
+        remaining = max(0, args.total_steps - started)
+        config["goalProgressStartAt"] = config.get("decisionsDone", 0)
+        config["goalProgressFullAt"] = max(
+            1, int(remaining * args.goal_progress_decay / worms)
+        )
+        config["goalProgressFloor"] = args.goal_progress_floor
     if args.shaping_decay > 0:
         config["shapingFullAt"] = int(args.total_steps * args.shaping_decay / worms)
     if isinstance(config.get("goalRadiusPx"), list) and config.get("goalRadiusMode", "steps") == "steps":
@@ -755,6 +832,13 @@ def main(argv=None):
             "goalRadius": config.get("goalRadiusPx"),
             "goalCurriculum": args.goal_curriculum,
             "goalPatience": config.get("goalPatience"),
+            "goalPatienceMin": config.get("goalPatienceMin"),
+            "goalProgressReward": args.goal_progress_reward,
+            "goalArrivalReward": args.goal_arrival_reward,
+            "goalSpeedReward": args.goal_speed_reward,
+            "goalSpeedCap": args.goal_speed_cap if args.goal_speed_reward else None,
+            "goalProgressDecay": args.goal_progress_decay,
+            "goalProgressFloor": args.goal_progress_floor,
             "ropeThrowCost": args.rope_throw_cost,
             "ropeCooldown": args.rope_cooldown,
             "ropeHold": args.rope_hold,
@@ -1375,6 +1459,11 @@ def main(argv=None):
                 line["damageRatio"] = (
                     line["damageDealt"] / line["damageTaken"] if line["damageTaken"] > 0 else 0.0
                 )
+                resolved_goals = line.get("goalsReached", 0) + line.get("goalsMissed", 0)
+                if resolved_goals > 0:
+                    # Active goals at the episode boundary are censored rather
+                    # than silently called a success or a failure.
+                    line["goalSuccess"] = line.get("goalsReached", 0) / resolved_goals
             if args.probe_every and updates % args.probe_every == 0:
                 probed_at = time.perf_counter()
                 policy.eval()
@@ -1421,7 +1510,11 @@ def main(argv=None):
                 # Destinations reached a match. Zero in a fighting run, which
                 # sets no goals, and the whole point of a movement one.
                 f"goals {latest.get('goalsReached', 0):4.1f}/{latest.get('goalsMissed', 0):3.1f} "
-                f"at {latest.get('goalRadiusPx', 0):4.0f}px | "
+                f"at {latest.get('goalRadiusPx', 0):4.0f}px in "
+                f"{latest.get('goalSeconds', 0):4.1f}s "
+                f"({latest.get('goalSpeed', 0):4.0f}px/s, "
+                f"{latest.get('goalPathEfficiency', 0):3.0%} direct, "
+                f"deadline {latest.get('goalPatience', 0):3.0f}) | "
                 # Throws asked for, and decisions actually spent attached. The
                 # gap between them is the whole question about the rope.
                 f"rope {latest.get('ropeThrows', 0):5.0f}/{latest.get('ropeHeld', 0):5.0f} | "
@@ -1444,14 +1537,17 @@ def main(argv=None):
                     save(policy, layout, shape_of, total_steps, run.path / "best.pt",
                          score=best_score, reward=line.get("episodeReward"),
                          goalRadius=latest.get("goalRadiusPx"),
+                         goalPatience=latest.get("goalPatience"),
                          **{score_field: best_score})
                     run.record(step=total_steps, **{best_name: best_score})
             if updates % args.save_every == 0:
                 save(policy, layout, shape_of, total_steps, run.path / "policy.pt",
-                     goalRadius=latest.get("goalRadiusPx"))
+                     goalRadius=latest.get("goalRadiusPx"),
+                     goalPatience=latest.get("goalPatience"))
             if args.keep_every and updates % args.keep_every == 0:
                 save(policy, layout, shape_of, total_steps, run.path / f"policy-{total_steps}.pt",
-                     goalRadius=latest.get("goalRadiusPx"))
+                     goalRadius=latest.get("goalRadiusPx"),
+                     goalPatience=latest.get("goalPatience"))
     except KeyboardInterrupt:
         run.note("stopped by hand")
         run.close(status="stopped", steps=total_steps)
@@ -1460,7 +1556,8 @@ def main(argv=None):
         pool.close()
 
     save(policy, layout, shape_of, total_steps, run.path / "policy.pt",
-         goalRadius=latest.get("goalRadiusPx"))
+         goalRadius=latest.get("goalRadiusPx"),
+         goalPatience=latest.get("goalPatience"))
     run.note(f"finished: {total_steps:,} steps over {updates} updates")
     run.close(
         status="done",

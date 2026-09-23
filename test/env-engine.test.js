@@ -477,6 +477,29 @@ test("a world that keeps giving up on its goals draws them closer", { skip }, as
   assert.ok(env.goalRadius() < 300, "moved, and not by the clock");
 });
 
+test("reliable arrivals tighten a world's goal deadline", { skip }, async () => {
+  const engine = await loadEngine();
+  const env = new WormEnv(engine, {
+    agents: 1,
+    observations: ["vector"],
+    goals: "random",
+    goalRadiusPx: 100,
+    goalPatience: 10,
+    goalPatienceMin: 5,
+    goalDeadlineCurriculum: { window: 2 },
+    seed: 4,
+  });
+  env.reset();
+  for (let arrival = 0; arrival < 2; arrival++) {
+    const { position } = env.views[0].self;
+    env.progress[0].setGoal({ ...position }, position);
+    env.step([0]);
+  }
+  assert.ok(Math.abs(env.goalDeadline() - 10 / 1.1) < 1e-9);
+  assert.equal(env.totals[0].goalsReached, 2);
+  assert.ok(env.totals[0].goalStepsReached >= 2, "arrival time is retained for the episode stats");
+});
+
 test("a dead worm is dropped from the world and comes back whole", { skip }, async () => {
   const { world, worms } = await arena({ seed: 77 });
   const [worm] = worms;
@@ -741,4 +764,21 @@ test("a world told how far the ladder had faded carries on from there", { skip }
   assert.ok(Math.abs(resumed.shaping - 0.49) < 1e-9, "and it goes on from there");
   const fresh = new WormEnv(engine, { agents: 2, episodeTicks: 400, seed: 3, shapingFullAt: 100 });
   assert.equal(fresh.shaping, 1, "a new run starts at the top");
+
+  const speedPhase = new WormEnv(engine, {
+    agents: 2,
+    episodeTicks: 400,
+    seed: 3,
+    decisionsDone: 500,
+    goalProgressStartAt: 500,
+    goalProgressFullAt: 100,
+    goalProgressFloor: 0.1,
+  });
+  assert.equal(speedPhase.goalProgressScale, 1, "a resumed speed phase starts a new fade now");
+  speedPhase.reset({ seed: 3 });
+  speedPhase.step([0, 0]);
+  assert.ok(
+    Math.abs(speedPhase.goalProgressScale - 0.991) < 1e-9,
+    "only the new phase's decisions advance it",
+  );
 });

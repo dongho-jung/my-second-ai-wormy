@@ -2,7 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { snapshotV20 } from "../src/adapter-v20.js";
 import { fixture, LEVEL } from "./fixture.js";
-import { CURRICULUM_DEFAULTS, GoalCurriculum } from "../src/env/curriculum.js";
+import {
+  CURRICULUM_DEFAULTS,
+  GoalCurriculum,
+  GoalDeadlineCurriculum,
+} from "../src/env/curriculum.js";
 import { groundedGoal, groundedGoalNear } from "../src/env/env.js";
 import { VECTOR_OFFSETS, encodeVector } from "../src/env/observation.js";
 import { solidAt, terrainOf } from "../src/env/terrain.js";
@@ -119,6 +123,25 @@ test("the radius moves out when the worms keep arriving, and back when they do n
   // A start outside the range is pulled inside it.
   assert.equal(new GoalCurriculum({ from: 96, to: 120, start: 5000 }).radius, 120);
   assert.equal(CURRICULUM_DEFAULTS.window, 30);
+});
+
+test("a reliable worm gets less time, and gets time back when it misses", () => {
+  const curriculum = new GoalDeadlineCurriculum({ from: 450, to: 120, window: 10 });
+  for (let i = 0; i < 10; i++) curriculum.record(true);
+  assert.ok(Math.abs(curriculum.patience - 450 / 1.1) < 1e-9, "one notch tighter");
+  for (let i = 0; i < 10; i++) curriculum.record(i < 6);
+  assert.ok(Math.abs(curriculum.patience - 450 / 1.1) < 1e-9, "middling outcomes hold it");
+  for (let i = 0; i < 10; i++) curriculum.record(false);
+  assert.equal(curriculum.patience, 450, "failure loosens it, but never past the start");
+
+  const near = new GoalDeadlineCurriculum({ from: 450, to: 120, start: 121, window: 2 });
+  near.record(true);
+  near.record(true);
+  assert.equal(near.patience, 120, "never tighter than the requested floor");
+  assert.throws(
+    () => new GoalDeadlineCurriculum({ from: 100, to: 200 }),
+    /from >= to > 0/,
+  );
 });
 
 test("no goal leaves the four values at zero", () => {

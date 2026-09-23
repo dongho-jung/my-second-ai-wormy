@@ -165,6 +165,30 @@ test("a goal pays for closing on it and once for arriving", () => {
   assert.equal(+away.parts.fromGoal.toFixed(10), -0.24, "walking away costs the same");
 });
 
+test("a speed fine-tune pays a bounded arrival bonus and can fade distance shaping", () => {
+  const weights = {
+    ...DEFAULT_WEIGHTS,
+    goalSpeed: 2,
+    goalSpeedCap: 5,
+  };
+  const fast = combatReward(
+    emptyEvents(1)[0],
+    { ...still, goalDelta: 12, reachedGoal: true, goalSpeed: 9 },
+    weights,
+    1,
+    0.25,
+  );
+  assert.equal(+fast.parts.fromGoal.toFixed(10), 2.06, "only the per-pixel part fades");
+  assert.equal(fast.parts.fromGoalSpeed, 10, "speed is capped before its weight is applied");
+  assert.equal(+fast.reward.toFixed(10), 12.06);
+  const unfinished = combatReward(
+    emptyEvents(1)[0],
+    { ...still, goalSpeed: 9 },
+    weights,
+  );
+  assert.equal(unfinished.parts.fromGoalSpeed, 0, "moving fast without arriving earns nothing");
+});
+
 test("a rope throw costs what the weights say, and nothing by default", () => {
   const thrown = { ...still, ropeThrows: 1 };
   assert.equal(combatReward(emptyEvents(1)[0], thrown).parts.fromRopeThrow, 0, "free by default");
@@ -253,6 +277,39 @@ test("the goal is paid for once, however long it sits on the spot", () => {
   }
   assert.equal(arrivals, 1);
   assert.equal(Math.round(gained), 80, "measured from the second step, when there is a delta");
+});
+
+test("a completed goal reports elapsed time, direct distance, route length and speed", () => {
+  const progress = new Progress({ window: 5, goalRadiusPx: 20, teleportPx: 60 });
+  progress.setGoal({ x: 200, y: 100 }, { x: 100, y: 100 });
+  let facts;
+  for (const x of [120, 140, 160, 180]) facts = progress.update({ x, y: 100 });
+  assert.equal(facts.reachedGoal, true);
+  assert.equal(facts.goalSteps, 4);
+  assert.equal(facts.goalDirectPx, 80, "the arrival circle is not counted as travel owed");
+  assert.equal(facts.goalPathPx, 80);
+  assert.equal(facts.goalSpeed, 20);
+});
+
+test("a speed phase counts death on the goal clock and never as travel", () => {
+  const progress = new Progress({
+    window: 5,
+    goalRadiusPx: 20,
+    teleportPx: 60,
+    goalClockWhileDead: true,
+  });
+  progress.setGoal({ x: 800, y: 100 }, { x: 100, y: 100 });
+  progress.update({ x: 120, y: 100 });
+  const dead = progress.update({ x: 120, y: 100 }, false);
+  const respawned = progress.update({ x: 500, y: 100 });
+  assert.equal(dead.goalSteps, 2, "waiting to respawn is not free time");
+  assert.equal(respawned.goalSteps, 3);
+  assert.equal(progress.goalPathPx, 20, "the jump across the map was not a fast route");
+
+  const compatible = new Progress({ goalRadiusPx: 20 });
+  compatible.setGoal({ x: 800, y: 100 }, { x: 100, y: 100 });
+  compatible.update({ x: 100, y: 100 }, false);
+  assert.equal(compatible.goalSteps, 0, "old runs keep their paused respawn clock by default");
 });
 
 test("the ladder can be faded without touching what it leads to", () => {

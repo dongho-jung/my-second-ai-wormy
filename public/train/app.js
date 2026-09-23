@@ -26,7 +26,18 @@ const SERIES = {
   bestReward: { label: "best reward kept", good: "up" },
   goalsReached: { label: "destinations reached a match", good: "up" },
   goalsMissed: { label: "destinations given up on a match", good: "down" },
+  goalSuccess: { label: "resolved destinations reached", good: "up" },
+  goalSeconds: { label: "seconds per reached destination", good: "down" },
+  goalSpeed: { label: "straight-line speed to destinations, px/s", good: "up" },
+  goalPathEfficiency: { label: "straight distance divided by route length", good: "up" },
+  goalsVsPast: { label: "destinations: learners minus their past selves", good: "up" },
+  goalsMissedVsPast: { label: "missed destinations: learners minus their past selves", good: "down" },
+  goalSecondsVsPast: { label: "seconds per destination: learners minus their past selves", good: "down" },
+  goalSpeedVsPast: { label: "destination speed: learners minus their past selves", good: "up" },
+  goalEfficiencyVsPast: { label: "route efficiency: learners minus their past selves", good: "up" },
   goalRadiusPx: { label: "how far a destination may be, px" },
+  goalPatience: { label: "destination deadline, decisions", good: "down" },
+  goalProgressScale: { label: "share of per-pixel goal shaping left", good: "down" },
   ropeThrows: { label: "rope throws a match" },
   ropeHeld: { label: "decisions a match spent on the rope" },
   fromRopeThrow: { label: "reward from: throwing the rope", good: "up" },
@@ -67,6 +78,7 @@ const SERIES = {
   fromRevisit: { label: "reward from: doubling back", good: "up" },
   fromStuck: { label: "reward from: being stuck", good: "up" },
   fromGoal: { label: "reward from: the goal", good: "up" },
+  fromGoalSpeed: { label: "reward from: arriving quickly", good: "up" },
   shaping: { label: "the ladder's weight", good: "down" },
   fromApproach: { label: "reward from: closing on somebody", good: "up" },
   fromOnTarget: { label: "reward from: aiming at somebody", good: "up" },
@@ -84,16 +96,91 @@ const SERIES = {
 // Not charts: the x axis itself, and the things that are one value per record
 // rather than a curve.
 const NOT_A_SERIES = new Set(["step", "episode", "seed", "elapsedSeconds", "update"]);
+const MOVEMENT_SERIES = new Set([
+  "bestGoals",
+  "goalsReached",
+  "goalsMissed",
+  "goalSuccess",
+  "goalSeconds",
+  "goalSpeed",
+  "goalPathEfficiency",
+  "goalRadiusPx",
+  "goalPatience",
+  "goalProgressScale",
+  "goalsVsPast",
+  "goalsMissedVsPast",
+  "goalSecondsVsPast",
+  "goalSpeedVsPast",
+  "goalEfficiencyVsPast",
+  "fromGoal",
+  "fromGoalSpeed",
+]);
+const COMBAT_SERIES = new Set([
+  "bestCombat",
+  "kills",
+  "deaths",
+  "damageDealt",
+  "damageTaken",
+  "selfDamage",
+  "suicides",
+  "damageRatio",
+  "combat",
+  "killsVsPast",
+  "damageVsPast",
+  "deathsVsPast",
+  "selfDamageVsPast",
+  "suicidesVsPast",
+  "probeKills",
+  "probeDeaths",
+  "probeSuicides",
+  "probeDamageDealt",
+  "probeSelfDamage",
+  "probeSeconds",
+  "fromDamageDealt",
+  "fromDamageTaken",
+  "fromKill",
+  "fromDeath",
+  "fromSuicide",
+  "fromApproach",
+  "fromOnTarget",
+  "fromAimedShot",
+]);
 
 const FIGURES = [
   ["step", "steps", (value) => count(value)],
   ["stepsPerSecond", "steps/s", (value) => count(Math.round(value))],
   ["episodeReward", "reward", (value) => value.toFixed(2)],
-  ["bestCombat", "best", (value) => value.toFixed(2)],
-  ["kills", "kills", (value) => value.toFixed(2)],
-  ["deaths", "deaths", (value) => value.toFixed(2)],
-  ["probeKills", "vs still", (value) => value.toFixed(2)],
-  ["selfDamage", "self damage", (value) => value.toFixed(0)],
+  ["bestGoals", "best goals/min", (value) => value.toFixed(2), () => run?.meta?.task === "movement"],
+  ["goalsReached", "goals/min", (value) => value.toFixed(2), () => run?.meta?.task === "movement"],
+  ["goalSeconds", "seconds/goal", (value) => value.toFixed(1), () => run?.meta?.task === "movement"],
+  [
+    "goalSpeed",
+    "goal speed",
+    (value) => `${value.toFixed(0)} px/s`,
+    () => run?.meta?.task === "movement",
+  ],
+  [
+    "goalPathEfficiency",
+    "direct route",
+    (value) => `${Math.round(value * 100)}%`,
+    () => run?.meta?.task === "movement",
+  ],
+  [
+    "goalPatience",
+    "deadline",
+    (value) => `${Math.round(value)} steps`,
+    () => run?.meta?.task === "movement",
+  ],
+  ["bestCombat", "best", (value) => value.toFixed(2), () => run?.meta?.task !== "movement"],
+  ["kills", "kills", (value) => value.toFixed(2), () => run?.meta?.task !== "movement"],
+  ["deaths", "deaths", (value) => value.toFixed(2), () => run?.meta?.task !== "movement"],
+  ["probeKills", "vs still", (value) => value.toFixed(2), () => run?.meta?.task !== "movement"],
+  [
+    "selfDamage",
+    "self damage",
+    (value) => value.toFixed(0),
+    () => run?.meta?.task !== "movement",
+  ],
   ["stuckSteps", "stuck", (value) => value.toFixed(0)],
   ["demoFrames", "your frames", (value) => count(value)],
   ["demoAgreement", "agrees with you", (value) => `${(value * 100).toFixed(0)}%`],
@@ -319,6 +406,51 @@ const CHANGED = 0.08;
 
 const HEADLINES = [
   {
+    when: () => run?.meta?.task === "movement",
+    title: "How fast does it reach a destination?",
+    good: "down",
+    track: "goalSeconds",
+    read: () => latest("goalSeconds"),
+    show: (value) => `${value.toFixed(1)}s`,
+    unit: () => {
+      const goals = latest("goalsReached");
+      const speed = latest("goalSpeed");
+      return `${Number.isFinite(goals) ? goals.toFixed(2) : "—"} goals/min · `
+        + `${Number.isFinite(speed) ? speed.toFixed(0) : "—"} direct px/s`;
+    },
+    say: (move) => {
+      const efficiency = latest("goalPathEfficiency");
+      const route = Number.isFinite(efficiency)
+        ? ` ${percent(efficiency)} of its travelled path points straight at the goal.`
+        : "";
+      if (!move) return `Waiting for enough finished episodes to compare speed.${route}`;
+      if (move.change < -CHANGED) return `Reaching destinations faster than earlier in the run.${route}`;
+      if (move.change > CHANGED) return `Taking longer than earlier in the run.${route}`;
+      return `Arrival time is flat over the last stretch.${route}`;
+    },
+  },
+  {
+    when: () => run?.meta?.task === "movement",
+    title: "Is the speed deadline still safe?",
+    track: "goalSuccess",
+    read: () => latest("goalSuccess"),
+    show: percent,
+    unit: () => {
+      const deadline = latest("goalPatience");
+      const frameskip = Number(run?.meta?.frameskip);
+      const seconds = Number.isFinite(deadline) && Number.isFinite(frameskip)
+        ? deadline * frameskip / 60
+        : NaN;
+      return `of resolved goals reached · ${Number.isFinite(seconds) ? seconds.toFixed(1) + "s" : "—"} deadline`;
+    },
+    state: (value) => value >= 0.85 ? "good" : value <= 0.5 ? "bad" : "flat",
+    say: (move, value) => {
+      if (value >= 0.85) return "Reliable enough for the curriculum to tighten the next deadline window.";
+      if (value <= 0.5) return "Too many deadlines are being missed; the curriculum will give time back.";
+      return "Holding the current deadline while speed catches up.";
+    },
+  },
+  {
     // First, because it is the only one that answers "is this working".
     //
     // Every other figure on this page is averaged over every worm in the
@@ -326,6 +458,7 @@ const HEADLINES = [
     // the three of them get more reckless together. This is the worms being
     // trained minus the older copies of themselves they are playing — same map,
     // same match, same weapons. It can only go up by actually being better.
+    when: () => run?.meta?.task !== "movement",
     title: "Is it beating its past self?",
     good: "up",
     track: "killsVsPast",
@@ -363,6 +496,7 @@ const HEADLINES = [
     // its own against worms that press nothing. Its past self gets better
     // as it does; these do not, so this is the number that can say whether
     // it has learned to find a worm and kill it.
+    when: () => run?.meta?.task !== "movement",
     title: "Can it kill a sitting duck?",
     good: "up",
     track: "probeKills",
@@ -442,6 +576,7 @@ const HEADLINES = [
     },
   },
   {
+    when: () => run?.meta?.task !== "movement",
     title: "Is it fighting?",
     good: "up",
     track: "kills",
@@ -464,6 +599,7 @@ const HEADLINES = [
             : "No change over the last stretch of the run.",
   },
   {
+    when: () => run?.meta?.task !== "movement",
     title: "Is it blowing itself up?",
     good: "down",
     track: "selfDamage",
@@ -600,6 +736,7 @@ const HEADLINES = [
 function renderHeadlines() {
   const cards = [];
   for (const headline of HEADLINES) {
+    if (headline.when && !headline.when()) continue;
     const value = headline.read();
     if (value === undefined) continue;
     const move = movement(headline.track);
@@ -632,7 +769,9 @@ function renderHeadlines() {
 }
 
 function renderFigures() {
-  const shown = FIGURES.map(([key, label, format]) => [label, format, latest(key)]).filter(
+  const shown = FIGURES.filter(([, , , when]) => !when || when()).map(
+    ([key, label, format]) => [label, format, latest(key)],
+  ).filter(
     ([, , value]) => value !== undefined,
   );
   element("figures").replaceChildren(
@@ -655,6 +794,10 @@ function seriesNames() {
   for (const record of records) {
     for (const [key, value] of Object.entries(record)) {
       if (NOT_A_SERIES.has(key) || typeof value !== "number") continue;
+      const movementRun = run?.meta?.task === "movement";
+      if ((!movementRun && MOVEMENT_SERIES.has(key)) || (movementRun && COMBAT_SERIES.has(key))) {
+        continue;
+      }
       if (!names.includes(key)) names.push(key);
     }
   }
@@ -699,14 +842,20 @@ const GROUPS = [
   {
     title: "Is it getting better?",
     open: true,
-    of: ["killsVsPast", "damageVsPast", "deathsVsPast", "selfDamageVsPast", "probeKills", "probeDeaths", "probeSuicides", "combat", "bestCombat", "episodeReward", "bestReward", "meanReward", "kills", "deaths"],
+    of: [
+      "goalsVsPast", "goalSecondsVsPast", "goalSpeedVsPast", "goalEfficiencyVsPast",
+      "goalsReached", "goalsMissed", "goalSuccess", "goalSeconds", "goalSpeed",
+      "goalPathEfficiency", "bestGoals", "killsVsPast", "damageVsPast", "deathsVsPast",
+      "selfDamageVsPast", "probeKills", "probeDeaths", "probeSuicides", "combat",
+      "bestCombat", "episodeReward", "bestReward", "meanReward", "kills", "deaths",
+    ],
   },
   {
     title: "What it is being paid for",
     of: [
       "shaping", "fromDamageDealt", "fromDamageTaken", "fromKill", "fromDeath", "fromSuicide",
       "fromOnTarget", "fromAimedShot", "fromApproach", "fromExplore",
-      "fromRevisit", "fromStuck", "fromGoal",
+      "fromRevisit", "fromStuck", "fromGoal", "fromGoalSpeed", "goalProgressScale",
     ],
   },
   {
@@ -717,7 +866,7 @@ const GROUPS = [
     title: "Is it still learning?",
     of: [
       "entropy", "entropyShare", "entropyCoef", "approxKL", "explainedVariance",
-      "clipFraction", "policyLoss", "valueLoss", "learningRate",
+      "clipFraction", "policyLoss", "valueLoss", "learningRate", "goalPatience", "goalRadiusPx",
     ],
   },
   {
@@ -913,9 +1062,9 @@ async function loadHistory(id) {
   try {
     const response = await fetch(`runs/${encodeURIComponent(id)}/history`);
     const found = response.ok ? await response.json() : { against: [] };
-    history = { id, against: found.against ?? [] };
+    history = { id, primary: found.primary ?? null, against: found.against ?? [] };
   } catch {
-    history = { id, against: [] };
+    history = { id, primary: null, against: [] };
   }
   renderHistory();
 }
@@ -923,10 +1072,12 @@ async function loadHistory(id) {
 function renderHistory() {
   const rows = history?.id === selected ? history.against : [];
   element("history-panel").hidden = rows.length === 0;
+  const primaryName = rows[0]?.primary ?? history?.primary ?? "kills";
+  element("history-score").textContent = `${primaryName}, later - earlier`;
   element("history").replaceChildren(
     ...rows.map((entry) => {
-      const kills = entry.metrics?.kills ?? {};
-      const [low, high] = kills.interval ?? [NaN, NaN];
+      const primary = entry.metrics?.[entry.primary ?? primaryName] ?? {};
+      const [low, high] = primary.interval ?? [NaN, NaN];
       const row = document.createElement("tr");
       const cell = (text, tone) => {
         const td = document.createElement("td");
@@ -935,7 +1086,7 @@ function renderHistory() {
         row.append(td);
       };
       cell(count(entry.steps));
-      const diff = Number(kills.difference);
+      const diff = Number(primary.difference);
       cell(
         Number.isFinite(diff) ? `${diff >= 0 ? "+" : ""}${diff.toFixed(2)}` : "—",
         low > 0 ? "up" : high < 0 ? "down" : undefined,

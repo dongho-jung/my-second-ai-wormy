@@ -25,6 +25,9 @@ export const PROGRESS_DEFAULTS = {
   goalRadiusPx: 24,
   // A jump further than this in one step is a respawn, not walking.
   teleportPx: 60,
+  // Existing movement runs paused a goal's deadline while a worm was dead.
+  // A speed phase enables this so respawn time cannot look like fast travel.
+  goalClockWhileDead: false,
 };
 
 export class Progress {
@@ -40,9 +43,25 @@ export class Progress {
    * restarts from wherever the worm is, so the first step after this is not
    * paid for the jump from the old goal to the new one.
    */
-  setGoal(goal) {
+  setGoal(goal, position = null) {
     this.goal = goal ?? null;
+    const initialDistance =
+      this.goal && position
+        ? Math.hypot(position.x - this.goal.x, position.y - this.goal.y)
+        : null;
+    // Keep the old shaping boundary: the first update establishes the distance
+    // used by goalDelta and does not earn progress for changing destinations.
     this.goalDistance = null;
+    // The distance that actually has to be covered. Arrival is a circle rather
+    // than one exact pixel, so paying or reporting the whole centre-to-centre
+    // distance would make a perfect straight route look inefficient by the
+    // radius of that circle.
+    this.goalDirectPx =
+      initialDistance === null
+        ? null
+        : Math.max(0, initialDistance - this.options.goalRadiusPx);
+    this.goalPathPx = 0;
+    this.goalLastPosition = this.goal && position ? [position.x, position.y] : null;
     this.goalSteps = 0;
   }
 
@@ -56,6 +75,9 @@ export class Progress {
     this.stuckSteps = 0;
     this.goal = goal;
     this.goalDistance = null;
+    this.goalDirectPx = null;
+    this.goalPathPx = 0;
+    this.goalLastPosition = null;
     // Decisions spent on the current goal, for a caller that gives up on one.
     this.goalSteps = 0;
     this.cell = -1;
@@ -69,6 +91,10 @@ export class Progress {
     this.stuckSteps = 0;
     this.cell = -1;
     this.goalDistance = null;
+    // A death or a respawn must not look like a very fast piece of travel.
+    // Keep the goal and its clock, but start measuring its physical path again
+    // from the first live position after the jump.
+    this.goalLastPosition = null;
   }
 
   /**
@@ -78,6 +104,9 @@ export class Progress {
   update(position, alive = true) {
     const { window, stuckPx, cellPx, revisitMemory, goalRadiusPx, teleportPx } =
       this.options;
+    // In a speed phase, time spent dead is still time spent failing to reach
+    // the destination. Older runs keep their paused clock unless they opt in.
+    if (this.goal && (alive || this.options.goalClockWhileDead)) this.goalSteps++;
     if (!alive) {
       this.restart();
       return this.facts(0, false, 0, 0, 0, false);
@@ -117,8 +146,18 @@ export class Progress {
     let goalDelta = 0;
     let reachedGoal = false;
     if (this.goal) {
-      this.goalSteps++;
       const distance = Math.hypot(position.x - this.goal.x, position.y - this.goal.y);
+      if (this.goalDirectPx === null) {
+        this.goalDirectPx = Math.max(0, distance - goalRadiusPx);
+      }
+      if (this.goalLastPosition) {
+        const travelled = Math.hypot(
+          position.x - this.goalLastPosition[0],
+          position.y - this.goalLastPosition[1],
+        );
+        if (travelled <= teleportPx) this.goalPathPx += travelled;
+      }
+      this.goalLastPosition = [position.x, position.y];
       goalDelta = this.goalDistance === null ? 0 : this.goalDistance - distance;
       this.goalDistance = distance;
       if (distance <= goalRadiusPx) {
@@ -127,6 +166,7 @@ export class Progress {
         reachedGoal = true;
         this.goal = null;
         this.goalDistance = null;
+        this.goalLastPosition = null;
       }
     }
     return this.facts(movedPx, stuck, novel, revisit, goalDelta, reachedGoal);
@@ -160,6 +200,13 @@ export class Progress {
       reachedGoal,
       goalDistance: this.goalDistance,
       goalSteps: this.goalSteps ?? 0,
+      // These three are non-zero only on the decision that completes a goal.
+      // The environment consumes them before assigning the next one.
+      goalDirectPx: reachedGoal ? (this.goalDirectPx ?? 0) : 0,
+      goalPathPx: reachedGoal ? this.goalPathPx : 0,
+      goalSpeed: reachedGoal && this.goalSteps > 0
+        ? (this.goalDirectPx ?? 0) / this.goalSteps
+        : 0,
       cellsVisited: this.visited.size,
     };
   }

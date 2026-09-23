@@ -49,6 +49,7 @@ export const EPISODE_STATS = [
   "fromOnTarget",
   "fromAimedShot",
   "fromGoal",
+  "fromGoalSpeed",
   "fromRopeThrow",
   // How many destinations it actually reached this episode. `fromGoal` mixes
   // arriving with closing distance, so on its own it cannot say whether a worm
@@ -59,10 +60,22 @@ export const EPISODE_STATS = [
   // swapped for another. Many of these against few reached is a worm that
   // cannot get where it is sent, whatever the reward curve says.
   "goalsMissed",
+  // Speed is measured on completed destinations. Seconds says what a person
+  // sees, direct px/s separates it from the random distance of each goal, and
+  // path efficiency says how much of the travelled route actually shortened
+  // the straight line. Together they distinguish "got lucky with short goals"
+  // from "takes a direct route quickly".
+  "goalSeconds",
+  "goalSpeed",
+  "goalPathEfficiency",
   // How far this world was drawing destinations when the match ended. On a
   // clock schedule every world says the same; on a success-driven one each
   // world has moved it as far as its own worms earned.
   "goalRadiusPx",
+  // The other half of the speed curriculum: how long a goal currently gets,
+  // and how much of the old distance shaping is still paid.
+  "goalPatience",
+  "goalProgressScale",
   // The rope, which is the one tool a worm has for ground it cannot walk to.
   // Throws are what it asked for; held is what it got — decisions spent with a
   // rope actually attached. A policy near maximum entropy throws on a third of
@@ -88,6 +101,13 @@ export const EPISODE_STATS = [
   "deathsVsPast",
   "selfDamageVsPast",
   "suicidesVsPast",
+  // Movement counterparts of the combat differences above. They let the
+  // evaluator recover each side after swapping seats on identical maps.
+  "goalsVsPast",
+  "goalsMissedVsPast",
+  "goalSecondsVsPast",
+  "goalSpeedVsPast",
+  "goalEfficiencyVsPast",
   // What the match is actually scored on — damage, kills and deaths, with no
   // ladder in it — averaged over the worms being trained only. The best
   // checkpoint is picked on this rather than on `reward`: with the ladder
@@ -121,9 +141,13 @@ const STAT_SOURCE = {
   fromOnTarget: "fromOnTarget",
   fromAimedShot: "fromAimedShot",
   fromGoal: "fromGoal",
+  fromGoalSpeed: "fromGoalSpeed",
   fromRopeThrow: "fromRopeThrow",
   goalsReached: "goalsReached",
   goalsMissed: "goalsMissed",
+  goalSeconds: "goalSeconds",
+  goalSpeed: "goalSpeed",
+  goalPathEfficiency: "goalPathEfficiency",
   ropeThrows: "ropeThrows",
   ropeHeld: "ropeHeld",
 };
@@ -353,15 +377,39 @@ export class VecWormEnv {
 
   writeStats(index, env) {
     const totals = env.info().totals;
+    const valueOf = (one, field) => {
+      const reached = one.goalsReached ?? 0;
+      if (field === "goalSeconds") {
+        // With no arrival, zero seconds would call the worst policy the
+        // fastest. Use the current deadline (or the whole episode when goals
+        // never expire) as the honest lower bound on how long it failed for.
+        const decisions =
+          reached > 0
+            ? (one.goalStepsReached ?? 0) / reached
+            : env.goalDeadline() || env.episodeTicks / env.frameskip;
+        return decisions * env.frameskip / 60;
+      }
+      if (field === "goalSpeed") {
+        const decisions = one.goalStepsReached ?? 0;
+        return decisions > 0
+          ? ((one.goalDirectPx ?? 0) / decisions) * 60 / env.frameskip
+          : 0;
+      }
+      if (field === "goalPathEfficiency") {
+        const path = one.goalPathPx ?? 0;
+        return path > 0 ? Math.min(1, (one.goalDirectPx ?? 0) / path) : 0;
+      }
+      return one[field] ?? 0;
+    };
     const mean = (field) =>
-      totals.reduce((sum, one) => sum + (one[field] ?? 0), 0) / totals.length;
+      totals.reduce((sum, one) => sum + valueOf(one, field), 0) / totals.length;
     // The trained worms are the front of the match and the older copies the
     // back, which is how the trainer seats them.
     const split = totals.length - this.opponents;
     const meanOf = (from, to, field) => {
       if (to <= from) return 0;
       let sum = 0;
-      for (let one = from; one < to; one++) sum += totals[one][field] ?? 0;
+      for (let one = from; one < to; one++) sum += valueOf(totals[one], field);
       return sum / (to - from);
     };
     const versus = (field) =>
@@ -376,12 +424,21 @@ export class VecWormEnv {
       }
       else if (field === "shaping") this.stats[at + offset] = env.shaping;
       else if (field === "goalRadiusPx") this.stats[at + offset] = env.goalRadius() ?? 0;
+      else if (field === "goalPatience") this.stats[at + offset] = env.goalDeadline();
+      else if (field === "goalProgressScale") this.stats[at + offset] = env.goalProgressScale;
       else if (field === "seed") this.stats[at + offset] = env.episodeSeed;
       else if (field === "killsVsPast") this.stats[at + offset] = versus("killed");
       else if (field === "damageVsPast") this.stats[at + offset] = versus("damageDealt");
       else if (field === "deathsVsPast") this.stats[at + offset] = versus("died");
       else if (field === "selfDamageVsPast") this.stats[at + offset] = versus("selfDamage");
       else if (field === "suicidesVsPast") this.stats[at + offset] = versus("suicides");
+      else if (field === "goalsVsPast") this.stats[at + offset] = versus("goalsReached");
+      else if (field === "goalsMissedVsPast") this.stats[at + offset] = versus("goalsMissed");
+      else if (field === "goalSecondsVsPast") this.stats[at + offset] = versus("goalSeconds");
+      else if (field === "goalSpeedVsPast") this.stats[at + offset] = versus("goalSpeed");
+      else if (field === "goalEfficiencyVsPast") {
+        this.stats[at + offset] = versus("goalPathEfficiency");
+      }
       else if (field === "combat") {
         this.stats[at + offset] =
           meanOf(0, split, "fromDamageDealt") +
