@@ -148,6 +148,7 @@ def main(argv=None):
         # describes, and the patch scale it looked at the ground through.
         **({"engine": world["engine"]} if world.get("engine") else {}),
         "patchScale": world.get("patchScale", 2),
+        "hookRays": world.get("hookRays", 0),
         # And the rope hold its throws were committed to.
         "ropeHold": world.get("ropeHold", 0),
         "roomUrl": args.room_url,

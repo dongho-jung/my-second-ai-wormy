@@ -182,6 +182,9 @@ export function observationSpec({
   // A second cut of the same ground, for a match in which two policies were
   // trained at different scales: each is shown the patch it learned on.
   patchScale2 = null,
+  // Rays all the way round saying where a rope would hook in each direction.
+  // Off by default so every vector from before keeps its size.
+  hookRays = 0,
 } = {}) {
   const layout = [
     ["rays", RAY_COUNT], //   distance to the first solid pixel, 1 = clear to the limit
@@ -255,6 +258,13 @@ export function observationSpec({
     // bazooka. Spawning and picking up a crate both change slots with nothing
     // to notice it by, so no amount of memory recovers it. -1 for an empty slot.
     ["weaponIds", WEAPON_SLOTS + foeSlots],
+    // Where a rope would hook, all the way round, not only along the aim: for
+    // each of `hookRays` directions, 1 minus the distance to the first ground
+    // that holds a rope as a share of its reach, 0 for nothing within reach.
+    // The aim turns slowly and the patch shows solid ground without saying
+    // which of it is out of reach; this says which way a throw is worth
+    // turning toward. Last, so every earlier offset stays where it was.
+    ...(hookRays > 0 ? [["hookRays", hookRays]] : []),
   ];
   const offsets = {};
   const vectorSize = layout.reduce((at, [name, size]) => {
@@ -269,6 +279,7 @@ export function observationSpec({
     ballistics,
     patch: patchGeometry(patchScale),
     patch2: patchScale2 ? patchGeometry(patchScale2) : null,
+    hookRays,
     layout,
     offsets,
     vectorSize,
@@ -549,7 +560,21 @@ export function encodeVector(view, into = null, spec = DEFAULT_SPEC) {
   }
   for (let slot = 0; slot < spec.foeSlots; slot++) into[at++] = held(foes[slot]);
 
+  for (let ray = 0; ray < (spec.hookRays ?? 0); ray++) {
+    const angle = (2 * Math.PI * ray) / spec.hookRays;
+    const hook = hookAlong(terrain, x, y, Math.cos(angle), Math.sin(angle));
+    into[at++] = hook === null ? 0 : 1 - hook / ROPE_REACH_PX;
+  }
+
   return into;
+}
+
+/** Distance to the first ground a rope holds along a direction, in steps of two pixels, or null. */
+function hookAlong(terrain, x, y, dx, dy, limit = ROPE_REACH_PX) {
+  for (let distance = 2; distance <= limit; distance += 2) {
+    if (ropeHoldsAt(terrain, Math.round(x + dx * distance), Math.round(y + dy * distance))) return distance;
+  }
+  return null;
 }
 
 /**

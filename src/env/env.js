@@ -431,6 +431,7 @@ export class WormEnv {
       ballistics: engine.ballistics,
       patchScale: settings.patchScale,
       patchScale2: settings.patchScale2 ?? null,
+      hookRays: settings.hookRays ?? 0,
     });
     this.mapEvery = settings.mapEvery;
     this.shapingFullAt = Math.max(0, settings.shapingFullAt ?? 0);
