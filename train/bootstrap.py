@@ -10,8 +10,7 @@ import urllib.request
 from pathlib import Path
 
 
-def experiment_checkpoint(directory, experiment):
-    found = []
+def _experiment_files(directory, experiment, names):
     for description in Path(directory).glob("*/run.json"):
         try:
             run = json.loads(description.read_text())
@@ -19,11 +18,26 @@ def experiment_checkpoint(directory, experiment):
             continue
         if run.get("meta", {}).get("experimentId") != experiment:
             continue
-        for name in ("best.pt", "policy.pt"):
+        for name in names:
             path = description.parent / name
             if path.is_file():
-                found.append(path)
-                break
+                yield path
+
+
+def experiment_checkpoint(directory, experiment):
+    """The experiment's most recent weights: its latest policy.pt or best.pt.
+
+    A restart carries on from where training got to, not from the champion.
+    Taking best.pt used to throw away everything learned since the last
+    promotion, which on a run that had not promoted yet was the whole run.
+    """
+    found = list(_experiment_files(directory, experiment, ("best.pt", "policy.pt")))
+    return max(found, key=lambda p: p.stat().st_mtime) if found else None
+
+
+def experiment_champion(directory, experiment):
+    """The experiment's most recent best.pt: the policy selection has to beat."""
+    found = list(_experiment_files(directory, experiment, ("best.pt",)))
     return max(found, key=lambda p: p.stat().st_mtime) if found else None
 
 

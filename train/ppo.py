@@ -30,7 +30,7 @@ from torch import nn
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import demos as demo_store
-from bootstrap import download_seed, experiment_checkpoint, file_digest
+from bootstrap import download_seed, experiment_champion, experiment_checkpoint, file_digest
 from stability import (
     MovementGuard,
     Routes,
@@ -696,8 +696,11 @@ def main(argv=None):
         raise SystemExit("validation/test suites require the movement benchmark")
     if args.bootstrap_url and (not args.experiment_id or not args.resume or not Path(args.resume).is_dir()):
         raise SystemExit("bootstrap requires --experiment-id and a --resume runs directory")
+    # The champion a restarted experiment was comparing against, when there is one.
+    champion_from = None
     if args.bootstrap_url:
         carried_from = experiment_checkpoint(args.resume, args.experiment_id)
+        champion_from = experiment_champion(args.resume, args.experiment_id)
         if carried_from is None:
             carried_from = download_seed(args.bootstrap_url, args.resume, args.experiment_id, args.bootstrap_host)
     else:
@@ -1222,6 +1225,17 @@ def main(argv=None):
         return args.bc_coef * min(1.0, demo_batch["acting"] / max(1, args.bc_full_frames))
 
     guard = MovementGuard(args.stability_patience)
+    # A restart keeps its champion rather than crowning whatever it resumed
+    # with: the champion's own routes are the bar, and its file is the one a
+    # recovery goes back to.
+    champion_routes = None
+    if champion_from is not None:
+        champion = torch.load(champion_from, map_location="cpu", weights_only=False)
+        if champion.get("experimentId") == args.experiment_id and champion.get("validationRoutes"):
+            champion_routes = champion["validationRoutes"]
+            (run.path / "best.pt").write_bytes(Path(champion_from).read_bytes())
+            print(f"champion | kept from {champion_from} at {champion.get('step', 0):,} steps", flush=True)
+        del champion
     # The test suite's routes from the starting policy, to pair the selected one with.
     first_test = None
     suite_fingerprints = {}
@@ -1275,6 +1289,7 @@ def main(argv=None):
 
     def check_movement(line):
         nonlocal benchmark_suite, best_score, best_seconds, learning_rate, rollback_count, pinned
+        nonlocal champion_routes
         nonlocal pool, next_v, next_p, next_m, next_done, next_reset
         checked_at = time.perf_counter()
         results = [evaluate_suite(args.benchmark_seed, "benchmark")]
@@ -1289,6 +1304,12 @@ def main(argv=None):
         line["validationSeconds"] = (
             sum(s["seconds"] * s["episodes"] for s in scores) / sum(s["episodes"] for s in scores)
         )
+        if champion_routes is not None:
+            if [one["suite"] for one in champion_routes] == [one.fingerprint for one in results]:
+                guard.adopt(champion_routes)
+            else:
+                print("champion | its suites differ from this run's; starting a new champion", flush=True)
+            champion_routes = None
         decision = guard.consider(results, seed=updates)
         line["stabilityDecision"] = decision
         line["stabilityStrikes"] = guard.strikes

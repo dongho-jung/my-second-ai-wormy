@@ -208,3 +208,42 @@ class SuccessPathTests(unittest.TestCase):
         self.assertEqual(guard.consider([Suite(base)]), "keep")
         self.assertEqual(guard.consider([Suite(shifted(base, -1))]), "promote")
 
+
+class ResumeTests(unittest.TestCase):
+    def test_restart_resumes_latest_weights_and_keeps_the_champion(self):
+        def evaluate(*args, seed, **kwargs):
+            scenarios = tuple(MovementScenarioResult(
+                seed=seed + i, map_index=i, map_name=str(i), start_x=0, start_y=0,
+                target_x=10, target_y=10, assigned_distance=14, detour=True,
+                reached=0, seconds=1.0, speed=0, efficiency=0,
+            ) for i in range(2))
+            return MovementBenchmarkResult(scenarios, 60, 4)
+        common = [
+            "--task=movement", "--agents=1", "--workers=1", "--envs=1", "--steps=4", "--bptt=2",
+            "--minibatches=1", "--epochs=1", "--total-steps=8", "--episode-ticks=60", "--stock-levels=1",
+            "--no-patch", "--no-map", "--device=cpu", "--torch-threads=1", "--benchmark-every=1",
+            "--benchmark-seed=11", "--validation-seeds=12", "--goals-per-episode=0",
+            "--experiment-id=restart",
+        ]
+        restart = ["--bootstrap-url=http://127.0.0.1:9/unused.pt"]
+        with tempfile.TemporaryDirectory() as folder:
+            create = lambda **kwargs: Run(directory=folder, **kwargs)
+            with patch("ppo.Run", side_effect=create), patch("ppo.run_movement_benchmark", side_effect=evaluate), \
+                    patch("ppo.download_seed", side_effect=AssertionError("no download on restart")):
+                ppo.main([*common, "--seed=1"])
+                first = next(Path(folder).iterdir())
+                self.assertGreater(
+                    (first / "policy.pt").stat().st_mtime_ns, (first / "best.pt").stat().st_mtime_ns)
+                self.assertEqual(experiment_checkpoint(folder, "restart"), first / "policy.pt")
+                ended_at = torch.load(first / "policy.pt", weights_only=False)["step"]
+                ppo.main([*common, *restart, f"--resume={folder}", "--seed=2"])
+            second = next(path for path in Path(folder).iterdir() if path != first)
+            records = [json.loads(s) for s in (second / "metrics.jsonl").read_text().splitlines()]
+            checks = [r for r in records if "stabilityDecision" in r]
+            # Nothing crowned on arrival: the carried champion is the bar from the first check,
+            # and the check is of the weights training had got to, not the champion's.
+            self.assertEqual(checks[0]["stabilityDecision"], "keep")
+            self.assertEqual(checks[0]["step"], ended_at)
+            self.assertEqual(
+                torch.load(second / "best.pt", weights_only=False)["step"],
+                torch.load(first / "best.pt", weights_only=False)["step"])

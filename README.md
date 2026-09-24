@@ -234,7 +234,12 @@ validation decisions and recoveries.
 Checkpoints include Adam state and learning rate. An `--experiment-id` labels a
 controlled run. With `--bootstrap-url` and `--resume artifacts/runs`, a trainer
 resumes only that experiment's saved run, or downloads the shared starting model
-if none exists. `--bootstrap-host` supplies the configured public Host when using
+if none exists. It resumes the experiment's most recent weights (`policy.pt` is
+saved every `--save-every` updates) and keeps its `best.pt` as the champion to
+beat: the champion's file is copied into the new run and its saved routes are the
+bar at the first check, so a restart neither discards what was learned since the
+last promotion nor crowns whatever it resumed with.
+`--bootstrap-host` supplies the configured public Host when using
 an internal service address. A failed or corrupt download never starts training.
 To publish the common seed, set `WORMY_SEED_ID` and `WORMY_SEED_RUN` on the source
 monitor. It atomically pins that run's `best.pt` once under `runs/seeds/` and serves
