@@ -44,6 +44,10 @@ class MovementScenarioResult:
     seconds: float
     speed: float
     efficiency: float
+    # A buried goal, reached only by digging; and how much of the distance was
+    # left at the closest point, 0 when reached.
+    dig: bool = False
+    closest: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,14 @@ class MovementBenchmarkResult:
         return self.detour_reached / max(1, len(self.detours))
 
     @property
+    def digs(self) -> tuple[MovementScenarioResult, ...]:
+        return tuple(one for one in self.scenarios if one.dig)
+
+    @property
+    def dig_reached(self) -> int:
+        return sum(one.reached for one in self.digs)
+
+    @property
     def detour_seconds(self) -> float:
         return float(np.mean([one.seconds for one in self.detours])) if self.detours else 0.0
 
@@ -125,6 +137,9 @@ class MovementBenchmarkResult:
                     "goal": [one.target_x, one.target_y],
                     "distance": one.assigned_distance,
                     "detour": one.detour,
+                    # Only when set, so suites from before buried goals keep
+                    # their fingerprints.
+                    **({"dig": True} if one.dig else {}),
                 }
                 for one in self.scenarios
             ],
@@ -143,6 +158,8 @@ class MovementBenchmarkResult:
             "benchmarkDetourEpisodes": len(self.detours),
             "benchmarkDetourSuccess": self.detour_success,
             "benchmarkDetourSeconds": self.detour_seconds,
+            "benchmarkDigReached": self.dig_reached,
+            "benchmarkDigEpisodes": len(self.digs),
             "benchmarkSuite": self.fingerprint,
         }
 
@@ -365,6 +382,8 @@ def run_movement_benchmark(
                         seconds=float(row[fields["goalSeconds"]]),
                         speed=float(row[fields["goalSpeed"]]),
                         efficiency=float(row[fields["goalPathEfficiency"]]),
+                        dig=bool(round(float(row[fields["goalDig"]]))) if "goalDig" in fields else False,
+                        closest=float(row[fields["goalClosestShare"]]) if "goalClosestShare" in fields else 0.0,
                     )
                 )
     finally:

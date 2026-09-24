@@ -73,6 +73,12 @@ export const EPISODE_STATS = [
   // so `goalDetour` splits the scoreboard into open and route-planning cases.
   "goalsDetourAssigned",
   "goalDetour",
+  // The same for buried destinations, which only digging reaches.
+  "goalsDigAssigned",
+  "goalDig",
+  // How much of the first task's distance was still left at the closest the
+  // worm got, 0 once it arrived. A task not reached still says how near it came.
+  "goalClosestShare",
   // The first task's exact endpoints. Benchmarks run one worm and one task, so
   // these make equality stronger than "the distances happened to match".
   "goalStartX",
@@ -176,6 +182,9 @@ const STAT_SOURCE = {
   goalAssignedDistance: "goalAssignedDistance",
   goalsDetourAssigned: "goalsDetourAssigned",
   goalDetour: "goalDetour",
+  goalsDigAssigned: "goalsDigAssigned",
+  goalDig: "goalDig",
+  goalClosestShare: "goalClosestShare",
   goalStartX: "goalStartX",
   goalStartY: "goalStartY",
   goalTargetX: "goalTargetX",

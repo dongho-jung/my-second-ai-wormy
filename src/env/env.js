@@ -29,7 +29,7 @@ import {
   tallyDamage,
 } from "./reward.js";
 import { viewFromWorld } from "./view.js";
-import { solidAt } from "./terrain.js";
+import { BACKGROUND, DIGGABLE, SHOT_STOPS, solidAt } from "./terrain.js";
 
 /** How wide the cone a worm is paid for aiming inside is. */
 const AIM_CONE = Math.PI / 8;
@@ -225,6 +225,12 @@ export const DEFAULTS = {
   // start to destination. These are the tasks that teach going around a ledge
   // instead of blindly following the goal arrow into its underside.
   goalDetourShare: 0,
+  // What share are buried: every open pixel within a few dozen of the goal is
+  // turned to dirt when it is handed out, so the only way in is to dig. The
+  // goals above are all somewhere a worm can already stand, and in the room's
+  // maps nearly every one of them is reachable without touching the dig key,
+  // so without these a policy is never asked to dig at all.
+  goalDigShare: 0,
   // `signed` pays every pixel closer and charges every pixel farther. `best`
   // pays only when the worm beats its closest distance so far: a necessary
   // detour is neutral, while pacing over the same ground cannot farm reward.
@@ -280,6 +286,13 @@ export function groundedGoal(terrain, rng, tries = 64) {
   }
   return null;
 }
+
+// A buried goal's ball of dirt: at most this wide, at least this much wider
+// than the arrival circle so digging is unavoidable, and never reaching within
+// this far of where the worm starts.
+const DIG_BALL_PX = 44;
+const DIG_MIN_PX = 32;
+const DIG_CLEARANCE_PX = 30;
 
 /** Closer than this and the worm has arrived before it has been told to go. */
 const GOAL_MIN_PX = 40;
@@ -377,22 +390,26 @@ function goalMaker(goals) {
         // the requested class just because the first point was unsuitable.
         const wantsDetour = env.goalDetourShare > 0 && env.rng() < env.goalDetourShare;
         const wantsAbove = env.goalAboveShare > 0 && env.rng() < env.goalAboveShare;
+        // Drawn only when asked for, so runs without buried goals keep the
+        // exact sequence of destinations they always had.
+        const wantsDig = env.goalDigShare > 0 && env.rng() < env.goalDigShare;
+        const mark = (goal) => (goal && wantsDig ? { ...goal, dig: true } : goal);
         if (wantsDetour) {
           const around = groundedGoalNear(terrain, env.rng, from, radius, {
             tries: 192,
             abovePx: wantsAbove ? env.goalAbovePx : 0,
             blocked: true,
           });
-          if (around) return { ...around, detour: true };
+          if (around) return mark({ ...around, detour: true });
         }
         // Some of the time, somewhere a jump does not reach; the rest of the
         // time anywhere within reach, which may still be up.
         if (wantsAbove) {
           const up = groundedGoalNear(terrain, env.rng, from, radius, { abovePx: env.goalAbovePx });
-          if (up) return up;
+          if (up) return mark(up);
         }
         const near = groundedGoalNear(terrain, env.rng, from, radius);
-        if (near) return near;
+        if (near) return mark(near);
       }
       return groundedGoal(terrain, env.rng);
     };
@@ -504,6 +521,12 @@ export class WormEnv {
     this.goalAboveShare = Math.min(1, Math.max(0, settings.goalAboveShare ?? 0));
     this.goalAbovePx = Math.max(0, settings.goalAbovePx ?? 0);
     this.goalDetourShare = Math.min(1, Math.max(0, settings.goalDetourShare ?? 0));
+    this.goalDigShare = Math.min(1, Math.max(0, settings.goalDigShare ?? 0));
+    // A material that is dirt and nothing else: solid to a worm, holds a rope,
+    // and goes away when dug. Buried goals are packed with it.
+    this.dirtIndex = Array.from(engine.materialFlags).findIndex(
+      (flags) => !(flags & BACKGROUND) && (flags & DIGGABLE) && !(flags & SHOT_STOPS),
+    );
     this.makeStart = typeof settings.starts === "function" ? settings.starts : null;
     this.reward = settings.reward ?? combatReward;
     // A fresh level per episode by default: one map teaches one map.
@@ -804,6 +827,34 @@ export class WormEnv {
   }
 
   /**
+   * Pack every open pixel within `DIG_BALL_PX` of the goal with dirt, leaving
+   * rock alone. The arrival circle is smaller than the ball, so the worm has
+   * to dig its way in. Refused when the worm would be inside the ball itself
+   * or the ball would not be larger than the arrival circle.
+   */
+  buryGoal(goal, from) {
+    const distance = from ? Math.hypot(goal.x - from.x, goal.y - from.y) : 0;
+    const radius = Math.min(DIG_BALL_PX, distance - DIG_CLEARANCE_PX);
+    if (radius < DIG_MIN_PX || this.dirtIndex < 0) return false;
+    const level = this.world.level;
+    const flags = this.engine.materialFlags;
+    const reach = Math.ceil(radius);
+    for (let dy = -reach; dy <= reach; dy++) {
+      const y = Math.round(goal.y) + dy;
+      if (y < 0 || y >= level.height) continue;
+      for (let dx = -reach; dx <= reach; dx++) {
+        const x = Math.round(goal.x) + dx;
+        if (x < 0 || x >= level.width || dx * dx + dy * dy > radius * radius) continue;
+        const at = y * level.width + x;
+        if (flags[level.data[at]] & BACKGROUND) level.data[at] = this.dirtIndex;
+      }
+    }
+    // The whole-level picture is cached between re-reads; this changed it.
+    this.mapAt = -1;
+    return true;
+  }
+
+  /**
    * Hand every worm a destination, if this run has any. Called at the start of
    * an episode and after one resolves, until that worm has received its quota.
    */
@@ -819,7 +870,13 @@ export class WormEnv {
       }
       const position = this.views[agent]?.self?.position ?? null;
       progress.setGoal(this.makeGoal(this, agent) ?? null, position);
+      if (progress.goal?.dig && !this.buryGoal(progress.goal, position)) {
+        progress.goal.dig = false;
+      }
       if (progress.goal) {
+        if (progress.goal.dig) {
+          this.totals[agent].goalsDigAssigned = (this.totals[agent].goalsDigAssigned ?? 0) + 1;
+        }
         this.totals[agent].goalsAssigned = assigned + 1;
         if (progress.goal.detour) {
           this.totals[agent].goalsDetourAssigned =
@@ -833,6 +890,8 @@ export class WormEnv {
           this.totals[agent].goalTargetX = progress.goal.x;
           this.totals[agent].goalTargetY = progress.goal.y;
           this.totals[agent].goalDetour = progress.goal.detour ? 1 : 0;
+          this.totals[agent].goalDig = progress.goal.dig ? 1 : 0;
+          this.totals[agent].goalClosestShare = 1;
         }
       }
       if (this.views[agent]) this.views[agent].goal = progress.goal;
@@ -967,6 +1026,15 @@ export class WormEnv {
       );
       if (this.makeGoal && !hadGoal) {
         this.totals[agent].goalIdleSteps = (this.totals[agent].goalIdleSteps ?? 0) + 1;
+      }
+      // How near the first task got, as a share of what it had to cover.
+      if ((this.totals[agent].goalsAssigned ?? 0) === 1) {
+        const tracked = this.progress[agent];
+        this.totals[agent].goalClosestShare = moved.reachedGoal
+          ? 0
+          : tracked.goal && tracked.goalDirectPx > 0 && tracked.goalBestDistance !== null
+            ? Math.min(1, Math.max(0, (tracked.goalBestDistance - tracked.options.goalRadiusPx) / tracked.goalDirectPx))
+            : this.totals[agent].goalClosestShare ?? 1;
       }
       // Decisions spent hanging off an attached rope. Read after the views were
       // refreshed, so this is the state the worm is in now rather than the one

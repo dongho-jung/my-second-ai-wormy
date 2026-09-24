@@ -26,6 +26,7 @@ function normaliseScenario(raw, index) {
     start: point(raw.start, `${index + 1} start`),
     goal: point(raw.goal, `${index + 1} goal`),
     detour: Boolean(raw.detour),
+    dig: Boolean(raw.dig),
   };
 }
 
@@ -75,7 +76,7 @@ export class GhostRace {
       return found;
     };
     const starts = () => this.current.start;
-    const goals = () => ({ ...this.current.goal, detour: this.current.detour });
+    const goals = () => ({ ...this.current.goal, detour: this.current.detour, dig: this.current.dig });
     const options = {
       ...world,
       agents: 1,
