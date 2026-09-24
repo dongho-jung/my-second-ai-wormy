@@ -130,7 +130,8 @@ class WorkerPool:
             # match in parallel.
             own = dict(config, seed=int(config.get("seed", 1)) + index * 7919)
             if config.get("levelSequence") == "roundRobin":
-                per_worker = int(config.get("envs", 8))
+                # Distinct scenarios a worker plays: replicas repeat one of them.
+                per_worker = int(config.get("envs", 8)) // max(1, int(config.get("replicas", 1)))
                 own["levelOffset"] = int(config.get("levelOffset", 0)) + index * per_worker
                 own["levelStride"] = workers * per_worker
             process = subprocess.Popen(

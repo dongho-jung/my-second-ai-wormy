@@ -8,7 +8,10 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const python = fileURLToPath(new URL("../artifacts/.venv/bin/python", import.meta.url));
-const trainer = fileURLToPath(new URL("../train/ppo.py", import.meta.url));
+// `--algorithm genetic` evolves the weights instead of following a gradient.
+const genetic = process.argv.slice(2).some((one, at, all) =>
+  one === "--algorithm=genetic" || (one === "--algorithm" && all[at + 1] === "genetic"));
+const trainer = fileURLToPath(new URL(genetic ? "../train/evolve.py" : "../train/ppo.py", import.meta.url));
 
 if (!existsSync(python)) {
   console.error(

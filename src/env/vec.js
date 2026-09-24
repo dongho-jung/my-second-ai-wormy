@@ -224,6 +224,10 @@ export class VecWormEnv {
       seed = 1,
       stagger = false,
       opponents = 0,
+      // Worlds that replay the same scenario. World i plays scenario
+      // floor(i / replicas): the same seed and the same maps in the same order,
+      // so a population evaluated one member per replica meets the same tasks.
+      replicas = 1,
       ...options
     } = {},
   ) {
@@ -262,8 +266,12 @@ export class VecWormEnv {
     if (!["seed", "roundRobin"].includes(levelSequence)) {
       throw new Error(`levelSequence must be seed or roundRobin, got ${levelSequence}`);
     }
+    const copies = Math.max(1, Math.trunc(replicas));
+    if (envs % copies !== 0) {
+      throw new Error(`envs (${envs}) must be a whole number of replicas (${copies}) each`);
+    }
     const firstLevel = Math.trunc(levelOffset);
-    const stride = Math.max(1, Math.trunc(levelStride ?? envs));
+    const stride = Math.max(1, Math.trunc(levelStride ?? envs / copies));
     this.envs = Array.from(
       { length: envs },
       (_, index) => {
@@ -272,7 +280,7 @@ export class VecWormEnv {
         const level = (_engine, episodeSeed) => {
           let at = episodeSeed % this.levels.length;
           if (levelSequence === "roundRobin") {
-            const scheduled = firstLevel + index + episode++ * stride;
+            const scheduled = firstLevel + Math.floor(index / copies) + episode++ * stride;
             at = ((scheduled % this.levels.length) + this.levels.length) % this.levels.length;
           }
           if (environment) environment.levelIndex = at;
@@ -282,7 +290,7 @@ export class VecWormEnv {
           ...options,
           // Every world gets its own stream of episodes, so a row of them is a
           // row of different fights and not the same one N times.
-          seed: (seed + index * 0x85ebca6b) >>> 0,
+          seed: (seed + Math.floor(index / copies) * 0x85ebca6b) >>> 0,
           level,
           // The byte forms are what go on the wire; expanding them into planes
           // is the trainer's job, where it is free.

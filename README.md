@@ -266,6 +266,25 @@ in this mod is a grappling hook — it flies at 8 px a tick, holds at a fixed
 way to cover the same ground. Both are measured in
 `docs/movement-runs-2026-09-22.md`.
 
+### Evolving a movement policy instead
+
+```bash
+npm run train -- --algorithm genetic --resume artifacts/runs/<run>/best.pt \
+  --population 24 --parents 6 --sigma 0.002 --tasks 32
+```
+
+`--algorithm genetic` hands over to `train/evolve.py`: no gradients, a genetic
+algorithm over every weight of the network (truncation selection, elitism,
+Gaussian mutation). Each generation every member is scored on the same `--tasks`
+movement tasks, seconds per task with a failure at the full clock, because the
+worlds replay one scenario per member (`replicas` in `src/env/vec.js`); the
+elite is scored again with the rest rather than keeping an old lucky score. New
+tasks are drawn every generation. Every `--check-every` generations the elite
+takes the same paired exam as PPO and `best.pt` moves only when it beats the
+champion there, so the monitor, Watch and `npm run evaluate` treat an evolved
+policy like a trained one. `--experiment-id` and `--bootstrap-url` resume and
+seed the same way as the PPO trainer.
+
 ### Fine-tuning a movement policy for speed
 
 Once the success curriculum has reached its far radius, more of the same
