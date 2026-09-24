@@ -787,16 +787,40 @@ def main(argv=None):
     # many are playing it. The ladder's fade and the goal radius are both
     # measured in those decisions.
     worms = max(1, args.workers * args.envs * args.agents)
+    resumed_step = int(carried.get("step", 0)) if carried is not None else 0
     if carried is not None:
         # Carrying on: the ladder had faded and the goals had moved out this far
         # already. Without this a resumed run started both over from the top.
-        config["decisionsDone"] = int(carried.get("step", 0)) // worms
+        config["decisionsDone"] = resumed_step // worms
     if args.goal_progress_decay > 0:
-        config["goalProgressStartAt"] = config.get("decisionsDone", 0)
-        config["goalProgressFullAt"] = max(
-            1, int(args.total_steps * args.goal_progress_decay / worms)
-        )
+        full_at = max(1, int(args.total_steps * args.goal_progress_decay / worms))
+        start_at = config.get("decisionsDone", 0)
+        # A checkpoint says how much of the per-pixel reward it was last trained
+        # under, and the fade carries on from there. Starting it over at the top
+        # handed every restart, and every experiment seeded from a faded
+        # champion, ten times the shaping the policy had just learned without.
+        carried_scale = None if carried is None else carried.get("goalProgressScale")
+        if carried_scale is not None and args.goal_progress_floor < 1:
+            gone = (1.0 - float(carried_scale)) / (1.0 - args.goal_progress_floor)
+            start_at -= int(round(min(1.0, max(0.0, gone)) * full_at))
+        elif carried is not None:
+            print(
+                "the checkpoint does not record its per-pixel goal reward, so the fade "
+                "starts again at full weight; pass --goal-progress-reward to pin it",
+                flush=True,
+            )
+        config["goalProgressStartAt"] = max(0, start_at)
+        config["goalProgressFullAt"] = full_at
         config["goalProgressFloor"] = args.goal_progress_floor
+
+    def goal_progress_scale_now(steps):
+        """The per-pixel goal reward's share, by the environment's own arithmetic."""
+        full_at = config.get("goalProgressFullAt", 0)
+        if full_at <= 0:
+            return 1.0
+        decisions = config.get("decisionsDone", 0) + (steps - resumed_step) // worms
+        gone = min(1.0, max(0, decisions - config["goalProgressStartAt"]) / full_at)
+        return 1.0 - (1.0 - config["goalProgressFloor"]) * gone
     if args.shaping_decay > 0:
         config["shapingFullAt"] = int(args.total_steps * args.shaping_decay / worms)
     if isinstance(config.get("goalRadiusPx"), list) and config.get("goalRadiusMode", "steps") == "steps":
@@ -932,6 +956,12 @@ def main(argv=None):
         resumed_at = int(carried.get("step", 0))
         print(f"carrying on from {carried_from} at {resumed_at:,} steps", flush=True)
         print(f"resume | experiment {args.experiment_id} | sha256 {resumed_sha256} | lr {learning_rate:.1e}", flush=True)
+    if config.get("goalProgressFullAt"):
+        print(
+            f"goal progress | per-pixel reward at {goal_progress_scale_now(resumed_at):.2f} of its "
+            f"weight, fading to {config['goalProgressFloor']:.2f}",
+            flush=True,
+        )
 
     run = Run(
         label=args.label or f"{args.agents}-way self-play",
@@ -1220,6 +1250,7 @@ def main(argv=None):
                 score=best_score, reward=line.get("episodeReward"),
                 goalRadius=line.get("goalRadiusPx", latest.get("goalRadiusPx")),
                 goalPatience=line.get("goalPatience", latest.get("goalPatience")),
+                goalProgressScale=goal_progress_scale_now(total_steps),
                 benchmarkSeed=args.benchmark_seed, benchmarkSuite=result.fingerprint,
                 benchmarkReached=result.reached, benchmarkEpisodes=result.episodes,
                 benchmarkSuccess=result.success, benchmarkSeconds=result.seconds,
@@ -1822,17 +1853,20 @@ def main(argv=None):
                          score=best_score, reward=line.get("episodeReward"),
                          goalRadius=latest.get("goalRadiusPx"),
                          goalPatience=latest.get("goalPatience"),
+                         goalProgressScale=goal_progress_scale_now(total_steps),
                          **{score_field: best_score})
                     run.record(step=total_steps, **{best_name: best_score})
             if updates % args.save_every == 0:
                 save(policy, layout, shape_of, total_steps, run.path / "policy.pt",
                      goalRadius=latest.get("goalRadiusPx"),
                      goalPatience=latest.get("goalPatience"),
+                     goalProgressScale=goal_progress_scale_now(total_steps),
                      trainingState=training_state(), experimentId=args.experiment_id)
             if args.keep_every and updates % args.keep_every == 0:
                 save(policy, layout, shape_of, total_steps, run.path / f"policy-{total_steps}.pt",
                      goalRadius=latest.get("goalRadiusPx"),
                      goalPatience=latest.get("goalPatience"),
+                     goalProgressScale=goal_progress_scale_now(total_steps),
                      trainingState=training_state(), experimentId=args.experiment_id)
     except KeyboardInterrupt:
         run.note("stopped by hand")
@@ -1844,6 +1878,7 @@ def main(argv=None):
     save(policy, layout, shape_of, total_steps, run.path / "policy.pt",
          goalRadius=latest.get("goalRadiusPx"),
          goalPatience=latest.get("goalPatience"),
+         goalProgressScale=goal_progress_scale_now(total_steps),
          trainingState=training_state(), experimentId=args.experiment_id)
     if args.task == "movement" and args.test_seed is not None:
         selected = torch.load(run.path / "best.pt", map_location=device, weights_only=False)

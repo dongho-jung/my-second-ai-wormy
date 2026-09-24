@@ -276,7 +276,11 @@ npm run train -- \
 saved counter continues from the checkpoint's step. The speed bonus is paid
 only on arrival and uses direct pixels per decision, capped before its weight
 is applied. The old per-pixel shaping fades over the requested share of this
-speed phase, while the arrival and speed rewards stay. A fixed 450-decision
+speed phase, while the arrival and speed rewards stay. Every checkpoint records
+the share it was trained under, and a restart or a new experiment seeded from it
+carries on from that share instead of starting the fade again at full weight; a
+checkpoint from before that record starts over and says so, and
+`--goal-progress-reward` pins the weight outright. A fixed 450-decision
 deadline gives every A/B run the same 30-second limit. `--goal-patience-min`
 can still enable an adaptive training curriculum, while the fixed benchmark
 remains the checkpoint selector.
