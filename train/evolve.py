@@ -15,6 +15,16 @@ A task costs its seconds as a share of the clock when it is reached, and one
 plus the share of the distance still left at the closest point when it is not,
 so a population that reaches nothing yet is still ranked by who came nearest.
 
+A generation's handful of tasks ranks the population mostly by luck: with
+every member equally able to reach one task in twenty-five, the best of 128
+on 18 tasks still reaches two or three of them, and on the next generation's
+tasks it lands mid-pack. So the first ranking only shortlists. The best
+--parents and the elite that came back are scored again on --recheck-tasks
+fresh tasks, all of them on the same ones, and the elite, the order of the
+parents and the curriculum are decided on everything they played. The
+returning elite's place among the new generation (`eliteKeptBeats`) says how
+much of a ranking is real: about half is luck, near all of it is skill.
+
 From scratch the destinations start close and the clock short. When the
 elite reaches --promote-at of a generation's tasks the radius grows by a fifth,
 and it shrinks by a tenth below --demote-at, up to the full --goal-radius; the
@@ -93,7 +103,11 @@ def parse_args(argv=None):
     evolution.add_argument("--sigma", type=float, default=0.004,
                            help="standard deviation of the noise added to every weight of a child")
     evolution.add_argument("--tasks", type=int, default=16,
-                           help="tasks every member is scored on each generation (same tasks for all)")
+                           help="tasks every member is scored on each generation (same tasks for all), "
+                                "rounded up to whole rounds of --workers x --scenarios-per-worker")
+    evolution.add_argument("--recheck-tasks", type=int, default=48,
+                           help="further tasks the shortlist (the best --parents and the elite) is scored on "
+                                "before the elite is chosen; 0 chooses on the first tasks alone")
     evolution.add_argument("--promote-at", type=float, default=0.8)
     evolution.add_argument("--demote-at", type=float, default=0.4)
     evolution.add_argument("--generations", type=int, default=0, help="stop after this many; 0 runs on")
@@ -121,7 +135,23 @@ def parse_args(argv=None):
         parser.error("--population must be at least 2 and --parents between 1 and --population")
     if args.sigma <= 0 or args.tasks < 1 or args.check_every < 1:
         parser.error("--sigma, --tasks and --check-every must be positive")
+    if args.recheck_tasks < 0:
+        parser.error("--recheck-tasks cannot be negative")
     return args
+
+
+def played(tasks, workers, per_worker):
+    """Tasks a scoring actually plays and counts: whole rounds of every worker's scenarios."""
+    scenarios = workers * per_worker
+    return -(-tasks // scenarios) * scenarios
+
+
+def pooled(first, count, second, other):
+    """The mean over both sets of tasks, from each set's mean and size; NaN where neither had any."""
+    total = count + other
+    if not total:
+        return np.full(np.shape(first), np.nan)
+    return (np.nan_to_num(first) * count + np.nan_to_num(second) * other) / total
 
 
 def fresh_world(args):
@@ -187,7 +217,9 @@ def calibrate(template, world, shape_agents, workers, decisions=120, seed=7):
 
 
 def score_population(population, world, layout, *, seed, tasks, workers, per_worker, ticks, groups=2):
-    """Every member on the same tasks: cost, reached share, buried-task reached share and decisions.
+    """Every member on the same tasks: cost, reached share, buried-task reached share, buried tasks and decisions.
+
+    At least `tasks` of them: whole rounds of `workers * per_worker`, see `played()`.
 
     The population is split into `groups`, each with its own pool of workers
     on the same seed and settings, so they play the same scenarios. While one
@@ -292,10 +324,10 @@ def score_population(population, world, layout, *, seed, tasks, workers, per_wor
     finally:
         for state in states:
             state["pool"].close()
-    take = slice(0, tasks)
-    dig_tasks = digs[take]
-    dig_reached = reached[:, take][:, dig_tasks].mean(axis=1) if dig_tasks.any() else np.full(members, np.nan)
-    return cost[:, take].mean(axis=1), reached[:, take].mean(axis=1), dig_reached, int(dig_tasks.sum()), decisions
+    # Every task played counts: the last round is played whole whatever
+    # `tasks` asked for, so leaving part of it out would only add noise.
+    dig_reached = reached[:, digs].mean(axis=1) if digs.any() else np.full(members, np.nan)
+    return cost.mean(axis=1), reached.mean(axis=1), dig_reached, int(digs.sum()), decisions
 
 
 def main(argv=None):
@@ -356,11 +388,17 @@ def main(argv=None):
         population = Population(template, count=args.population)
         population.breed([0], elite=0, sigma=args.sigma, generator=generator)
     validation_seeds = [int(one) for one in str(args.validation_seeds).split(",") if one.strip()]
+    # The shortlist is small, so each worker plays several of its tasks at
+    # once and the recheck takes about two rounds of the clock.
+    recheck_per_worker = max(1, -(-args.recheck_tasks // (2 * args.workers)))
+    tasks = played(args.tasks, args.workers, args.scenarios_per_worker)
+    recheck_tasks = played(args.recheck_tasks, args.workers, recheck_per_worker) if args.recheck_tasks else 0
     parameters = sum(p.numel() for name, p in template.named_parameters() if not name.startswith("critic."))
     run = Run(label=args.label or "genetic", meta={
         "policy": f"genetic algorithm, {parameters/1e6:.2f}M weights a member",
         "task": "movement", "algorithm": "genetic", "population": args.population, "parents": args.parents,
-        "sigma": args.sigma, "tasksPerGeneration": args.tasks, "experimentId": args.experiment_id,
+        "sigma": args.sigma, "tasksPerGeneration": tasks, "recheckTasks": recheck_tasks,
+        "promoteAt": args.promote_at, "demoteAt": args.demote_at, "experimentId": args.experiment_id,
         "resumedFrom": str(start_from) if start_from else None, "resumedAt": step,
         "resumedSha256": file_digest(start_from) if start_from else None,
         "goalAbove": world.get("goalAboveShare"), "goalDetour": world.get("goalDetourShare"),
@@ -370,8 +408,9 @@ def main(argv=None):
     })
     print(f"run {run.id} -> {run.path}", flush=True)
     print(f"evolving {'from ' + str(start_from) if start_from else 'from scratch'}: population "
-          f"{args.population}, {args.parents} parents, sigma {args.sigma}, {args.tasks} shared tasks a "
-          f"generation, radius {radius:.0f} of {full_radius:.0f}px", flush=True)
+          f"{args.population}, {args.parents} parents, sigma {args.sigma}, {tasks} shared tasks a "
+          f"generation and {recheck_tasks} more for the shortlist, radius {radius:.0f} of {full_radius:.0f}px",
+          flush=True)
 
     guard = MovementGuard(0)
     if champion_from is not None:
@@ -431,43 +470,74 @@ def main(argv=None):
             generation += 1
             started = time.perf_counter()
             ticks = int(min(args.benchmark_ticks, 60 * (CLOCK_BASE_SECONDS + radius * CLOCK_SECONDS_PER_PX)))
+            scored_world = dict(world, goalRadiusPx=radius)
             fitness, success, dig_success, dig_tasks, decisions = score_population(
-                population, dict(world, goalRadiusPx=radius), layout,
+                population, scored_world, layout,
                 seed=args.seed * 1_000_003 + generation, tasks=args.tasks, workers=args.workers,
                 per_worker=args.scenarios_per_worker, ticks=ticks,
             )
             step += decisions
             ranked = np.argsort(fitness, kind="stable")
-            best = int(ranked[0])
+            # Slot 0 is last generation's elite, unchanged; from scratch the
+            # first generation has none.
+            returning = carried is not None or generation > 1
+            shortlist = [int(i) for i in ranked[: args.parents]]
+            if returning and 0 not in shortlist:
+                shortlist.append(0)
+            if recheck_tasks:
+                again, again_success, again_dig, again_dig_tasks, again_decisions = score_population(
+                    population.subset(shortlist), scored_world, layout,
+                    seed=args.seed * 1_000_003 + generation + (1 << 30), tasks=args.recheck_tasks,
+                    workers=args.workers, per_worker=recheck_per_worker, ticks=ticks,
+                )
+                step += again_decisions
+                cost = pooled(fitness[shortlist], tasks, again, recheck_tasks)
+                reach = pooled(success[shortlist], tasks, again_success, recheck_tasks)
+                dig_reach = pooled(dig_success[shortlist], dig_tasks, again_dig, again_dig_tasks)
+                all_dig_tasks = dig_tasks + again_dig_tasks
+            else:
+                cost, reach = fitness[shortlist], success[shortlist]
+                dig_reach, all_dig_tasks = dig_success[shortlist], dig_tasks
+            order = np.argsort(cost, kind="stable")
+            best = shortlist[int(order[0])]
+            parents = [shortlist[int(i)] for i in order[: args.parents]]
+            elite_cost, elite_success = float(cost[order[0]]), float(reach[order[0]])
+            elite_dig = float(dig_reach[order[0]]) if all_dig_tasks else None
+            # A tie is half a win, so an elite no better than its children reads 50%.
+            kept_beats = (float((fitness[1:] > fitness[0]).mean() + 0.5 * (fitness[1:] == fitness[0]).mean())
+                          if returning else None)
             line = {
                 "step": step, "generation": generation, "goalRadiusPx": radius, "clockSeconds": ticks / 60,
-                "fitnessBest": float(fitness[best]), "fitnessMedian": float(np.median(fitness)),
-                "fitnessEliteKept": float(fitness[0]),
-                "fitnessBestSuccess": float(success[best]), "fitnessMeanSuccess": float(success.mean()),
-                "fitnessBestDigSuccess": float(dig_success[best]) if dig_tasks else None,
-                "digTasks": dig_tasks, "eliteWasKept": int(best == 0),
+                "fitnessBest": float(fitness[ranked[0]]), "fitnessMedian": float(np.median(fitness)),
+                "fitnessEliteKept": float(fitness[0]) if returning else None,
+                "fitnessBestSuccess": float(success[ranked[0]]), "fitnessMeanSuccess": float(success.mean()),
+                "fitnessBestDigSuccess": float(dig_success[ranked[0]]) if dig_tasks else None,
+                "digTasks": dig_tasks, "eliteWasKept": int(best == 0) if returning else None,
+                "eliteCost": elite_cost, "eliteSuccess": elite_success, "eliteDigSuccess": elite_dig,
+                "eliteDigTasks": all_dig_tasks, "eliteKeptBeats": kept_beats,
             }
             print(f"generation {generation:5d} | {step:>13,} steps | radius {radius:6.0f}px clock {ticks/60:4.1f}s | "
-                  f"best {fitness[best]:.3f} ({success[best]:.0%} reached"
-                  + (f", buried {dig_success[best]:.0%} of {dig_tasks}" if dig_tasks else "")
-                  + f") | kept elite {fitness[0]:.3f} | median {np.median(fitness):.3f} "
-                  f"| mean reached {success.mean():.0%} | {time.perf_counter() - started:.0f}s", flush=True)
+                  f"elite {elite_cost:.3f} ({elite_success:.0%} of {tasks + recheck_tasks}"
+                  + (f", buried {elite_dig:.0%} of {all_dig_tasks}" if all_dig_tasks else "")
+                  + f"){' kept' if best == 0 and returning else ''} | first round best {fitness[ranked[0]]:.3f} "
+                  f"median {np.median(fitness):.3f} mean reached {success.mean():.0%}"
+                  + (f" | returning elite beat {kept_beats:.0%}" if kept_beats is not None else "")
+                  + f" | {time.perf_counter() - started:.0f}s", flush=True)
             elite_network = population.member(best)
             # Every --check-every generations, and straight away when this
             # run has no routes yet: Watch races the policy on them.
             if generation % args.check_every == 0 or not (run.path / "benchmark.json").exists():
                 check(line, elite_network)
-            # The curriculum moves on what the elite managed, among tasks all
-            # members shared.
-            if success[best] >= args.promote_at:
+            # The curriculum moves on what the elite managed over every task
+            # the shortlist shared.
+            if elite_success >= args.promote_at:
                 radius = min(full_radius, radius * 1.2)
-            elif success[best] < args.demote_at:
+            elif elite_success < args.demote_at:
                 radius = max(float(args.goal_radius_start), radius / 1.1)
             line["generationSeconds"] = time.perf_counter() - started
             run.record(**{key: value for key, value in line.items() if value is not None})
             save(run.path / "policy.pt", elite_network, layout, step, experimentId=args.experiment_id,
                  generation=generation, algorithm="genetic", goalRadius=radius)
-            parents = [int(i) for i in ranked[: args.parents]]
             population.breed(parents, elite=best, sigma=args.sigma, generator=generator)
     except KeyboardInterrupt:
         run.note("stopped by hand")

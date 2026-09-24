@@ -52,6 +52,19 @@ class EvolveTests(unittest.TestCase):
         self.assertEqual(reached[0], reached[2])
         self.assertTrue(((cost >= 0) & (cost <= 2)).all())
 
+    def test_scoring_counts_every_task_of_the_last_round(self):
+        self.assertEqual(evolve.played(16, 6, 1), 18)
+        self.assertEqual(evolve.played(48, 6, 4), 48)
+        self.assertEqual(evolve.played(1, 3, 2), 6)
+
+    def test_pooled_means_weigh_each_set_by_its_size_and_skip_empty_ones(self):
+        import numpy as np
+        pooled = evolve.pooled(np.array([1.0, 0.0]), 18, np.array([0.5, 0.25]), 54)
+        np.testing.assert_allclose(pooled, [(18 + 27) / 72, 13.5 / 72])
+        only_second = evolve.pooled(np.array([np.nan]), 0, np.array([0.5]), 4)
+        np.testing.assert_allclose(only_second, [0.5])
+        self.assertTrue(np.isnan(evolve.pooled(np.array([np.nan]), 0, np.array([np.nan]), 0)).all())
+
 
 if __name__ == "__main__":
     unittest.main()

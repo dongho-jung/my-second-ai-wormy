@@ -282,6 +282,16 @@ movement tasks, because the worlds replay one scenario per member (`replicas` in
 tasks are drawn every generation, and the elite is scored again with the rest
 rather than keeping an old lucky score.
 
+Those first tasks only shortlist. On 18 tasks the best of 128 equally poor
+networks still reaches two or three of them, and on the next tasks it lands
+mid-pack, so the best `--parents` and the returning elite are scored again on
+`--recheck-tasks` fresh tasks (48 by default), all on the same ones, and the
+elite, the parents' order and the curriculum are decided on everything they
+played. `eliteKeptBeats` in the metrics is the share of the new generation the
+returning elite beats: about half means the ranking is luck, near all of it
+means it is skill. `--tasks` is rounded up to whole rounds of `--workers` x
+`--scenarios-per-worker`, since the last round is played whole anyway.
+
 A reached task costs its seconds as a share of the clock; one not reached costs
 one plus the share of the distance still left at the closest point, so even a
 population that reaches nothing yet is ranked by who came nearest. From scratch

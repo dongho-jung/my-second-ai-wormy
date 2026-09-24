@@ -52,6 +52,19 @@ class PopulationTests(unittest.TestCase):
             moved = value[1] - before[name][chosen[1]]
             self.assertLess(abs(float(moved.std()) - 0.01), 0.005 if moved.numel() > 100 else 1.0)
 
+    def test_a_subset_is_those_members_in_that_order_and_leaves_the_rest_alone(self):
+        template = network(0)
+        population = Population(template, [network(seed).state_dict() for seed in (1, 2, 3, 4)])
+        before = {name: value.clone() for name, value in population.params.items()}
+        part = population.subset([3, 1])
+        self.assertEqual(part.size, 2)
+        for name, value in part.params.items():
+            self.assertTrue(torch.equal(value[0], before[name][3]))
+            self.assertTrue(torch.equal(value[1], before[name][1]))
+        part.breed([0], elite=0, sigma=0.5, generator=torch.Generator().manual_seed(0))
+        for name, value in population.params.items():
+            self.assertTrue(torch.equal(value, before[name]))
+
 
 if __name__ == "__main__":
     unittest.main()

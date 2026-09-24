@@ -52,6 +52,15 @@ class Population:
         network.eval()
         return network
 
+    def subset(self, indices: list[int]) -> "Population":
+        """These members alone, in this order, as a population of their own (a copy)."""
+        other = Population.__new__(Population)
+        other.template = self.template
+        other.names = self.names
+        chosen = torch.as_tensor(list(indices), dtype=torch.long)
+        other.params = {name: value[chosen].contiguous() for name, value in self.params.items()}
+        return other
+
     def breed(self, parents: list[int], elite: int, sigma: float, generator: torch.Generator):
         """Member 0 becomes the elite untouched; every other member a mutated random parent."""
         size = self.size
