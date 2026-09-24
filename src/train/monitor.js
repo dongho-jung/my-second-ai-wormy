@@ -10,6 +10,7 @@
 // which is what makes it safe to leave open.
 import { createServer } from "node:http";
 import { createViewer } from "./viewer.js";
+import { pinSeed } from "./seed.js";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -100,7 +101,12 @@ export async function createMonitorServer({
   viewerScript = WATCHER,
   // A path this is mounted under, such as "/ai-worm". No trailing slash.
   basePath = "",
+  seedId = process.env.WORMY_SEED_ID,
+  seedRun = process.env.WORMY_SEED_RUN,
 } = {}) {
+  if (Boolean(seedId) !== Boolean(seedRun)) throw new Error("Seed ID and source run are both required");
+  const seed = seedId ? await pinSeed(dir, seedId, seedRun) : null;
+  if (seed) console.log(`seed | ${seed.id} | sha256 ${seed.sha256}`);
   const base = basePath.replace(/\/+$/, "");
   const assets = new Map(
     await Promise.all(
@@ -256,6 +262,14 @@ export async function createMonitorServer({
       return json(405, { error: "Only GET, and POST to start or stop a viewer" });
     }
     try {
+      if (seed && url.pathname === `/seeds/${seed.id}.pt`) {
+        response.writeHead(200, {
+          "Content-Type": "application/octet-stream",
+          "Content-Length": seed.bytes.length,
+          "X-Checkpoint-SHA256": seed.sha256,
+        });
+        return response.end(seed.bytes);
+      }
       if (url.pathname === "/health") {
         const runs = await listRuns(dir);
         return json(200, {

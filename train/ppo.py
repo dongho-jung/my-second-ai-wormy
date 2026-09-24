@@ -30,6 +30,8 @@ from torch import nn
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import demos as demo_store
+from bootstrap import download_seed, experiment_checkpoint, file_digest
+from stability import MovementGuard, masked_kl, restore_training, score_suite, stop_for_kl
 from movement_benchmark import (
     DEFAULT_EPISODES as DEFAULT_BENCHMARK_EPISODES,
     DEFAULT_TICKS as DEFAULT_BENCHMARK_TICKS,
@@ -145,6 +147,8 @@ def parse_args(argv=None):
                             "nudged to hit this instead. 0 turns it off")
     learn.add_argument("--lr-range", type=str, default="1e-5,1e-3",
                        help="how far the rate may be nudged")
+    learn.add_argument("--kl-stop-factor", type=float, default=0,
+                       help="stop gradient passes above this multiple of target KL; 0 disables")
     learn.add_argument("--gamma", type=float, default=0.99)
     learn.add_argument("--lam", type=float, default=0.95)
     learn.add_argument("--clip", type=float, default=0.2)
@@ -343,6 +347,18 @@ def parse_args(argv=None):
     benchmark.add_argument("--benchmark-workers", type=int, default=2)
     benchmark.add_argument("--benchmark-envs", type=int, default=6,
                            help="isolated one-worm validation worlds per benchmark worker")
+    benchmark.add_argument("--validation-seeds", default="",
+                           help="additional fixed suites, comma separated; all gate best.pt")
+    benchmark.add_argument("--test-seed", type=int, default=None,
+                           help="independent beginning/end test, never used for selection or recovery")
+    benchmark.add_argument("--stability-patience", type=int, default=0,
+                           help="consecutive degraded validations before restoring best; 0 disables")
+    benchmark.add_argument("--regression-success-drop", type=float, default=0.05)
+    where.add_argument("--experiment-id", default=None)
+    where.add_argument("--bootstrap-url", default=None,
+                       help="immutable seed URL, used only if this experiment has no checkpoint")
+    where.add_argument("--bootstrap-host", default=None,
+                       help="public Host header for the configured seed service")
     where.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     where.add_argument("--label", default=None, help="a name for this run on the monitor page")
     where.add_argument("--resume", default=None,
@@ -633,7 +649,25 @@ def main(argv=None):
     # A checkpoint to carry on from is read once, here, because two things
     # below have to know about it before the workers start: how far the ladder
     # had faded, and how the convolution was padded.
-    carried_from = resolve_checkpoint(args.resume) if args.resume else None
+    validation_seeds = [int(s.strip()) for s in args.validation_seeds.split(",") if s.strip()]
+    all_seeds = [args.benchmark_seed, *validation_seeds]
+    if len(set(all_seeds)) != len(all_seeds) or args.test_seed in all_seeds:
+        raise SystemExit("validation and test seeds must be distinct")
+    if args.stability_patience < 0 or args.kl_stop_factor < 0 or not 0 <= args.regression_success_drop <= 1:
+        raise SystemExit("invalid stability settings")
+    if args.stability_patience and (args.task != "movement" or args.benchmark_every <= 0):
+        raise SystemExit("stability recovery requires the movement benchmark")
+    if (validation_seeds or args.test_seed is not None) and (args.task != "movement" or args.benchmark_every <= 0):
+        raise SystemExit("validation/test suites require the movement benchmark")
+    if args.bootstrap_url and (not args.experiment_id or not args.resume or not Path(args.resume).is_dir()):
+        raise SystemExit("bootstrap requires --experiment-id and a --resume runs directory")
+    if args.bootstrap_url:
+        carried_from = experiment_checkpoint(args.resume, args.experiment_id)
+        if carried_from is None:
+            carried_from = download_seed(args.bootstrap_url, args.resume, args.experiment_id, args.bootstrap_host)
+    else:
+        carried_from = resolve_checkpoint(args.resume) if args.resume else None
+    resumed_sha256 = file_digest(carried_from) if carried_from is not None else None
     carried = (
         torch.load(carried_from, map_location="cpu", weights_only=False)
         if carried_from is not None
@@ -892,9 +926,12 @@ def main(argv=None):
                 f"shows a {patch_shape[1]}x{patch_shape[0]} one"
             )
         policy.load_state_dict(carried["policy"])
+        if carried.get("trainingState") and carried.get("experimentId") == args.experiment_id:
+            learning_rate = restore_training(policy, optimiser, carried, lr_ceiling=lr_high, lr_floor=lr_low)
         resumed_from = str(carried_from)
         resumed_at = int(carried.get("step", 0))
         print(f"carrying on from {carried_from} at {resumed_at:,} steps", flush=True)
+        print(f"resume | experiment {args.experiment_id} | sha256 {resumed_sha256} | lr {learning_rate:.1e}", flush=True)
 
     run = Run(
         label=args.label or f"{args.agents}-way self-play",
@@ -928,6 +965,12 @@ def main(argv=None):
             "benchmarkEpisodes": args.benchmark_episodes if args.task == "movement" else 0,
             "benchmarkSeed": args.benchmark_seed if args.task == "movement" else None,
             "benchmarkTicks": args.benchmark_ticks if args.task == "movement" else 0,
+            "validationSeeds": validation_seeds,
+            "testSeed": args.test_seed,
+            "stabilityPatience": args.stability_patience,
+            "klStopFactor": args.kl_stop_factor,
+            "experimentId": args.experiment_id,
+            "resumedSha256": resumed_sha256,
             "ropeThrowCost": args.rope_throw_cost,
             "ropeCooldown": args.rope_cooldown,
             "ropeHold": args.rope_hold,
@@ -1096,7 +1139,6 @@ def main(argv=None):
     best_name = "bestBenchmarkSuccess" if args.task == "movement" else "bestCombat"
     best_score = None
     best_seconds = None
-    best_rank = None
     benchmark_suite = None
     smoothed = None
     # An episode is longer than a rollout, so most updates end with none of them
@@ -1114,81 +1156,110 @@ def main(argv=None):
             return 0.0
         return args.bc_coef * min(1.0, demo_batch["acting"] / max(1, args.bc_full_frames))
 
-    def check_movement(line):
-        """Score the current weights on the unchanged validation suite."""
-        nonlocal benchmark_suite, best_rank, best_score, best_seconds
-        checked_at = time.perf_counter()
+    guard = MovementGuard(args.stability_patience, args.regression_success_drop)
+    suite_fingerprints = {}
+    rollback_count = 0
+
+    def training_state():
+        return dict(optimizer=optimiser.state_dict(), learningRate=learning_rate)
+
+    def evaluate_suite(seed, role, network=policy):
         result = run_movement_benchmark(
-            policy,
-            benchmark_shape,
-            config,
-            levels=config["levelFiles"],
-            generated_maps=config["levelPool"],
-            episodes=args.benchmark_episodes,
-            workers=args.benchmark_workers,
-            envs=args.benchmark_envs,
-            seed=args.benchmark_seed,
-            episode_ticks=args.benchmark_ticks,
-            device=device,
+            network, benchmark_shape, config, levels=config["levelFiles"],
+            generated_maps=config["levelPool"], episodes=args.benchmark_episodes,
+            workers=args.benchmark_workers, envs=args.benchmark_envs, seed=seed,
+            episode_ticks=args.benchmark_ticks, device=device,
         )
-        if benchmark_suite is None:
-            benchmark_suite = result.fingerprint
-            (run.path / "benchmark.json").write_text(
-                json.dumps(
-                    {
-                        "schemaVersion": 1,
-                        "seed": args.benchmark_seed,
-                        "fingerprint": benchmark_suite,
-                        **result.manifest(),
-                    },
-                    indent=2,
-                ) + "\n"
-            )
-        elif result.fingerprint != benchmark_suite:
-            raise RuntimeError(
-                "the fixed movement benchmark changed within one run: "
-                f"{benchmark_suite} became {result.fingerprint}"
-            )
-        line.update(result.metrics())
-        line["benchmarkWallSeconds"] = time.perf_counter() - checked_at
+        name = "benchmark.json" if role == "benchmark" else f"{role}-{seed}.json"
+        if seed in suite_fingerprints and suite_fingerprints[seed] != result.fingerprint:
+            raise RuntimeError(f"fixed {role} suite changed: {seed}")
+        if seed not in suite_fingerprints:
+            suite_fingerprints[seed] = result.fingerprint
+            (run.path / name).write_text(json.dumps(dict(
+                schemaVersion=1, role=role, seed=seed, fingerprint=result.fingerprint,
+                **result.manifest(),
+            ), indent=2) + "\n")
         print(
-            f"benchmark | fixed scenarios {result.reached}/{result.episodes} "
-            f"({result.success:.1%}), {result.seconds:.1f}s including failures, "
-            f"{result.speed:.0f}px/s, {result.efficiency:.0%} direct | "
-            f"detours {result.detour_reached}/{len(result.detours)} "
-            f"({result.detour_success:.1%}) | "
-            f"{line['benchmarkWallSeconds']:.1f}s",
+            f"{role} | seed {seed} | fixed scenarios {result.reached}/{result.episodes} "
+            f"({result.success:.1%}), {result.seconds:.1f}s including failures | "
+            f"detours {result.detour_reached}/{len(result.detours)} ({result.detour_success:.1%})",
             flush=True,
         )
-        if best_rank is None or result.rank > best_rank:
-            best_rank = result.rank
-            best_score = result.success
-            best_seconds = result.seconds
+        return result
+
+    def check_test(stage, network=policy):
+        if args.test_seed is None:
+            return
+        result = evaluate_suite(args.test_seed, "test", network)
+        # Reporting only. Never passed to the guard or the checkpoint selector.
+        run.record(step=total_steps, testStage=stage, testSuccess=result.success,
+                   testSeconds=result.seconds, testSuite=result.fingerprint)
+
+    def check_movement(line):
+        nonlocal benchmark_suite, best_score, best_seconds, learning_rate, rollback_count, pinned
+        nonlocal pool, next_v, next_p, next_m, next_done, next_reset
+        checked_at = time.perf_counter()
+        results = [evaluate_suite(args.benchmark_seed, "benchmark")]
+        results.extend(evaluate_suite(seed, "validation") for seed in validation_seeds)
+        result = results[0]
+        benchmark_suite = result.fingerprint
+        line.update(result.metrics())
+        line["benchmarkWallSeconds"] = time.perf_counter() - checked_at
+        scores = [score_suite(one) for one in results]
+        line["validationSuites"] = scores
+        line["validationSuccess"] = sum(s["reached"] for s in scores) / sum(s["episodes"] for s in scores)
+        decision = guard.consider(scores)
+        line["stabilityDecision"] = decision
+        line["stabilityStrikes"] = guard.strikes
+        if decision == "promote":
+            best_score, best_seconds = result.success, result.seconds
             line["bestBenchmarkSuccess"] = best_score
             line["bestBenchmarkSeconds"] = best_seconds
             save(
-                policy,
-                layout,
-                shape_of,
-                total_steps,
-                run.path / "best.pt",
-                score=best_score,
-                reward=line.get("episodeReward"),
+                policy, layout, shape_of, total_steps, run.path / "best.pt",
+                score=best_score, reward=line.get("episodeReward"),
                 goalRadius=line.get("goalRadiusPx", latest.get("goalRadiusPx")),
                 goalPatience=line.get("goalPatience", latest.get("goalPatience")),
-                benchmarkSeed=args.benchmark_seed,
-                benchmarkSuite=result.fingerprint,
-                benchmarkReached=result.reached,
-                benchmarkEpisodes=result.episodes,
-                benchmarkSuccess=result.success,
-                benchmarkSeconds=result.seconds,
-                benchmarkSpeed=result.speed,
-                benchmarkEfficiency=result.efficiency,
+                benchmarkSeed=args.benchmark_seed, benchmarkSuite=result.fingerprint,
+                benchmarkReached=result.reached, benchmarkEpisodes=result.episodes,
+                benchmarkSuccess=result.success, benchmarkSeconds=result.seconds,
+                benchmarkSpeed=result.speed, benchmarkEfficiency=result.efficiency,
                 benchmarkDetourReached=result.detour_reached,
                 benchmarkDetourEpisodes=len(result.detours),
                 benchmarkDetourSuccess=result.detour_success,
                 benchmarkDetourSeconds=result.detour_seconds,
+                validationSuites=scores, trainingState=training_state(), experimentId=args.experiment_id,
             )
+        elif decision == "restore":
+            checkpoint = torch.load(run.path / "best.pt", map_location=device, weights_only=False)
+            learning_rate = restore_training(
+                policy, optimiser, checkpoint, lr_ceiling=learning_rate,
+                lr_floor=lr_low, backoff=0.5,
+            )
+            pinned = 0
+            rollback_count += 1
+            # Old weights' recurrent states and pending rollout are invalid.
+            # Fresh workers also remove the old policy's half-finished routes.
+            # Keep the sample counter monotonic and use a new environment seed.
+            pool.close()
+            fresh_config = dict(config, seed=args.seed + updates, decisionsDone=total_steps // worms)
+            pool = WorkerPool(args.workers, fresh_config)
+            vectors, patches, maps, _, _, _, _ = pool.observations()
+            next_v = torch.as_tensor(vectors, device=device)
+            next_p = torch.as_tensor(patches, device=device) if use_patch else None
+            next_m = torch.as_tensor(maps, device=device) if use_map else None
+            next_done = torch.zeros(slots, device=device)
+            next_reset = torch.ones(slots, device=device)
+            memory.zero_()
+            finished.clear()
+            latest.clear()
+            line["restoredFromStep"] = checkpoint["step"]
+            line["learningRate"] = learning_rate
+            run.note(f"restored champion at {checkpoint['step']} after validation regression",
+                     step=total_steps, rollbackCount=rollback_count, learningRate=learning_rate)
+        line["rollbackCount"] = rollback_count
+        print(f"stability | {decision} | strikes {guard.strikes}/{args.stability_patience} "
+              f"| restores {rollback_count} | lr {learning_rate:.1e}", flush=True)
 
     if demo_batch:
         print(
@@ -1264,6 +1335,7 @@ def main(argv=None):
                 ),
             }
             check_movement(initial)
+            check_test("initial")
             run.record(**initial)
             latest.update({key: value for key, value in initial.items() if key in SHOWN})
         while total_steps - resumed_at < args.total_steps:
@@ -1405,6 +1477,8 @@ def main(argv=None):
             # uniform by the bonus, and that is the question a movement run asks.
             running_heads = torch.zeros(heads_count, device=device)
             passes = 0
+            kl_stopped = False
+            max_kl = 0.0
             # Whole worms, replayed in order, rather than a shuffle of single
             # steps. A memory only means anything in sequence: scoring step 12
             # of a match from a blank mind is scoring a different decision than
@@ -1450,6 +1524,12 @@ def main(argv=None):
                         # 1 for the steps whose action the world actually applied.
                         take_valid = valid[first:stop, lanes].reshape(-1)
                         counted = take_valid.sum().clamp(min=1.0)
+                        chunk_kl = masked_kl(logp, take_logp, take_valid)
+                        measured_kl = float(chunk_kl.detach())
+                        max_kl = max(max_kl, measured_kl)
+                        if stop_for_kl(measured_kl, args.target_kl, args.kl_stop_factor):
+                            kl_stopped = True
+                            break
                         ratio = (logp - take_logp).exp()
                         advantage = advantages[first:stop, lanes].reshape(-1)
                         # Centred and scaled over the steps that count, so a spent
@@ -1519,13 +1599,17 @@ def main(argv=None):
                                     # what happened, entropy climbing while the
                                     # bonus for it was being annealed away. This is
                                     # the standard non-negative estimator instead.
-                                    ((ratio - 1) - (logp - take_logp)).mean(),
+                                    chunk_kl.detach(),
                                     bc_loss.detach(),
                                     bc_agree,
                                 )
                             )
                             running_heads += head_entropy.detach()
                         passes += 1
+                    if kl_stopped:
+                        break
+                if kl_stopped:
+                    break
 
             # The normaliser learns this rollout's vectors only now: the update
             # above scored the rollout with the statistics the rollout was
@@ -1542,12 +1626,12 @@ def main(argv=None):
                     past.pop(0)
             wall = time.perf_counter() - started
             rollout_seconds = time.perf_counter() - rollout_started
-            losses = dict(zip(names, (running_losses / passes).tolist()))
+            losses = dict(zip(names, (running_losses / max(1, passes)).tolist()))
             # Keep the size of an update honest. Too small and it learns almost
             # nothing per sample however many samples it sees; too large and it
             # falls off the cliff PPO's clipping exists to avoid.
             if args.target_kl > 0:
-                kl = abs(losses["kl"])
+                kl = max_kl if kl_stopped else abs(losses["kl"])
                 scale = 1.0
                 if kl < args.target_kl / 1.5:
                     scale = 1.02
@@ -1610,6 +1694,9 @@ def main(argv=None):
                 entropyCoef=entropy_coef,
                 clipFraction=losses["clipped"],
                 approxKL=losses["kl"],
+                maxKL=max_kl,
+                klStopped=kl_stopped,
+                gradientPasses=passes,
                 learningRate=learning_rate,
                 bcLoss=losses["bc"],
                 # How often it would press what the person pressed. This is the
@@ -1718,7 +1805,9 @@ def main(argv=None):
                 # cannot say why a run went flat: a policy that has stopped
                 # moving and one whose rate has run out of room read the same
                 # everywhere else on this line.
-                f"kl {line['approxKL']:.4f} lr {line['learningRate']:.1e}",
+                f"kl {line['approxKL']:.4f} max {line['maxKL']:.4f} "
+                f"stop {int(line['klStopped'])} passes {line['gradientPasses']} "
+                f"lr {line['learningRate']:.1e}",
                 flush=True,
             )
             if args.task != "movement" and score_field in line:
@@ -1738,11 +1827,13 @@ def main(argv=None):
             if updates % args.save_every == 0:
                 save(policy, layout, shape_of, total_steps, run.path / "policy.pt",
                      goalRadius=latest.get("goalRadiusPx"),
-                     goalPatience=latest.get("goalPatience"))
+                     goalPatience=latest.get("goalPatience"),
+                     trainingState=training_state(), experimentId=args.experiment_id)
             if args.keep_every and updates % args.keep_every == 0:
                 save(policy, layout, shape_of, total_steps, run.path / f"policy-{total_steps}.pt",
                      goalRadius=latest.get("goalRadiusPx"),
-                     goalPatience=latest.get("goalPatience"))
+                     goalPatience=latest.get("goalPatience"),
+                     trainingState=training_state(), experimentId=args.experiment_id)
     except KeyboardInterrupt:
         run.note("stopped by hand")
         run.close(status="stopped", steps=total_steps)
@@ -1752,7 +1843,12 @@ def main(argv=None):
 
     save(policy, layout, shape_of, total_steps, run.path / "policy.pt",
          goalRadius=latest.get("goalRadiusPx"),
-         goalPatience=latest.get("goalPatience"))
+         goalPatience=latest.get("goalPatience"),
+         trainingState=training_state(), experimentId=args.experiment_id)
+    if args.task == "movement" and args.test_seed is not None:
+        selected = torch.load(run.path / "best.pt", map_location=device, weights_only=False)
+        policy.load_state_dict(selected["policy"])
+        check_test("selected")
     run.note(f"finished: {total_steps:,} steps over {updates} updates")
     run.close(
         status="done",

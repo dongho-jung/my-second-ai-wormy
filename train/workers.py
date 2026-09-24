@@ -243,3 +243,6 @@ class WorkerPool:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
+                process.wait()
+            finally:
+                process.stdout.close()

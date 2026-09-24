@@ -192,10 +192,38 @@ takes a separate exam: 34 isolated one-worm scenarios with a fixed seed, map,
 spawn, destination and 30-second horizon. Actions are greedy, so repeated
 checks do not add sampling luck. The default suite visits each of the 17 room
 maps twice instead of leaving map coverage to a random draw. `best.pt` is
-selected lexicographically by fixed-scenario successes, obstructed-scenario
-successes, then failure-aware time, speed and path efficiency.
+selected by fixed-scenario and obstructed-scenario successes, then failure-aware
+time. A candidate must preserve both success counts in every validation suite.
 The full task list is written to `benchmark.json`; it is never used for
 gradients.
+
+For a controlled movement fine-tune, `--validation-seeds 1334462` adds another
+fixed suite of `--benchmark-episodes` tasks. `--test-seed 2334462` evaluates the
+starting and final selected models on a separate suite; its result never selects
+a checkpoint or triggers recovery. The manifests record their roles and seeds.
+Validation seeds must be distinct from each other and the test seed.
+
+`--kl-stop-factor 1.5` stops the remaining gradient passes when the valid-action
+KL exceeds 1.5 times `--target-kl`. The original adaptive learning-rate controller
+still runs. `--stability-patience 3` restores `best.pt` after three consecutive
+validations lose more than `--regression-success-drop` (default 0.05) of overall
+or detour success on any suite, or take over 1.2 times its failure-inclusive time.
+Recovery restores weights, input normalisation and Adam state, halves the learning
+rate within its configured bounds, closes the old workers and collects fresh
+rollouts with cleared recurrent memory. Sample counts remain monotonic. These
+two switches default to zero for a control run. Logs expose max KL, stopped
+updates, gradient-pass count, validation decisions and recoveries.
+
+Checkpoints include Adam state and learning rate. An `--experiment-id` labels a
+controlled run. With `--bootstrap-url` and `--resume artifacts/runs`, a trainer
+resumes only that experiment's saved run, or downloads the shared starting model
+if none exists. `--bootstrap-host` supplies the configured public Host when using
+an internal service address. A failed or corrupt download never starts training.
+To publish the common seed, set `WORMY_SEED_ID` and `WORMY_SEED_RUN` on the source
+monitor. It atomically pins that run's `best.pt` once under `runs/seeds/` and serves
+`/seeds/<id>.pt` beneath its existing base path and Host checks. Both trainers log
+the verified SHA-256. A new experiment requires a new ID; restarts preserve the
+pinned bytes and existing runs. No shared writable volume is required.
 
 The destinations start close. `--goal-radius 96-1600` draws them within 96 px
 of the worm at first — a walk or a jump — and moves the limit out to 1,600 px,
