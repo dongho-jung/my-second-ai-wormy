@@ -55,11 +55,16 @@ h2 {
   border-bottom: 1px solid var(--edge);
 }
 
+/* Wraps on a phone rather than pushing Watch off the right edge: the run
+   list gives way first, then the button moves under it. */
 .status {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .chip {
@@ -112,7 +117,16 @@ select {
   border-radius: 4px;
   padding: 2px 6px;
   font: inherit;
+  flex: 1 1 16ch;
+  min-width: 0;
   max-width: 44ch;
+}
+
+@media (pointer: coarse) {
+  button,
+  select {
+    min-height: 36px;
+  }
 }
 
 .alert {
@@ -324,6 +338,9 @@ select {
 .group > summary::-webkit-details-marker { display: none; }
 .group > summary:hover { color: var(--accent); }
 .group > .charts { padding: 0 14px 14px; }
+/* A closed group sits beside an open one at its own height, not stretched
+   into an empty box as tall as the other. */
+main.charts { align-items: start; }
 
 .history {
   width: 100%;

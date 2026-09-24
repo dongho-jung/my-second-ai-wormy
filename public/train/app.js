@@ -8,6 +8,24 @@
 const element = (id) => document.getElementById(id);
 
 const SERIES = {
+  eliteSuccess: { label: "tasks the elite reaches, every task the shortlist played", good: "up" },
+  eliteCost: { label: "the elite's cost a task (under 1 arrives; 1 + distance left when not)", good: "down" },
+  eliteDigSuccess: { label: "buried tasks the elite reaches", good: "up" },
+  eliteDigTasks: { label: "buried tasks the elite was scored on" },
+  eliteKeptBeats: { label: "share of the new generation the returning elite beats (50% is luck)", good: "up" },
+  eliteWasKept: { label: "the elite held its place (1) or was replaced (0)" },
+  fitnessBest: { label: "first-round best cost", good: "down" },
+  fitnessMedian: { label: "first-round median cost", good: "down" },
+  fitnessEliteKept: { label: "the returning elite's first-round cost", good: "down" },
+  fitnessBestSuccess: { label: "tasks the first-round best reaches", good: "up" },
+  fitnessMeanSuccess: { label: "tasks reached, whole population", good: "up" },
+  fitnessBestDigSuccess: { label: "buried tasks the first-round best reaches", good: "up" },
+  digTasks: { label: "buried tasks in the first round" },
+  generation: { label: "generation" },
+  clockSeconds: { label: "seconds a task allows" },
+  generationSeconds: { label: "seconds a generation took", good: "down" },
+  benchmarkDigReached: { label: "fixed buried scenarios reached", good: "up" },
+  benchmarkDigEpisodes: { label: "fixed buried scenarios tested" },
   episodeReward: { label: "reward per episode", good: "up" },
   killsVsPast: { label: "kills: learners minus their past selves", good: "up" },
   damageVsPast: { label: "damage dealt: learners minus their past selves", good: "up" },
@@ -217,8 +235,14 @@ const COMBAT_SERIES = new Set([
   "fromAimedShot",
 ]);
 
+const genetic = () => run?.meta?.algorithm === "genetic";
+
 const FIGURES = [
   ["step", "steps", (value) => count(value)],
+  ["generation", "generation", (value) => count(value), genetic],
+  ["goalRadiusPx", "radius", (value) => `${Math.round(value)} px`, genetic],
+  ["eliteSuccess", "elite arrives", (value) => `${Math.round(value * 100)}%`, genetic],
+  ["generationSeconds", "a generation", (value) => duration(value), genetic],
   ["stepsPerSecond", "steps/s", (value) => count(Math.round(value))],
   ["episodeReward", "reward", (value) => value.toFixed(2)],
   [
@@ -493,7 +517,89 @@ async function pollObserver() {
 }
 const CHANGED = 0.08;
 
+/** The mean of the last `span` values of one field, or undefined when it has none. */
+function recentMean(key, span = 10) {
+  const seen = [];
+  for (let index = records.length - 1; index >= 0 && seen.length < span; index--) {
+    const value = records[index]?.[key];
+    if (Number.isFinite(value)) seen.push(value);
+  }
+  return seen.length ? seen.reduce((sum, value) => sum + value, 0) / seen.length : undefined;
+}
+
 const HEADLINES = [
+  {
+    // The curriculum is the progress bar of an evolved run: destinations only
+    // move out once the elite reliably reaches the ones it has.
+    when: genetic,
+    title: "How far away are its destinations?",
+    good: "up",
+    track: "goalRadiusPx",
+    read: () => latest("goalRadiusPx"),
+    show: (value) => `${Math.round(value)} px`,
+    unit: () => {
+      const full = Number(run?.meta?.goalRadius);
+      const clock = latest("clockSeconds");
+      return `of ${Number.isFinite(full) ? Math.round(full) : "—"} px · `
+        + `${Number.isFinite(clock) ? clock.toFixed(1) : "—"}s to get there · generation ${count(latest("generation"))}`;
+    },
+    say: (move, value) => {
+      const promote = percent(Number(run?.meta?.promoteAt ?? 0.8));
+      const full = Number(run?.meta?.goalRadius);
+      if (Number.isFinite(full) && value >= full) return "At the full distance: the curriculum has nothing left to add.";
+      if (move && move.change > CHANGED) return `Moving out: the elite keeps reaching ${promote} of its tasks.`;
+      if (move && move.change < -CHANGED) return "Pulled back in: the elite fell below the bar further out.";
+      return `Destinations move further once the elite reaches ${promote} of its tasks.`;
+    },
+  },
+  {
+    when: genetic,
+    title: "How often does its best arrive?",
+    good: "up",
+    track: "eliteSuccess",
+    read: () => latest("eliteSuccess"),
+    show: percent,
+    unit: () => {
+      const tasks = Number(run?.meta?.tasksPerGeneration ?? 0) + Number(run?.meta?.recheckTasks ?? 0);
+      const dig = latest("eliteDigSuccess");
+      const digs = latest("eliteDigTasks");
+      return `of ${tasks || "—"} tasks at this distance`
+        + (Number.isFinite(dig) && digs ? ` · buried ${percent(dig)} of ${Math.round(digs)}` : "");
+    },
+    state: (value) => (value >= Number(run?.meta?.promoteAt ?? 0.8) ? "good" : "flat"),
+    say: (move, value) => {
+      const promote = Number(run?.meta?.promoteAt ?? 0.8);
+      if (value >= promote) return "Reliable here: the next generation gets destinations further away.";
+      if (!move) return `Needs ${percent(promote)} before the destinations move out.`;
+      if (move.change > CHANGED) return `Climbing towards the ${percent(promote)} that moves the destinations out.`;
+      if (move.change < -CHANGED) {
+        const out = movement("goalRadiusPx");
+        return out && out.change > CHANGED
+          ? "Fewer arrivals since the destinations moved further out."
+          : "Fewer arrivals than a while ago.";
+      }
+      return `Flat for now; ${percent(promote)} moves the destinations out.`;
+    },
+  },
+  {
+    // Whether the ranking means anything. Children are mutations of the best,
+    // so a real elite beats most of them on tasks nobody has seen; one chosen
+    // by luck lands in the middle.
+    when: genetic,
+    title: "Is selection finding anything?",
+    good: "up",
+    track: "eliteKeptBeats",
+    read: () => recentMean("eliteKeptBeats"),
+    show: percent,
+    unit: () => "of each new generation the returning elite still beats on fresh tasks, last 10",
+    state: (value) => (value >= 0.75 ? "good" : "flat"),
+    say: (move, value) =>
+      value >= 0.75
+        ? "The elite keeps beating most of its children on tasks it has not seen: the ranking is skill."
+        : value >= 0.6
+          ? "Ahead of most of its children on fresh tasks: partly skill, partly luck."
+          : "Mid-pack on fresh tasks: the ranking is still mostly luck. Expected while nothing works yet.",
+  },
   {
     when: () => run?.meta?.task === "movement",
     title: "How many identical test routes does it solve?",
@@ -691,6 +797,7 @@ const HEADLINES = [
     },
   },
   {
+    when: () => !genetic(),
     title: "Is anyone playing?",
     // The one thing the run's own numbers cannot say. A room sits empty for
     // hours, and "no new frames" looks exactly like "the watcher fell over".
@@ -993,6 +1100,22 @@ function chartFor(name) {
  */
 const GROUPS = [
   {
+    when: genetic,
+    title: "How is evolution going?",
+    open: true,
+    of: [
+      "eliteSuccess", "goalRadiusPx", "eliteKeptBeats", "eliteDigSuccess", "eliteCost", "fitnessMeanSuccess",
+    ],
+  },
+  {
+    when: genetic,
+    title: "Inside a generation",
+    of: [
+      "fitnessBest", "fitnessMedian", "fitnessEliteKept", "fitnessBestSuccess", "fitnessBestDigSuccess",
+      "eliteWasKept", "clockSeconds", "digTasks", "eliteDigTasks", "generation",
+    ],
+  },
+  {
     title: "Is it getting better?",
     open: true,
     of: [
@@ -1001,7 +1124,8 @@ const GROUPS = [
       "bestBenchmarkSuccess", "bestBenchmarkSeconds", "benchmarkReached", "benchmarkEpisodes",
       "benchmarkDistance",
       "benchmarkDetourSuccess", "benchmarkDetourSeconds",
-      "benchmarkDetourReached", "benchmarkDetourEpisodes",
+      "benchmarkDetourReached", "benchmarkDetourEpisodes", "benchmarkDigReached", "benchmarkDigEpisodes",
+      "validationSuccess", "championDeltaSeconds", "championDeltaSuccess",
       "goalsReached", "goalsMissed", "goalSuccess", "goalSeconds", "goalSpeed",
       "goalPathEfficiency", "bestGoals", "killsVsPast", "damageVsPast", "deathsVsPast",
       "selfDamageVsPast", "probeKills", "probeDeaths", "probeSuicides", "combat",
@@ -1033,7 +1157,10 @@ const GROUPS = [
   },
   {
     title: "How fast it is going",
-    of: ["stepsPerSecond", "ticksPerSecond", "envShare", "rolloutShare", "episodeSteps", "episodes", "probeSeconds", "benchmarkWallSeconds"],
+    of: [
+      "generationSeconds", "stepsPerSecond", "ticksPerSecond", "envShare", "rolloutShare", "episodeSteps", "episodes",
+      "probeSeconds", "benchmarkWallSeconds",
+    ],
   },
 ];
 
@@ -1064,7 +1191,8 @@ function renderCharts() {
   }
   const left = new Set(names);
   const boxes = [];
-  for (const { title, of, open } of GROUPS) {
+  for (const { title, of, open, when } of GROUPS) {
+    if (when && !when()) continue;
     const mine = of.filter((name) => left.has(name));
     for (const name of mine) left.delete(name);
     if (!mine.length) continue;
