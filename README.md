@@ -200,9 +200,13 @@ gradients.
 `best.pt` is chosen route by route. The champion's own result on every route is
 kept, and a candidate is compared with it on the same routes of every validation
 suite pooled: seconds per route, a route given up costing the whole 30. It
-replaces the champion only when the 95% bootstrap interval of that difference is
+replaces the champion when the 95% bootstrap interval of that difference is
 entirely faster, its success is not significantly lower and no suite is slower on
-its own. A total over 34 routes moved by two or three routes between checkpoints
+its own; or when the interval of routes solved is entirely higher, it is not
+significantly slower and no suite solves fewer. The second path is there because
+a policy that learns to finish a hard route typically finishes it late, and the
+first run under this selection solved 5-6 points more routes several times
+while its time stayed inside the noise. A total over 34 routes moved by two or three routes between checkpoints
 that were no different, as much as the improvements it was looking for, and a
 champion picked as the best of many such totals kept a score no equal policy
 could reach again. The log's `selection` line and the page's champion charts

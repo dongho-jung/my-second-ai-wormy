@@ -61,6 +61,7 @@ class Comparison:
     gained: int
     lost: int
     suite_deltas: tuple[float, ...]
+    suite_success_deltas: tuple[float, ...] = ()
 
     @property
     def faster(self):
@@ -73,6 +74,27 @@ class Comparison:
     @property
     def fewer(self):
         return self.success_interval[1] < 0
+
+    @property
+    def more(self):
+        return self.success_interval[0] > 0
+
+    @property
+    def better(self):
+        """Faster with nothing lost, or more routes solved without being slower.
+
+        Seconds count a failure at the full clock, so every route gained should
+        also show as time saved; but a gained route takes the rest of its clock
+        with it only partly, and in practice success moved clearly while time
+        stayed inside its interval. Either is a better policy. Neither path may
+        leave one suite worse on its own.
+        """
+        if self.faster and not self.fewer and max(self.suite_deltas) <= 0:
+            return True
+        return (
+            self.more and not self.slower
+            and min(self.suite_success_deltas or (0.0,)) >= 0
+        )
 
     def metrics(self, against="champion"):
         """Named for what it was compared with: `championDeltaSeconds`, `testStartDeltaSeconds`."""
@@ -125,19 +147,25 @@ def compare_routes(candidate, champion, resamples=5000, seed=0):
             float(np.mean(np.subtract(mine.seconds, theirs.seconds)))
             for mine, theirs in zip(candidate, champion)
         ),
+        suite_success_deltas=tuple(
+            float(np.mean(np.subtract(mine.reached, theirs.reached)))
+            for mine, theirs in zip(candidate, champion)
+        ),
     )
 
 
 class MovementGuard:
     """Keeps the champion's own routes and decides on paired evidence.
 
-    Seconds per route with failures at the full clock is the one measure: a
-    route given up costs the whole horizon, so it already outweighs any speed
-    on the rest. A candidate replaces the champion only when its interval lies
-    wholly on the faster side, its success is not significantly lower, and no
-    suite is slower on its own. `patience` consecutive checks significantly
-    slower mean recovery. A check that cannot tell the two apart resets the
-    count, as it should: the two may simply be the same policy.
+    A candidate replaces the champion when `Comparison.better` says so: the
+    interval of seconds per route (failures at the full clock) lies wholly on
+    the faster side, or that of routes solved wholly on the more side without
+    being slower. `patience` consecutive checks significantly slower mean
+    recovery. A check that cannot tell the two apart resets the count, as it
+    should: the two may simply be the same policy.
+
+    A restarted trainer can hand back the champion it was comparing against
+    (`adopt`), so a restart does not crown whatever policy it resumed with.
     """
 
     def __init__(self, patience=0, resamples=5000):
@@ -146,6 +174,10 @@ class MovementGuard:
         self.champion = None
         self.strikes = 0
         self.last = None
+
+    def adopt(self, routes):
+        """Start from a saved champion's routes instead of the first check's."""
+        self.champion = [Routes(one["suite"], tuple(one["reached"]), tuple(one["seconds"])) for one in routes]
 
     def consider(self, results, seed=0):
         routes = [Routes.of(one) for one in results]
@@ -157,7 +189,7 @@ class MovementGuard:
             return "promote"
         comparison = compare_routes(routes, self.champion, self.resamples, seed)
         self.last = comparison
-        if comparison.faster and not comparison.fewer and max(comparison.suite_deltas) <= 0:
+        if comparison.better:
             self.champion = routes
             self.strikes = 0
             return "promote"

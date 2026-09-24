@@ -181,3 +181,30 @@ class StabilityTests(unittest.TestCase):
                 for process in pool.processes:
                     self.assertIsNotNone(process.poll())
                     self.assertTrue(process.stdin.closed and process.stdout.closed)
+
+
+class SuccessPathTests(unittest.TestCase):
+    def test_more_routes_solved_promotes_unless_slower_or_one_suite_worse(self):
+        base = [8.0 + (i * 7) % 8 if i % 4 else 30.0 for i in range(80)]
+        # Every failed route of the first 40 solved in 29 s: many more routes, hardly any time saved.
+        solved = [29.0 if one >= 30 and i < 40 else one for i, one in enumerate(base)]
+        guard = MovementGuard(2)
+        guard.consider([Suite(base), Suite(base, "two")])
+        # Gains in one suite cannot hide a loss in the other.
+        worse = [one if i != 2 else 30.0 for i, one in enumerate(base)]
+        self.assertEqual(guard.consider([Suite(solved), Suite(worse, "two")]), "keep")
+        self.assertTrue(guard.last.more)
+        # Solving more while clearly slower everywhere else is not better.
+        slow = [one if one >= 29 else one + 3 for one in solved]
+        self.assertEqual(guard.consider([Suite(slow), Suite(shifted(base, 3), "two")]), "keep")
+        self.assertTrue(guard.last.slower)
+        self.assertEqual(guard.consider([Suite(solved), Suite(base, "two")]), "promote")
+        self.assertTrue(guard.last.more)
+
+    def test_a_restarted_guard_keeps_its_saved_champion(self):
+        guard = MovementGuard(2)
+        base = routes()
+        guard.adopt([Routes.of(Suite(base)).saved()])
+        self.assertEqual(guard.consider([Suite(base)]), "keep")
+        self.assertEqual(guard.consider([Suite(shifted(base, -1))]), "promote")
+
