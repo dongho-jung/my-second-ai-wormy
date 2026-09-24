@@ -31,7 +31,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import demos as demo_store
 from bootstrap import download_seed, experiment_checkpoint, file_digest
-from stability import MovementGuard, masked_kl, restore_training, score_suite, stop_for_kl
+from stability import (
+    MovementGuard,
+    Routes,
+    compare_routes,
+    masked_kl,
+    restore_training,
+    score_suite,
+    stop_for_kl,
+)
 from movement_benchmark import (
     DEFAULT_EPISODES as DEFAULT_BENCHMARK_EPISODES,
     DEFAULT_TICKS as DEFAULT_BENCHMARK_TICKS,
@@ -344,16 +352,19 @@ def parse_args(argv=None):
                            help="seed naming the fixed validation suite")
     benchmark.add_argument("--benchmark-ticks", type=int, default=DEFAULT_BENCHMARK_TICKS,
                            help="fixed ticks allowed for each validation scenario")
-    benchmark.add_argument("--benchmark-workers", type=int, default=2)
+    benchmark.add_argument("--benchmark-workers", type=int, default=2,
+                           help="worker processes for the fixed suites; training waits for them, so "
+                                "as many as the training workers costs nothing extra")
     benchmark.add_argument("--benchmark-envs", type=int, default=6,
                            help="isolated one-worm validation worlds per benchmark worker")
     benchmark.add_argument("--validation-seeds", default="",
-                           help="additional fixed suites, comma separated; all gate best.pt")
+                           help="additional fixed suites, comma separated; all are pooled, route by "
+                                "route against the champion, to gate best.pt")
     benchmark.add_argument("--test-seed", type=int, default=None,
                            help="independent beginning/end test, never used for selection or recovery")
     benchmark.add_argument("--stability-patience", type=int, default=0,
-                           help="consecutive degraded validations before restoring best; 0 disables")
-    benchmark.add_argument("--regression-success-drop", type=float, default=0.05)
+                           help="consecutive validations significantly slower than the champion "
+                                "on the same routes before restoring it; 0 disables")
     where.add_argument("--experiment-id", default=None)
     where.add_argument("--bootstrap-url", default=None,
                        help="immutable seed URL, used only if this experiment has no checkpoint")
@@ -677,7 +688,7 @@ def main(argv=None):
     all_seeds = [args.benchmark_seed, *validation_seeds]
     if len(set(all_seeds)) != len(all_seeds) or args.test_seed in all_seeds:
         raise SystemExit("validation and test seeds must be distinct")
-    if args.stability_patience < 0 or args.kl_stop_factor < 0 or not 0 <= args.regression_success_drop <= 1:
+    if args.stability_patience < 0 or args.kl_stop_factor < 0:
         raise SystemExit("invalid stability settings")
     if args.stability_patience and (args.task != "movement" or args.benchmark_every <= 0):
         raise SystemExit("stability recovery requires the movement benchmark")
@@ -1210,7 +1221,9 @@ def main(argv=None):
             return 0.0
         return args.bc_coef * min(1.0, demo_batch["acting"] / max(1, args.bc_full_frames))
 
-    guard = MovementGuard(args.stability_patience, args.regression_success_drop)
+    guard = MovementGuard(args.stability_patience)
+    # The test suite's routes from the starting policy, to pair the selected one with.
+    first_test = None
     suite_fingerprints = {}
     rollback_count = 0
 
@@ -1242,12 +1255,23 @@ def main(argv=None):
         return result
 
     def check_test(stage, network=policy):
+        nonlocal first_test
         if args.test_seed is None:
             return
         result = evaluate_suite(args.test_seed, "test", network)
         # Reporting only. Never passed to the guard or the checkpoint selector.
+        extra = {}
+        routes = Routes.of(result)
+        if first_test is None:
+            first_test = routes
+        else:
+            # The one comparison no selection has looked at: the selected policy
+            # and the one the run started from, on routes neither of them chose.
+            against = compare_routes([routes], [first_test])
+            extra = against.metrics("testStart")
+            print(f"test | {stage} against the start: {against.describe()}", flush=True)
         run.record(step=total_steps, testStage=stage, testSuccess=result.success,
-                   testSeconds=result.seconds, testSuite=result.fingerprint)
+                   testSeconds=result.seconds, testSuite=result.fingerprint, **extra)
 
     def check_movement(line):
         nonlocal benchmark_suite, best_score, best_seconds, learning_rate, rollback_count, pinned
@@ -1262,9 +1286,15 @@ def main(argv=None):
         scores = [score_suite(one) for one in results]
         line["validationSuites"] = scores
         line["validationSuccess"] = sum(s["reached"] for s in scores) / sum(s["episodes"] for s in scores)
-        decision = guard.consider(scores)
+        line["validationSeconds"] = (
+            sum(s["seconds"] * s["episodes"] for s in scores) / sum(s["episodes"] for s in scores)
+        )
+        decision = guard.consider(results, seed=updates)
         line["stabilityDecision"] = decision
         line["stabilityStrikes"] = guard.strikes
+        if guard.last is not None:
+            line.update(guard.last.metrics())
+            print(f"selection | against the champion: {guard.last.describe()}", flush=True)
         if decision == "promote":
             best_score, best_seconds = result.success, result.seconds
             line["bestBenchmarkSuccess"] = best_score
@@ -1283,7 +1313,8 @@ def main(argv=None):
                 benchmarkDetourEpisodes=len(result.detours),
                 benchmarkDetourSuccess=result.detour_success,
                 benchmarkDetourSeconds=result.detour_seconds,
-                validationSuites=scores, trainingState=training_state(), experimentId=args.experiment_id,
+                validationSuites=scores, validationRoutes=[one.saved() for one in guard.champion],
+                trainingState=training_state(), experimentId=args.experiment_id,
             )
         elif decision == "restore":
             checkpoint = torch.load(run.path / "best.pt", map_location=device, weights_only=False)

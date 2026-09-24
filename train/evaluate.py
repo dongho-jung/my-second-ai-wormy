@@ -35,6 +35,7 @@ from movement_benchmark import (
     run_movement_benchmark,
 )
 from ppo import stock_levels
+from stability import bootstrap
 from run import DEFAULT_RUNS
 from watch import newest_checkpoint
 from workers import REPO, WorkerPool
@@ -170,17 +171,6 @@ class Side:
                 )
             self.memory[pool][index] = kept
         return heads
-
-
-def bootstrap(values, resamples=5000, seed=0):
-    """A 95% interval on the mean, by resampling the episodes."""
-    arr = np.asarray(values, dtype=np.float64)
-    if len(arr) < 2:
-        return float("nan"), float("nan")
-    rng = np.random.default_rng(seed)
-    means = rng.choice(arr, size=(resamples, len(arr)), replace=True).mean(axis=1)
-    low, high = np.percentile(means, [2.5, 97.5])
-    return float(low), float(high)
 
 
 def main(argv=None):

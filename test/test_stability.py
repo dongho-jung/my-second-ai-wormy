@@ -9,7 +9,7 @@ from unittest.mock import patch
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "train"))
-from stability import MovementGuard, masked_kl, restore_training, stop_for_kl
+from stability import MovementGuard, Routes, compare_routes, masked_kl, restore_training, stop_for_kl
 from bootstrap import experiment_checkpoint
 from movement_benchmark import MovementBenchmarkResult, MovementScenarioResult
 from run import Run
@@ -17,36 +17,81 @@ import ppo
 from workers import WorkerPool
 
 
-def score(reached=30, detours=13, seconds=12, suite="one"):
-    return dict(suite=suite, reached=reached, episodes=34, detourReached=detours,
-                detourEpisodes=15, seconds=seconds)
+SUITES = {"one": 0, "two": 1000, "other": 5000}
+
+
+def Suite(seconds, suite="one"):
+    """A suite's routes and results. Which routes they are, not how they went, names the suite."""
+    return MovementBenchmarkResult(tuple(MovementScenarioResult(
+        seed=SUITES[suite] + i, map_index=i % 17, map_name=str(i % 17), start_x=0, start_y=0,
+        target_x=10, target_y=10, assigned_distance=14, detour=bool(i % 2),
+        reached=int(one < 30), seconds=float(one), speed=1, efficiency=1,
+    ) for i, one in enumerate(seconds)), 1800, 4)
+
+
+def routes(*changes, base=None, n=40):
+    """Forty routes of 8-15 seconds, a few of them given up at the 30-second clock."""
+    seconds = list(base or [8.0 + (i * 7) % 8 if i % 10 else 30.0 for i in range(n)])
+    for at, value in changes:
+        seconds[at] = value
+    return seconds
+
+
+def shifted(seconds, by):
+    return [one if one >= 30 else max(0.1, one + by) for one in seconds]
 
 
 class StabilityTests(unittest.TestCase):
-    def test_promotion_requires_reliability_in_every_suite(self):
+    def test_promotion_needs_the_same_routes_faster_and_no_suite_slower(self):
         guard = MovementGuard(2)
-        baseline = [score(), score(suite="two")]
-        self.assertEqual(guard.consider(baseline), "promote")
-        # A larger total cannot buy a regression in the other suite or detours.
-        self.assertEqual(guard.consider([score(34), score(29, suite="two")]), "keep")
-        self.assertEqual(guard.consider([score(31, 12), score(suite="two")]), "keep")
-        self.assertEqual(guard.consider([score(seconds=11), score(suite="two")]), "promote")
-
-    def test_only_consecutive_material_regressions_trigger_recovery(self):
-        guard = MovementGuard(2)
-        guard.consider([score()])
-        self.assertEqual(guard.consider([score(25)]), "keep")
-        self.assertEqual(guard.consider([score(29)]), "keep")
-        self.assertEqual(guard.strikes, 0)
-        self.assertEqual(guard.consider([score(25)]), "keep")
-        self.assertEqual(guard.consider([score(25)]), "restore")
-        self.assertEqual(guard.champion[0]["reached"], 30)
-        control = MovementGuard(0)
-        control.consider([score()])
-        for _ in range(5):
-            self.assertEqual(control.consider([score(20)]), "keep")
+        one, two = routes(), routes(base=routes()[::-1])
+        self.assertEqual(guard.consider([Suite(one), Suite(two, "two")]), "promote")
+        # Two or three routes either way is what an unchanged policy does between checks.
+        noise = [Suite(routes((3, 30.0), (10, 9.0)), "one"), Suite(shifted(two, 0.05), "two")]
+        self.assertEqual(guard.consider(noise), "keep")
+        self.assertIsNotNone(guard.last)
+        self.assertLessEqual(guard.last.seconds_interval[0], 0)
+        self.assertGreaterEqual(guard.last.seconds_interval[1], 0)
+        # Much faster on one suite cannot buy a slowdown on the other.
+        self.assertEqual(guard.consider([Suite(shifted(one, -3)), Suite(shifted(two, 0.5), "two")]), "keep")
+        faster = [Suite(shifted(one, -1)), Suite(shifted(two, -0.2), "two")]
+        self.assertEqual(guard.consider(faster), "promote")
+        self.assertEqual(guard.champion[0].seconds, tuple(shifted(one, -1)))
+        # The champion is now the faster one; its old self is slower than it.
+        self.assertEqual(guard.consider([Suite(one), Suite(two, "two")]), "keep")
+        self.assertEqual(guard.strikes, 1)
         with self.assertRaisesRegex(ValueError, "suites changed"):
-            guard.consider([score(suite="other")])
+            guard.consider([Suite(one, "other"), Suite(two, "two")])
+
+    def test_only_consecutive_significant_slowdowns_trigger_recovery(self):
+        guard = MovementGuard(2)
+        base = routes()
+        guard.consider([Suite(base)])
+        slower = [Suite(shifted(base, 2))]
+        self.assertEqual(guard.consider(slower), "keep")
+        self.assertEqual(guard.strikes, 1)
+        # A check that cannot tell them apart is not a strike, and ends the run of them.
+        self.assertEqual(guard.consider([Suite(routes((4, 30.0), (10, 12.0)))]), "keep")
+        self.assertEqual(guard.strikes, 0)
+        self.assertEqual(guard.consider(slower), "keep")
+        self.assertEqual(guard.consider(slower), "restore")
+        self.assertEqual(guard.champion[0].seconds, tuple(base))
+        control = MovementGuard(0)
+        control.consider([Suite(base)])
+        for _ in range(5):
+            self.assertEqual(control.consider([Suite(shifted(base, 5))]), "keep")
+
+    def test_routes_are_paired_one_by_one(self):
+        champion = [Routes("s", (1, 1, 0, 1), (10.0, 12.0, 30.0, 9.0))]
+        candidate = [Routes("s", (1, 0, 1, 1), (9.0, 30.0, 20.0, 9.0))]
+        comparison = compare_routes(candidate, champion, resamples=200)
+        self.assertEqual((comparison.gained, comparison.lost), (1, 1))
+        self.assertAlmostEqual(comparison.delta_seconds, (-1 + 18 - 10 + 0) / 4)
+        self.assertEqual(comparison.delta_success, 0)
+        self.assertEqual(comparison.metrics()["championRoutes"], 4)
+        self.assertIn("1 gained and 1 lost", comparison.describe())
+        with self.assertRaisesRegex(ValueError, "suites changed"):
+            compare_routes([Routes("t", (1,), (1.0,))], champion)
 
     def test_kl_ignores_unapplied_transitions_and_stops_before_next_step(self):
         kl = masked_kl(torch.tensor([0.5, float("nan")]), torch.zeros(2), torch.tensor([1., 0.]))
@@ -96,11 +141,12 @@ class StabilityTests(unittest.TestCase):
             count = calls.get(seed, 0)
             calls[seed] = count + 1
             reached = 0 if seed == 99 or count in (1, 2) else 2
-            seconds = .5 if count >= 3 else 1.
+            seconds = .5 if count >= 3 else .75
+            # A route given up costs the whole clock (60 ticks), as in the real suite.
             scenarios = tuple(MovementScenarioResult(
                 seed=seed + i, map_index=i, map_name=str(i), start_x=0, start_y=0,
                 target_x=10, target_y=10, assigned_distance=14, detour=True,
-                reached=int(i < reached), seconds=seconds, speed=1, efficiency=1,
+                reached=int(i < reached), seconds=seconds if i < reached else 1., speed=1, efficiency=1,
             ) for i in range(2))
             return MovementBenchmarkResult(scenarios, 60, 4)
         with tempfile.TemporaryDirectory() as folder:

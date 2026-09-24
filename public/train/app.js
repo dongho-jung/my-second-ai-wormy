@@ -37,6 +37,24 @@ const SERIES = {
   benchmarkDetourEpisodes: { label: "fixed detour scenarios tested" },
   benchmarkDetourSeconds: { label: "seconds per fixed detour scenario, failures included", good: "down" },
   benchmarkWallSeconds: { label: "seconds the fixed benchmark took" },
+  validationSuccess: { label: "validation success, every suite pooled", good: "up" },
+  validationSeconds: { label: "validation seconds per route, failures included", good: "down" },
+  championRoutes: { label: "routes compared with the champion" },
+  championSeconds: { label: "the champion's seconds per route, same suites", good: "down" },
+  championDeltaSeconds: { label: "seconds per route against the champion, same routes", good: "down" },
+  championDeltaSecondsLow: { label: "seconds against the champion: 95% interval, low end", good: "down" },
+  championDeltaSecondsHigh: { label: "seconds against the champion: 95% interval, high end", good: "down" },
+  championDeltaSuccess: { label: "success against the champion, same routes", good: "up" },
+  championDeltaSuccessLow: { label: "success against the champion: 95% interval, low end", good: "up" },
+  championDeltaSuccessHigh: { label: "success against the champion: 95% interval, high end", good: "up" },
+  championGained: { label: "routes solved that the champion does not", good: "up" },
+  championLost: { label: "routes the champion solves and this does not", good: "down" },
+  stabilityStrikes: { label: "checks in a row significantly slower than the champion", good: "down" },
+  rollbackCount: { label: "champion restores" },
+  testSuccess: { label: "test-suite success (start and end only)", good: "up" },
+  testSeconds: { label: "test-suite seconds per route (start and end only)", good: "down" },
+  testStartDeltaSeconds: { label: "test seconds per route, selected minus start", good: "down" },
+  testStartDeltaSuccess: { label: "test success, selected minus start", good: "up" },
   bestReward: { label: "best reward kept", good: "up" },
   goalsReached: { label: "destinations reached a match", good: "up" },
   goalsMissed: { label: "destinations given up on a match", good: "down" },
@@ -130,6 +148,24 @@ const MOVEMENT_SERIES = new Set([
   "benchmarkDetourEpisodes",
   "benchmarkDetourSeconds",
   "benchmarkWallSeconds",
+  "validationSuccess",
+  "validationSeconds",
+  "championRoutes",
+  "championSeconds",
+  "championDeltaSeconds",
+  "championDeltaSecondsLow",
+  "championDeltaSecondsHigh",
+  "championDeltaSuccess",
+  "championDeltaSuccessLow",
+  "championDeltaSuccessHigh",
+  "championGained",
+  "championLost",
+  "stabilityStrikes",
+  "rollbackCount",
+  "testSuccess",
+  "testSeconds",
+  "testStartDeltaSeconds",
+  "testStartDeltaSuccess",
   "bestGoals",
   "goalsReached",
   "goalsMissed",
@@ -482,6 +518,42 @@ const HEADLINES = [
       if (move.change > CHANGED) return "Solving more of the unchanged validation routes.";
       if (move.change < -CHANGED) return "Solving fewer of the unchanged validation routes.";
       return "Success on the unchanged validation routes is flat.";
+    },
+  },
+  {
+    // The figure that decides best.pt. The totals above move by a few routes
+    // between checks of policies that are no different; this pairs the policy
+    // with the champion route by route, and says when the gap is more than that.
+    when: () => run?.meta?.task === "movement",
+    title: "Is it faster than its champion on the same routes?",
+    good: "down",
+    track: "championDeltaSeconds",
+    read: () => latest("championDeltaSeconds"),
+    show: (value) => `${value >= 0 ? "+" : ""}${value.toFixed(2)}s`,
+    unit: () => {
+      const signed = (value) => (Number.isFinite(value) ? `${value >= 0 ? "+" : ""}${value.toFixed(2)}` : "—");
+      const whole = (value) => (Number.isFinite(value) ? Math.round(value) : "—");
+      return `a route, 95% [${signed(latest("championDeltaSecondsLow"))}, `
+        + `${signed(latest("championDeltaSecondsHigh"))}] over ${whole(latest("championRoutes"))} routes · `
+        + `${whole(latest("championGained"))} gained, ${whole(latest("championLost"))} lost`;
+    },
+    state: () => {
+      if (latest("championDeltaSecondsHigh") < 0) return "good";
+      if (latest("championDeltaSecondsLow") > 0) return "bad";
+      return "flat";
+    },
+    say: (move, value) => {
+      if (!Number.isFinite(value)) return "The starting policy is the champion until a check beats it.";
+      if (latest("stabilityDecision", false) === "promote") {
+        return "Faster than the champion by more than checks of the same policy differ; it took its place.";
+      }
+      if (latest("championDeltaSecondsHigh") < 0) {
+        return "Faster overall, but one suite was slower or fewer routes were solved, so the champion stays.";
+      }
+      if (latest("championDeltaSecondsLow") > 0) {
+        return "Slower than the champion by more than checks of the same policy differ.";
+      }
+      return "No difference from the champion that these routes can show.";
     },
   },
   {

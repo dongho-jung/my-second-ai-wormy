@@ -21,7 +21,11 @@ from workers import WorkerPool
 
 
 VALIDATION_SEED = 0x51A7E
-DEFAULT_EPISODES = 34
+# Ten routes on each of the 17 room maps. One run of 34 moved by two or three
+# routes between checkpoints that were no different, which is as large as the
+# improvements it was meant to find; paired over 170, a difference of about
+# half a second a route is visible.
+DEFAULT_EPISODES = 170
 DEFAULT_TICKS = 1800
 
 
@@ -152,8 +156,15 @@ def fixed_movement_world(
     envs: int,
     seed: int,
     episode_ticks: int,
+    end_on_arrival: bool = False,
 ) -> dict:
-    """Freeze curricula and make every episode exactly one isolated task."""
+    """Freeze curricula and make every episode exactly one isolated task.
+
+    `end_on_arrival` stops an episode as soon as its one goal is reached, which
+    is all an exam needs to know. The scenario list does not change with it:
+    each world's episodes are the same seeds on the same maps however long
+    they last.
+    """
     config = dict(world)
     radius = config.get("goalRadiusPx")
     if isinstance(radius, list):
@@ -171,7 +182,7 @@ def fixed_movement_world(
         episodeTicks=episode_ticks,
         goals="random",
         goalsPerEpisode=1,
-        endOnGoals=False,
+        endOnGoals=end_on_arrival,
         goalRadiusPx=radius,
         goalRadiusMode="steps",
         goalPatience=0,
@@ -210,8 +221,16 @@ def run_movement_benchmark(
     episode_ticks: int = DEFAULT_TICKS,
     device: torch.device | str = "cpu",
     baseline: str | None = None,
+    end_on_arrival: bool = True,
 ) -> MovementBenchmarkResult:
-    """Run one policy over a reproducible suite; actions are greedy and fixed."""
+    """Run one policy over a reproducible suite; actions are greedy and fixed.
+
+    Scenario `k * worlds + i` is world `i`'s `k`-th episode, whatever order the
+    episodes finish in. That is the order a suite used to be collected in when
+    every episode ran the whole clock, so a suite keeps its routes and its
+    fingerprint, and episodes can now end on arrival without a fast policy
+    being examined on different routes from a slow one.
+    """
     if episodes < 1 or workers < 1 or envs < 1 or episode_ticks < 1:
         raise ValueError("movement benchmark sizes and episode_ticks must be positive")
     if baseline not in (None, "still", "random"):
@@ -225,6 +244,7 @@ def run_movement_benchmark(
         envs=envs,
         seed=seed,
         episode_ticks=episode_ticks,
+        end_on_arrival=end_on_arrival,
     )
     pool = WorkerPool(workers, config)
     layout = pool.layout
@@ -273,7 +293,9 @@ def run_movement_benchmark(
     reset = torch.zeros(pool.slots, device=device)
     DONE_FIRST = layout.done_codes["first"]
     DONE_LAST = layout.done_codes["last"]
-    results: list[MovementScenarioResult] = []
+    DONE_TERMINAL = layout.done_codes.get("terminal", DONE_LAST)
+    found: dict[int, MovementScenarioResult] = {}
+    finished = np.zeros(pool.envs, dtype=np.int64)
 
     generated_count = generated_maps if levels else max(1, generated_maps)
 
@@ -284,7 +306,7 @@ def run_movement_benchmark(
         return Path(levels[stock]).name if 0 <= stock < len(levels) else f"map:{index}"
 
     try:
-        while len(results) < episodes:
+        while len(found) < episodes:
             restart = ((done == DONE_FIRST) | (reset > 0)).float()
             if baseline == "still":
                 heads = torch.zeros(
@@ -312,9 +334,11 @@ def run_movement_benchmark(
             done = torch.as_tensor(env_done.astype(np.float32), device=device)
             reset = torch.as_tensor(restarts.astype(np.float32), device=device)
 
-            for index in np.nonzero(env_done == DONE_LAST)[0]:
-                if len(results) >= episodes:
-                    break
+            for index in np.nonzero((env_done == DONE_LAST) | (env_done == DONE_TERMINAL))[0]:
+                order = int(finished[index]) * pool.envs + int(index)
+                finished[index] += 1
+                if order >= episodes:
+                    continue
                 row = stats[index]
                 assigned = int(round(float(row[fields["goalsAssigned"]])))
                 reached = int(round(float(row[fields["goalsReached"]])))
@@ -324,7 +348,7 @@ def run_movement_benchmark(
                         f"got assigned={assigned}, reached={reached}"
                     )
                 level_index = int(round(float(row[fields["mapIndex"]])))
-                results.append(
+                found[order] = (
                     MovementScenarioResult(
                         seed=(
                             int(round(float(row[fields["seedHigh"]]))) << 16
@@ -348,7 +372,8 @@ def run_movement_benchmark(
         if policy is not None and was_training:
             policy.train()
 
-    return MovementBenchmarkResult(tuple(results), layout.episode_ticks, layout.frameskip)
+    results = tuple(found[order] for order in range(episodes))
+    return MovementBenchmarkResult(results, layout.episode_ticks, layout.frameskip)
 
 
 def assert_same_scenarios(

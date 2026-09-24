@@ -188,31 +188,44 @@ Training stays varied so the policy cannot memorise a route, but one lucky
 sequence of short destinations cannot collect repeated arrival rewards.
 
 Before the first update and every 20 updates after that, the current policy
-takes a separate exam: 34 isolated one-worm scenarios with a fixed seed, map,
+takes a separate exam: 170 isolated one-worm scenarios with a fixed seed, map,
 spawn, destination and 30-second horizon. Actions are greedy, so repeated
 checks do not add sampling luck. The default suite visits each of the 17 room
-maps twice instead of leaving map coverage to a random draw. `best.pt` is
-selected by fixed-scenario and obstructed-scenario successes, then failure-aware
-time. A candidate must preserve both success counts in every validation suite.
+maps ten times instead of leaving map coverage to a random draw. Scenario
+`k * worlds + i` is always world `i`'s `k`-th episode, so an episode can end the
+moment its goal is reached and every policy is still examined on the same routes.
 The full task list is written to `benchmark.json`; it is never used for
 gradients.
+
+`best.pt` is chosen route by route. The champion's own result on every route is
+kept, and a candidate is compared with it on the same routes of every validation
+suite pooled: seconds per route, a route given up costing the whole 30. It
+replaces the champion only when the 95% bootstrap interval of that difference is
+entirely faster, its success is not significantly lower and no suite is slower on
+its own. A total over 34 routes moved by two or three routes between checkpoints
+that were no different, as much as the improvements it was looking for, and a
+champion picked as the best of many such totals kept a score no equal policy
+could reach again. The log's `selection` line and the page's champion charts
+give the difference and its interval at every check.
 
 For a controlled movement fine-tune, `--validation-seeds 1334462` adds another
 fixed suite of `--benchmark-episodes` tasks. `--test-seed 2334462` evaluates the
 starting and final selected models on a separate suite; its result never selects
-a checkpoint or triggers recovery. The manifests record their roles and seeds.
-Validation seeds must be distinct from each other and the test seed.
+a checkpoint or triggers recovery, and the final one is reported route by route
+against the start. The manifests record their roles and seeds. Validation seeds
+must be distinct from each other and the test seed. `--benchmark-workers 8`
+runs the suites as wide as the training workers; training waits for them anyway.
 
 `--kl-stop-factor 1.5` stops the remaining gradient passes when the valid-action
 KL exceeds 1.5 times `--target-kl`. The original adaptive learning-rate controller
 still runs. `--stability-patience 3` restores `best.pt` after three consecutive
-validations lose more than `--regression-success-drop` (default 0.05) of overall
-or detour success on any suite, or take over 1.2 times its failure-inclusive time.
-Recovery restores weights, input normalisation and Adam state, halves the learning
-rate within its configured bounds, closes the old workers and collects fresh
-rollouts with cleared recurrent memory. Sample counts remain monotonic. These
-two switches default to zero for a control run. Logs expose max KL, stopped
-updates, gradient-pass count, validation decisions and recoveries.
+validations are significantly slower than the champion on the same routes; a
+check that cannot tell them apart ends the run of strikes. Recovery restores
+weights, input normalisation and Adam state, halves the learning rate within its
+configured bounds, closes the old workers and collects fresh rollouts with cleared
+recurrent memory. Sample counts remain monotonic. These two switches default to
+zero for a control run. Logs expose max KL, stopped updates, gradient-pass count,
+validation decisions and recoveries.
 
 Checkpoints include Adam state and learning rate. An `--experiment-id` labels a
 controlled run. With `--bootstrap-url` and `--resume artifacts/runs`, a trainer
