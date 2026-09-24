@@ -10,52 +10,47 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "train"))
 import evolve
 import ppo
 from policy import WormPolicy
+from population import Population
 from workers import WorkerPool
 
 MAPS = [str(p) for p in sorted((ppo.REPO / "artifacts/maps/dsds-cs").glob("*.png"))][:17]
 
 
-def near_world():
-    """Goals 40-45 px away, so a random network arrives on some tasks and not others."""
+def near_world(**extra):
+    """Goals 40-60 px away, so a random network arrives on some tasks and not others."""
     return dict(agents=1, episodeTicks=3600, frameskip=4, patchScale=4, stagger=False, inputLatencyTicks=[6, 21],
                 levelPool=0, levelFiles=MAPS, levelOptions={"width": 504}, weaponPool="room", loadout="random",
                 observations=["vector", "patchBytes", "map"], goals="random", weights="movement",
-                lockWeapons=True, goalRadiusPx=45.0)
+                lockWeapons=True, goalRadiusPx=60.0, hookRays=12, **extra)
 
 
 class EvolveTests(unittest.TestCase):
-    def test_members_with_the_same_weights_meet_the_same_tasks(self):
-        torch.manual_seed(5)
-        world = near_world()
+    def test_members_with_the_same_weights_meet_the_same_tasks_in_either_half(self):
+        world = near_world(goalDigShare=0.5)
         probe = WorkerPool(1, dict(world, envs=1, seed=1))
         shape = probe.layout
         probe.close()
         layout = {"vectorSize": shape.vector_size, "headSizes": shape.head_sizes, "agents": 1,
                   "usePatch": True, "useMap": True}
-        networks = []
+        template = WormPolicy(shape.vector_size, shape.head_sizes, patch_shape=tuple(shape.patch_shape[1:]),
+                              use_map=True, map_side=shape.map_shape[1], weapon_ids_at=shape.weapon_ids_at,
+                              weapon_ids_count=shape.weapon_ids_count, weapon_count=shape.weapon_count)
+        states = []
         for seed in (1, 2):
             torch.manual_seed(seed)
-            networks.append(WormPolicy(shape.vector_size, shape.head_sizes, patch_shape=tuple(shape.patch_shape[1:]),
-                                       use_map=True, map_side=shape.map_shape[1]))
-        members = [networks[0], copy.deepcopy(networks[0]), networks[1]]
-        for one in members:
-            one.eval()
-        seconds, reached, decisions = evolve.score_population(
-            members, world, layout, seed=11, tasks=6, workers=1, per_worker=3, episode_ticks=300, device="cpu")
-        self.assertEqual(seconds.shape, (3,))
+            states.append(WormPolicy(shape.vector_size, shape.head_sizes, patch_shape=tuple(shape.patch_shape[1:]),
+                                     use_map=True, map_side=shape.map_shape[1], weapon_ids_at=shape.weapon_ids_at,
+                                     weapon_ids_count=shape.weapon_ids_count,
+                                     weapon_count=shape.weapon_count).state_dict())
+        # Members 0 and 2 share weights and land in different halves (0 | 1, 2).
+        population = Population(template, [states[0], states[1], copy.deepcopy(states[0])])
+        cost, reached, dig_reached, dig_tasks, decisions = evolve.score_population(
+            population, world, layout, seed=11, tasks=6, workers=1, per_worker=3, ticks=300, groups=2)
+        self.assertEqual(cost.shape, (3,))
         self.assertGreater(decisions, 0)
-        # Identical weights on identical tasks: identical score, to the last digit.
-        self.assertEqual(seconds[0], seconds[1])
-        self.assertEqual(reached[0], reached[1])
-
-    def test_a_child_differs_from_its_parent_by_the_noise_it_was_given(self):
-        parent = WormPolicy(9, [3, 3], use_patch=False, use_map=False)
-        child = copy.deepcopy(parent)
-        evolve.Genome(parent).mutate(parent, child, 0.01, torch.Generator().manual_seed(0))
-        moved = torch.cat([(c - p).flatten() for c, p in zip(child.parameters(), parent.parameters())])
-        self.assertAlmostEqual(float(moved.std()), 0.01, delta=0.002)
-        for mine, theirs in zip(child.buffers(), parent.buffers()):
-            self.assertTrue(torch.equal(mine, theirs))
+        self.assertEqual(cost[0], cost[2])
+        self.assertEqual(reached[0], reached[2])
+        self.assertTrue(((cost >= 0) & (cost <= 2)).all())
 
 
 if __name__ == "__main__":

@@ -269,21 +269,40 @@ way to cover the same ground. Both are measured in
 ### Evolving a movement policy instead
 
 ```bash
-npm run train -- --algorithm genetic --resume artifacts/runs/<run>/best.pt \
-  --population 24 --parents 6 --sigma 0.002 --tasks 32
+npm run train -- --algorithm genetic                                   # from scratch
+npm run train -- --algorithm genetic --resume artifacts/runs/<run>/best.pt
 ```
 
 `--algorithm genetic` hands over to `train/evolve.py`: no gradients, a genetic
 algorithm over every weight of the network (truncation selection, elitism,
 Gaussian mutation). Each generation every member is scored on the same `--tasks`
-movement tasks, seconds per task with a failure at the full clock, because the
-worlds replay one scenario per member (`replicas` in `src/env/vec.js`); the
-elite is scored again with the rest rather than keeping an old lucky score. New
-tasks are drawn every generation. Every `--check-every` generations the elite
-takes the same paired exam as PPO and `best.pt` moves only when it beats the
-champion there, so the monitor, Watch and `npm run evaluate` treat an evolved
-policy like a trained one. `--experiment-id` and `--bootstrap-url` resume and
-seed the same way as the PPO trainer.
+movement tasks, because the worlds replay one scenario per member (`replicas` in
+`src/env/vec.js`), and the whole population decides in one batched pass
+(`train/population.py`) while two pools of worlds take turns simulating. New
+tasks are drawn every generation, and the elite is scored again with the rest
+rather than keeping an old lucky score.
+
+A reached task costs its seconds as a share of the clock; one not reached costs
+one plus the share of the distance still left at the closest point, so even a
+population that reaches nothing yet is ranked by who came nearest. From scratch
+the destinations start 96 px away with a short clock; the radius grows by a
+fifth whenever the elite reaches `--promote-at` of the generation's tasks and
+shrinks below `--demote-at`, up to `--goal-radius`, and the clock grows with it.
+The tasks mix every way of getting somewhere: destinations a jump does not reach
+(`--goal-above`, the rope), ground across the straight line (`--goal-detour`)
+and destinations buried in dirt (`--goal-dig`). A buried goal has every open
+pixel within 44 px packed with dirt when it is handed out, so the only way in is
+the dig key; the goals above are all somewhere a worm can stand, and on the
+room's maps nearly every one of them is reachable without digging, so without
+these nothing ever asks for the dig key. From scratch the vector also gets
+`--hook-rays` directions saying where a rope would hook, all the way round
+rather than only along the aim.
+
+Every `--check-every` generations the elite takes the same paired exam as PPO at
+the full radius, buried goals included, and `best.pt` moves only when it beats
+the champion there, so the monitor, Watch and `npm run evaluate` treat an
+evolved policy like a trained one. `--experiment-id` resumes the same way as the
+PPO trainer: the latest elite and the kept champion.
 
 ### Fine-tuning a movement policy for speed
 

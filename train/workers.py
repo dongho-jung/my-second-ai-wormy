@@ -224,6 +224,15 @@ class WorkerPool:
 
     def step(self, heads: np.ndarray):
         """`heads` is (slots, head_count) of uint8 choices."""
+        self.send(heads)
+        self.receive()
+
+    def send(self, heads: np.ndarray):
+        """Hand the workers their actions and return while they simulate.
+
+        With `receive` this lets a caller do something else in the meantime,
+        such as deciding for another pool; `step` is the two back to back.
+        """
         flat = np.ascontiguousarray(heads, dtype=np.uint8).reshape(-1)
         per_worker = self.layout.action_bytes
         size = struct.pack("<I", per_worker)
@@ -231,6 +240,9 @@ class WorkerPool:
             block = flat[index * per_worker : (index + 1) * per_worker].tobytes()
             process.stdin.write(size + block)
             process.stdin.flush()
+
+    def receive(self):
+        """Wait for the frames the last `send` asked for."""
         self._collect()
 
     def close(self):
