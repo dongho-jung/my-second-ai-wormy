@@ -42,32 +42,46 @@ def expand_map(view: torch.Tensor, side: int) -> torch.Tensor:
     return (view.to(torch.float32) / 255.0).reshape(view.shape[0], MAP_CHANNELS, side, side)
 
 
-def expand_patch(patch: torch.Tensor, shape) -> torch.Tensor:
-    """Bytes from the environment into the eight planes the convolution reads.
+def _patch_planes(device) -> torch.Tensor:
+    """What every possible byte of the patch expands to: one row of eight planes.
 
-    The patch is the worm's whole 426x240 window now, so this runs on 25,773
-    cells rather than 1,024 and the one-hot is the largest tensor in an update.
-    Written into one allocation with `scatter_` instead of `one_hot` + `permute`
-    + `reshape`, which would build and then copy the same thing twice.
+    Two bits of kind, four kinds of ground, every code used; then a shot, a foe,
+    itself and the goal, one bit each.
     """
-    rows, columns = shape
-    batch = patch.shape[0]
-    # Two bits, four kinds of ground, every code used.
-    kind = (patch & PATCH_KIND).long()
-    planes = torch.zeros(
-        batch, TERRAIN_CHANNELS, rows * columns, dtype=torch.float32, device=patch.device
-    )
-    planes.scatter_(1, kind.unsqueeze(1), 1.0)
-    marks = torch.stack(
+    codes = torch.arange(256, device=device)
+    kind = codes & PATCH_KIND
+    return torch.stack(
         [
-            (patch & PATCH_PROJECTILE) > 0,
-            (patch & PATCH_FOE) > 0,
-            (patch & PATCH_SELF) > 0,
-            (patch & PATCH_GOAL) > 0,
+            *(kind == value for value in range(TERRAIN_CHANNELS)),
+            (codes & PATCH_PROJECTILE) > 0,
+            (codes & PATCH_FOE) > 0,
+            (codes & PATCH_SELF) > 0,
+            (codes & PATCH_GOAL) > 0,
         ],
         dim=1,
     ).to(torch.float32)
-    return torch.cat((planes, marks), dim=1).view(batch, PATCH_CHANNELS, rows, columns)
+
+
+_PLANES = {}
+
+
+def expand_patch(patch: torch.Tensor, shape) -> torch.Tensor:
+    """Bytes from the environment into the eight planes the convolution reads.
+
+    The patch is the worm's whole 426x240 window, so the planes are the largest
+    tensor in an update. One lookup writes them with the planes innermost and
+    the result is that array seen as `[batch, planes, rows, columns]`: the same
+    values, in the channels-last layout the CPU convolution is fastest on.
+    Measured on one 72-worm, 32-step update chunk, expanding and running the
+    tower forward and back took 0.74-0.85 s this way against 1.46-1.62 s with
+    the planes written one after another.
+    """
+    rows, columns = shape
+    table = _PLANES.get(patch.device)
+    if table is None:
+        table = _PLANES[patch.device] = _patch_planes(patch.device)
+    planes = table[patch.long()]
+    return planes.view(patch.shape[0], rows, columns, PATCH_CHANNELS).permute(0, 3, 1, 2)
 
 
 def policy_from_shape(shape: dict) -> "WormPolicy":
@@ -312,6 +326,22 @@ class WormPolicy(nn.Module):
         usual scalar.
         """
         logits, value, kept = self(vectors, patches, maps, carried, restart)
+        heads, log_prob, entropy = self._choose(logits, heads, want_entropy)
+        return heads, log_prob, entropy, value, kept
+
+    def score(self, kept, heads):
+        """Log-probability, per-head entropy and value of actions already taken.
+
+        `kept` is a stack of memory states that `features` and `remember` have
+        already produced, so an update can run the convolutions over a whole
+        chunk of the rollout at once and step only the memory in order.
+        """
+        logits = torch.split(self.actor(kept), self.head_sizes, dim=1)
+        _, log_prob, entropy = self._choose(logits, heads, True)
+        return log_prob, entropy, self.critic(kept).squeeze(-1)
+
+    @staticmethod
+    def _choose(logits, heads, want_entropy):
         distributions = [Categorical(logits=head) for head in logits]
         if heads is None:
             heads = torch.stack([one.sample() for one in distributions], dim=1)
@@ -324,4 +354,4 @@ class WormPolicy(nn.Module):
             if want_entropy
             else None
         )
-        return heads, log_prob, entropy, value, kept
+        return heads, log_prob, entropy

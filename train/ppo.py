@@ -586,6 +586,30 @@ def probe_against_still(policy, config, args, device):
     return {f"probe{name[0].upper()}{name[1:]}": float(np.mean(values)) for name, values in totals.items()}
 
 
+def replay_chunk(policy, obs_v, obs_p, obs_m, acts, carried, restarts, first, stop, lanes):
+    """Score steps `first:stop` of the rollout for some worms, as they lived them.
+
+    Only the memory has an order. The convolutions and the dense layers under
+    it see one moment at a time, so they take the whole chunk as one batch —
+    one call instead of one per step, which on a CPU was most of an update —
+    and the memory then steps through it from the state the rollout itself
+    had at the chunk's first step. Returns log-probabilities, per-head
+    entropies and values, flattened step by step like `logps[first:stop, lanes]`.
+    """
+    steps = stop - first
+    width = len(lanes)
+    flat = lambda observed: (
+        None if observed is None else observed[first:stop, lanes].reshape(steps * width, -1)
+    )
+    seen = policy.features(flat(obs_v), flat(obs_p), flat(obs_m)).view(steps, width, -1)
+    kept = carried[first][lanes]
+    memories = []
+    for offset in range(steps):
+        kept = policy.remember(seen[offset], kept, restarts[first + offset, lanes])
+        memories.append(kept)
+    return policy.score(torch.cat(memories), acts[first:stop, lanes].reshape(steps * width, -1))
+
+
 def pick_device(choice: str) -> torch.device:
     if choice != "auto":
         return torch.device(choice)
@@ -1524,31 +1548,18 @@ def main(argv=None):
             # at its first step, so the memory is never scored from a blank mind
             # in the middle of a match.
             chunks = [(at, min(at + span, args.steps)) for at in range(0, args.steps, span)]
+            restarts = ((dones == DONE_FIRST) | (resets > 0)).to(memory.dtype)
             for _ in range(args.epochs):
                 order = lane_pool[torch.randperm(len(lane_pool), device=device)]
                 for start in range(0, len(lane_pool), lanes_per_batch):
                     lanes = order[start : start + lanes_per_batch]
                     for first, stop in chunks:
-                        kept = carried[first][lanes]
-                        logp_steps, entropy_steps, value_steps = [], [], []
-                        for step in range(first, stop):
-                            _, lp, ent, val, kept = policy.act(
-                                obs_v[step][lanes],
-                                obs_p[step][lanes] if use_patch else None,
-                                obs_m[step][lanes] if use_map else None,
-                                acts[step][lanes],
-                                carried=kept,
-                                restart=(
-                                    (dones[step][lanes] == DONE_FIRST) | (resets[step][lanes] > 0)
-                                ).to(kept.dtype),
-                            )
-                            logp_steps.append(lp)
-                            entropy_steps.append(ent)
-                            value_steps.append(val)
-                        logp = torch.cat(logp_steps)
-                        # [steps x lanes, heads]: one column per head.
-                        entropy = torch.cat(entropy_steps)
-                        value = torch.cat(value_steps)
+                        # entropy is [steps x lanes, heads]: one column per head.
+                        logp, entropy, value = replay_chunk(
+                            policy, obs_v, obs_p if use_patch else None,
+                            obs_m if use_map else None, acts, carried, restarts,
+                            first, stop, lanes,
+                        )
                         # Flattened the same way the steps were concatenated.
                         take_logp = logps[first:stop, lanes].reshape(-1)
                         take_ret = returns[first:stop, lanes].reshape(-1)
