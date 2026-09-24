@@ -379,6 +379,12 @@ def main(argv=None):
         if champion.get("experimentId") == args.experiment_id and champion.get("validationRoutes"):
             guard.adopt(champion["validationRoutes"])
             (run.path / "best.pt").write_bytes(Path(champion_from).read_bytes())
+            # The routes it was examined on come along, so Watch can race it
+            # before this process has examined anything.
+            source = Path(champion_from).parent
+            for suite in [source / "benchmark.json", *sorted(source.glob("validation-*.json"))]:
+                if suite.is_file():
+                    (run.path / suite.name).write_bytes(suite.read_bytes())
             print(f"champion | kept from {champion_from} at {champion.get('step', 0):,} steps", flush=True)
 
     def exam(seed, role, network):
@@ -447,7 +453,9 @@ def main(argv=None):
                   + f") | kept elite {fitness[0]:.3f} | median {np.median(fitness):.3f} "
                   f"| mean reached {success.mean():.0%} | {time.perf_counter() - started:.0f}s", flush=True)
             elite_network = population.member(best)
-            if generation % args.check_every == 0:
+            # Every --check-every generations, and straight away when this
+            # run has no routes yet: Watch races the policy on them.
+            if generation % args.check_every == 0 or not (run.path / "benchmark.json").exists():
                 check(line, elite_network)
             # The curriculum moves on what the elite managed, among tasks all
             # members shared.

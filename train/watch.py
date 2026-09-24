@@ -168,8 +168,8 @@ def main(argv=None):
         manifest_path = path.parent / "benchmark.json"
         if not manifest_path.exists():
             raise FileNotFoundError(
-                f"movement run {path.parent.name} has no benchmark.json; "
-                "it predates fixed-route watching"
+                f"movement run {path.parent.name} has no fixed routes yet (benchmark.json): "
+                "they are written by its first exam, so try again once that has finished"
             )
         manifest = json.loads(manifest_path.read_text())
         scenarios = manifest.get("scenarios")

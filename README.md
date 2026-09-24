@@ -301,8 +301,11 @@ rather than only along the aim.
 Every `--check-every` generations the elite takes the same paired exam as PPO at
 the full radius, buried goals included, and `best.pt` moves only when it beats
 the champion there, so the monitor, Watch and `npm run evaluate` treat an
-evolved policy like a trained one. `--experiment-id` resumes the same way as the
-PPO trainer: the latest elite and the kept champion.
+evolved policy like a trained one. A run without routes yet takes its first
+exam straight after its first generation, because Watch races a policy on the
+routes that exam writes (`benchmark.json`). `--experiment-id` resumes the same
+way as the PPO trainer: the latest elite and the kept champion, whose exam
+routes come along with it.
 
 ### Fine-tuning a movement policy for speed
 
